@@ -9,7 +9,7 @@ markupsafe
 nose
 mock>=1.0.1
 pycrypto
-pyDNS
+py3dns
 PySocks
 pgpdump
 pillow

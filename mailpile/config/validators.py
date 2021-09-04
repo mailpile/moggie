@@ -8,7 +8,7 @@ try:
 except ImportError:
     pass
 
-from urlparse import urlparse
+from urllib.parse import urlparse
 
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as n

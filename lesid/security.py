@@ -6,7 +6,6 @@ security related decisions made by the app, in order to facilitate
 review and testing.
 
 """
-from __future__ import print_function
 import copy
 import hashlib
 import json

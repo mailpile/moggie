@@ -2,8 +2,8 @@ from __future__ import print_function
 import io
 import json
 import os
-import ConfigParser
-from urllib import quote, unquote
+import configparser
+from urllib.parse import quote, unquote
 
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
@@ -47,7 +47,7 @@ def CriticalConfigRule(*args):
 def ConfigPrinter(cfg, indent=''):
     rv = []
     if isinstance(cfg, dict):
-        pairer = cfg.iteritems()
+        pairer = cfg.items()
     else:
         pairer = enumerate(cfg)
     for key, val in pairer:
@@ -63,7 +63,7 @@ def ConfigPrinter(cfg, indent=''):
             rv.append(('%s: %s%s\n%s\n%s'
                        '' % (key, preamble, b, ConfigPrinter(val, '  '), e)
                        ).replace('\n  \n', ''))
-        elif isinstance(val, (str, unicode)):
+        elif isinstance(val, (str,)):
             rv.append('%s: "%s"' % (key, val))
         else:
             rv.append('%s: %s' % (key, val))
@@ -74,43 +74,43 @@ class InvalidKeyError(ValueError):
     pass
 
 
-class CommentedEscapedConfigParser(ConfigParser.RawConfigParser):
+class CommentedEscapedConfigParser(configparser.RawConfigParser):
     """
     This is a ConfigParser that allows embedded comments and safely escapes
     and encodes/decodes values that include funky characters.
 
-    >>> cfg = u'[config/sys: Stuff]\\ndebug = True ; Ignored comment'
+    >>> cfg = '[config/sys: Stuff]\\ndebug = True ; Ignored comment'
     >>> cecp = CommentedEscapedConfigParser()
-    >>> cecp.readfp(io.BytesIO(cfg.encode('utf-8')))
+    >>> cecp.read_string(cfg)
     >>> cecp.get('config/sys: Stuff', 'debug') == 'True'
     True
 
+    >>> cecp.set('config/sys: Stuff', 'zeroes', b'\\0\\0\\0\\0', None)
+    >>> cecp.get('config/sys: Stuff', 'zeroes') == b'\\0\\0\\0\\0'
+    True
+
     >>> cecp.items('config/sys: Stuff')
-    [(u'debug', u'True')]
+    [('debug', 'True')]
     """
     NOT_UTF8 = '%C0'  # This byte is never valid at the start of an utf-8
                       # string, so we use it to mark binary data.
     SAFE = '!?: /#@<>[]()=-'
 
     def set(self, section, key, value, comment):
-        key = unicode(key).encode('utf-8')
-        section = unicode(section).encode('utf-8')
+        key = str(key)
+        section = str(section)
 
-        if isinstance(value, unicode):
-            value = quote(value.encode('utf-8'), safe=self.SAFE)
-        elif isinstance(value, str):
-            quoted = quote(value, safe=self.SAFE)
-            if quoted != value:
-                value = self.NOT_UTF8 + quoted
+        if isinstance(value, (bytes, bytearray)):
+            value = self.NOT_UTF8 + quote(value, safe=self.SAFE)
         else:
-            value = quote(unicode(value).encode('utf-8'), safe=self.SAFE)
+            value = quote(str(value).encode('utf-8'), safe=self.SAFE)
 
         if value.endswith(' '):
             value = value[:-1] + '%20'
         if comment:
             pad = ' ' * (25 - len(key) - len(value)) + ' ; '
             value = '%s%s%s' % (value, pad, comment)
-        return ConfigParser.RawConfigParser.set(self, section, key, value)
+        return configparser.RawConfigParser.set(self, section, key, value)
 
     def _decode_value(self, value):
         if value.startswith(self.NOT_UTF8):
@@ -119,14 +119,14 @@ class CommentedEscapedConfigParser(ConfigParser.RawConfigParser):
             return unquote(value).decode('utf-8')
 
     def get(self, section, key):
-        key = unicode(key).encode('utf-8')
-        section = unicode(section).encode('utf-8')
-        value = ConfigParser.RawConfigParser.get(self, section, key)
+        key = str(key).encode('utf-8')
+        section = str(section).encode('utf-8')
+        value = configparser.RawConfigParser.get(self, section, key)
         return self._decode_value(value)
 
     def items(self, section):
         return [(k.decode('utf-8'), self._decode_value(i)) for k, i
-                in ConfigParser.RawConfigParser.items(self, section)]
+                in configparser.RawConfigParser.items(self, section)]
 
 
 def _MakeCheck(pcls, name, comment, rules, write_watcher):
@@ -164,19 +164,19 @@ def RuledContainer(pcls):
             'gpgkeyid': validators.GPGKeyCheck,
             'hostname': validators.HostNameCheck,
             'int': int,
-            'long': long,
-            'multiline': unicode,
+            'long': int,
+            'multiline': str,
             'new file': validators.NewPathCheck,
             'new dir': validators.NewPathCheck,
             'new directory': validators.NewPathCheck,
             'path': validators.PathCheck,
-            str: unicode,
+            str: str,
             'slashslug': validators.SlashSlugCheck,
             'slug': validators.SlugCheck,
-            'str': unicode,
+            'str': str,
             'True': True, 'true': True,
-            'timestamp': long,
-            'unicode': unicode,
+            'timestamp': int,
+            'unicode': str,
             'url': validators.UrlCheck, # FIXME: check more than the scheme?
             'webroot': validators.WebRootCheck
         }
@@ -280,7 +280,7 @@ def RuledContainer(pcls):
         def set_rules(self, rules):
             safe_assert(isinstance(rules, dict))
             self.reset()
-            for key, rule in rules.iteritems():
+            for key, rule in rules.items():
                 self.add_rule(key, rule)
 
         def add_rule(self, key, rule):
@@ -336,8 +336,7 @@ def RuledContainer(pcls):
                 pcls.__setitem__(self, key, checker())
                 rule[self.RULE_CHECKER] = checker
 
-            elif not isinstance(value, (type(None), int, long, bool,
-                                        float, str, unicode)):
+            elif not isinstance(value, (type(None), int, bool, float, str)):
                 raise TypeError(_('Invalid type "%s" for key "%s" (value: %s)'
                                   ) % (type(value), name, repr(value)))
 
@@ -425,7 +424,10 @@ def RuledContainer(pcls):
         def __getattr__(self, attr, default=None):
             if self.real_hasattr(attr) or not self.real_getattr('_magic'):
                 return pcls.__getattribute__(self, attr)
-            return self[attr]
+            try:
+                return self[attr]
+            except KeyError as e:
+                raise AttributeError(attr)
 
         def __setattr__(self, attr, value):
             if self.real_hasattr(attr) or not self.real_getattr('_magic'):
@@ -455,7 +457,7 @@ def RuledContainer(pcls):
             if not checker is True:
                 if checker is False:
                     if isinstance(value, dict) and isinstance(self[key], dict):
-                        for k, v in value.iteritems():
+                        for k, v in value.items():
                             self[key][k] = v
                         return
                     raise ConfigValueError(_('Modifying %s/%s is not '
@@ -525,7 +527,7 @@ class ConfigList(RuledContainer(list)):
         if rules:
             self.rules = {}
         if data:
-            self[:] = []
+            self.clear()
 
     def __createkey_and_setitem__(self, key, value):
         while key > len(self):
@@ -551,7 +553,7 @@ class ConfigList(RuledContainer(list)):
             value._name = '%s/%s' % (self._name, key)
 
     def __fixkey__(self, key):
-        if isinstance(key, (str, unicode)):
+        if isinstance(key, (str,)):
             try:
                 key = int(key, 36)
             except ValueError:
@@ -574,7 +576,7 @@ class ConfigList(RuledContainer(list)):
     def iterkeys(self):
         return (self.fmt_key(i) for i in range(0, len(self)))
 
-    def iteritems(self):
+    def items(self):
         for k in self.iterkeys():
             yield (k, self[k])
 

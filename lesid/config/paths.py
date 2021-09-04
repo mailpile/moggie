@@ -1,7 +1,11 @@
 import os
 import sys
 
-import mailpile.platforms
+from .. import platforms
+
+APPNAME    = 'lesid'  #'mailpile'
+APPNAME_UC = 'Lesid'  #'Mailpile'
+
 
 try:
     from appdirs import AppDirs
@@ -20,12 +24,12 @@ def _ensure_exists(path, mode=0o700):
 def LEGACY_DEFAULT_WORKDIR(profile):
     if profile == 'default':
         # Backwards compatibility: If the old ~/.mailpile exists, use it.
-        workdir = os.path.expanduser('~/.mailpile')
+        workdir = os.path.expanduser('~/.%s' % APPNAME)
         if os.path.exists(workdir) and os.path.isdir(workdir):
             return workdir
 
     return os.path.join(
-        mailpile.platforms.GetAppDataDirectory(), 'Mailpile', profile)
+        platforms.GetAppDataDirectory(), APPNAME_UC, profile)
 
 
 def DEFAULT_WORKDIR():
@@ -44,7 +48,7 @@ def DEFAULT_WORKDIR():
 
     # Use platform-specific defaults
     # via https://github.com/ActiveState/appdirs
-    dirs = AppDirs("Mailpile", "Mailpile ehf")
+    dirs = AppDirs(APPNAME_UC, "Mailpile ehf")
     return _ensure_exists(os.path.join(dirs.user_data_dir, profile))
 
 
@@ -61,16 +65,16 @@ def DEFAULT_SHARED_DATADIR():
     # not just that we are running in a virtual env.
     if ((hasattr(sys, 'real_prefix') or hasattr(sys, 'base_prefix'))
             and __file__.startswith(sys.prefix)):
-        return os.path.join(sys.prefix, 'share', 'mailpile')
+        return os.path.join(sys.prefix, 'share', APPNAME)
 
     # Check if we've been installed to /usr/local (or equivalent)
     usr_local = os.path.join(sys.prefix, 'local')
     if __file__.startswith(usr_local):
-        return os.path.join(usr_local, 'share', 'mailpile')
+        return os.path.join(usr_local, 'share', APPNAME)
 
     # Check if we are in /usr/ (sys.prefix)
     if __file__.startswith(sys.prefix):
-        return os.path.join(sys.prefix, 'share', 'mailpile')
+        return os.path.join(sys.prefix, 'share', APPNAME)
 
     # Else assume dev mode, source tree layout
     return os.path.join(

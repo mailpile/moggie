@@ -166,17 +166,6 @@ opposed to Python, which is memory-safe and less likely to contain
 certain classes of security vulnerabilities).
 
 
-### Why not Python 3?
-
-We depend on some libraries - spambayes in particular - which were not
-available for Python 3 when we started this project.
-
-We don't think Python 2 is going away in the near future.
-
-[There is a Github issue discussing
-this.](https://github.com/mailpile/Mailpile/issues/160)
-
-
 ### Why Not Django? Or Flask?
 
 Reasons!

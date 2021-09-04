@@ -56,12 +56,12 @@ PREFERRED_CIPHER = 'aes-128-ctr'
 
 # This is for backwards compatibility with v1 of our storage format; we have
 # since corrected our silliness and v2 uses a SHA256-based MAC.
-LEN_MD5_SUM = len(hashlib.md5('testing').hexdigest())
+LEN_MD5_SUM = 32
 MD5_SUM_FORMAT = 'md5sum: %s'
 MD5_SUM_PLACEHOLDER = MD5_SUM_FORMAT % ('0' * LEN_MD5_SUM)
 MD5_SUM_RE = re.compile('(?m)^' + MD5_SUM_FORMAT % (r'[^\n]+',))
 
-LEN_SHA_256 = len(hashlib.sha256('testing').hexdigest())
+LEN_SHA_256 = 64
 SHA_256_FORMAT = 'sha256: %s'
 SHA_256_PLACEHOLDER = SHA_256_FORMAT % ('0' * LEN_SHA_256)
 SHA_256_RE = re.compile('(?m)^' + SHA_256_FORMAT % (r'[^\n]+',))

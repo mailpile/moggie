@@ -1,4 +1,3 @@
-from __future__ import print_function
 import time
 import traceback
 
@@ -71,12 +70,9 @@ class RestrictedDict(dict):
                 raise KeyError('Invalid key: %s' % item)
             if not isinstance(value, self.KEYS[item][0]):
                 try:
-                    if isinstance(value, unicode):
+                    if isinstance(value, str):
                         # Value is unicode, we want other: encode, convert
                         value = self.KEYS[item][0](value.encode('utf-8'))
-                    elif isinstance(value, str):
-                        # Value is not unicode, we want unicode: decode, convert
-                        value = self.KEYS[item][0](value.decode('utf-8'))
                     else:
                         # Neither unicode nor string, just try to convert
                         value = self.KEYS[item][0](value)
@@ -95,9 +91,9 @@ class RestrictedDict(dict):
 
 class KeyUID(RestrictedDict):
     KEYS = {
-        'name':    (unicode, ''),
+        'name':    (str, ''),
         'email':   (str, ''),
-        'comment': (unicode, '')}
+        'comment': (str, '')}
 
     def __repr__(self):
         parts = []
@@ -248,7 +244,7 @@ class MailpileKeyInfo(KeyInfo):
         'is_pinned':    (bool, False),
         'scores':       (dict, None),
         'score_stars':  (int, 0),
-        'score_reason': (unicode, None),
+        'score_reason': (str, None),
         'score':        (int, 0)})
 
 

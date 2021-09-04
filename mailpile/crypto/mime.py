@@ -1,10 +1,10 @@
 from __future__ import print_function
 # These are methods to do with MIME and crypto, implementing PGP/MIME.
 
+import io
 import math
 import random
 import re
-import StringIO
 import email.parser
 
 from email import encoders
@@ -37,7 +37,7 @@ def Normalize(payload):
 
 
 def MessageAsString(part, unixfrom=False):
-    buf = StringIO.StringIO()
+    buf = io.StringIO()
     Generator(buf).flatten(part, unixfrom=unixfrom)
     return Normalize(buf.getvalue()).replace('--\r\n--', '--\r\n\r\n--')
 

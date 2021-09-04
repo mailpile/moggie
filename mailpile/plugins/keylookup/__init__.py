@@ -17,7 +17,7 @@ import math
 import traceback
 import ssl
 import urllib
-import urllib2
+import urllib.request
 from mailpile.commands import Command
 from mailpile.conn_brokers import Master as ConnBroker
 from mailpile.crypto import gpgi
@@ -762,13 +762,13 @@ class KeyserverLookupHandler(LookupHandler):
                                            maxbytes=self.MAX_KEY_SIZE+1)
                 error = None
                 break
-            except urllib2.HTTPError as e:
+            except urllib.request.HTTPError as e:
                 error = str(e)
                 if e.code == 404:
                     # If a server reports the key was not found, let's stop
                     # because the servers are supposed to be in sync.
                     break;
-            except (IOError, urllib2.URLError, ssl.SSLError, ssl.CertificateError) as e:
+            except (IOError, urllib.request.URLError, ssl.SSLError, ssl.CertificateError) as e:
                 error = str(e)
 
         if not error and len(raw_result) > self.MAX_KEY_SIZE:
@@ -823,13 +823,13 @@ class KeyserverLookupHandler(LookupHandler):
                                          maxbytes=self.MAX_KEY_SIZE+1)
                 error = None
                 break
-            except urllib2.HTTPError as e:
+            except urllib.request.HTTPError as e:
                 error = e
                 if e.code == 404:
                     # If a server reports the key was not found, let's stop
                     # because the servers are supposed to be in sync.
                     break;
-            except (IOError, urllib2.URLError, ssl.SSLError, ssl.CertificateError) as e:
+            except (IOError, urllib.request.URLError, ssl.SSLError, ssl.CertificateError) as e:
                 error = e
 
         if not key_data:

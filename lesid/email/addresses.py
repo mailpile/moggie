@@ -1,16 +1,43 @@
 # vim: set fileencoding=utf-8 :
 #
-from __future__ import print_function
 import base64
-import copy
 import quopri
 import re
 
-from mailpile.util import *
+from .rfc2074 import rfc2074_unquote
 
-from mailpile.i18n import gettext as _
-from mailpile.i18n import ngettext as _n
-from mailpile.vcard import AddressInfo
+
+class AddressInfo(dict):
+    def __init__(self, address, fn, keys=None):
+        dict.__init__(self)
+        self.update({
+            'address': address,
+            'fn': fn})
+        if keys is not None:
+            self['keys'] = keys
+
+    fn = property(
+        lambda s: s.get('fn'),
+        lambda s,v: s.__setitem__('fn', v))
+
+    address = property(
+        lambda s: s.get('address'),
+        lambda s,v: s.__setitem__('address', v))
+
+    comment = property(
+        lambda s: s.get('comment'),
+        lambda s,v: s.__setitem__('comment', v))
+
+    keys = property(
+        lambda s: s.get('keys', []),
+        lambda s,v: s.__setitem__('keys', v))
+
+    def normalized(self, **kwargs):
+        kwargs['addresses'] = [self]
+        return AddressHeaderParser.normalized_addresses(**kwargs)[0]
+
+    def __str__(self):
+        return self.normalized()
 
 
 class AddressHeaderParser(list):
@@ -45,27 +72,27 @@ class AddressHeaderParser(list):
     >>> ahp = AddressHeaderParser(AddressHeaderParser.TEST_HEADER_DATA)
     >>> ai = ahp[1]
     >>> ai.fn
-    u'Bjarni'
+    'Bjarni'
     >>> ai.address
-    u'bre@klaki.net'
+    'bre@klaki.net'
     >>> ahpn = ahp.normalized_addresses()
     >>> (ahpn == ahp.TEST_EXPECT_NORMALIZED_ADDRESSES) or ahpn
     True
 
     >>> AddressHeaderParser('Weird email@somewhere.com Header').normalized()
-    u'"Weird Header" <email@somewhere.com>'
+    '"Weird Header" <email@somewhere.com>'
 
-    >>> ai = AddressHeaderParser(unicode_data=ahp.TEST_UNICODE_DATA)
+    >>> ai = AddressHeaderParser(data=ahp.TEST_BYTES_DATA)
     >>> ai[0].fn
-    u'Bjarni R\\xfanar'
-    >>> ai[0].fn == ahp.TEST_UNICODE_NAME
+    'Bjarni R\\xfanar'
+    >>> ai[0].fn == ahp.TEST_BYTES_NAME
     True
     >>> ai[0].address
-    u'b@c.x'
+    'b@c.x'
     """
 
-    TEST_UNICODE_DATA = u'Bjarni R\xfanar <b@c.x#61A015763D28D4>'
-    TEST_UNICODE_NAME = u'Bjarni R\xfanar'
+    TEST_BYTES_DATA = b'Bjarni R\xfanar <b@c.x#61A015763D28D4>'
+    TEST_BYTES_NAME = 'Bjarni Rúnar'
     TEST_HEADER_DATA = """
         bre@klaki.net  ,
         bre@klaki.net Bjarni ,
@@ -144,19 +171,22 @@ class AddressHeaderParser(list):
     # We try and interpret non-ascii data as a particular charset, in
     # this order by default. Should be overridden whenever we have more
     # useful info from the message itself.
-    DEFAULT_CHARSET_ORDER = ('iso-8859-1', 'utf-8')
+    DEFAULT_CHARSET_ORDER = ('utf-8', 'iso-8859-1')
 
-    def __init__(self,
-                 data=None, unicode_data=None, charset_order=None, **kwargs):
+    def __init__(self, data=None, charset_order=None, **kwargs):
         self.charset_order = charset_order or self.DEFAULT_CHARSET_ORDER
         self._parse_args = kwargs
-        if data is None and unicode_data is None:
+        if data is None:
             self._reset(**kwargs)
-        elif data is not None:
-            self.parse(data)
         else:
-            self.charset_order = ['utf-8']
-            self.parse(unicode_data.encode('utf-8'))
+            if isinstance(data, bytes):
+                for cs in self.charset_order:
+                    try:
+                        data = str(data, cs)
+                        break
+                    except UnicodeDecodeError:
+                        pass
+            self.parse(data)
 
     def _reset(self, _raw_data=None, strict=False, _raise=False):
         self._raw_data = _raw_data
@@ -197,30 +227,6 @@ class AddressHeaderParser(list):
                     raise
         return self
 
-    def unquote(self, string, charset_order=None):
-        def uq(m):
-            cs, how, data = m.group(1), m.group(2), m.group(3)
-            if how in ('b', 'B'):
-                try:
-                    data = base64.b64decode(''.join(data.split())+'===')
-                except TypeError:
-                    print('FAILED TO B64DECODE: %s' % data)
-            else:
-                data = quopri.decodestring(data, header=True)
-            try:
-                return data.decode(cs)
-            except LookupError:
-                return data.decode('iso-8859-1')  # Always works
-
-        for cs in charset_order or self.charset_order:
-            try:
-                string = string.decode(cs)
-                break
-            except UnicodeDecodeError:
-                pass
-
-        return re.sub(self.RE_QUOTED, uq, string)
-
     @classmethod
     def unescape(self, string):
         return re.sub(self.RE_ESCAPES, lambda m: m.group(1), string)
@@ -234,9 +240,9 @@ class AddressHeaderParser(list):
         if re.search(self.RE_SHOULD_QUOTE, strng):
             enc = quopri.encodestring(strng.encode('utf-8'), False,
                                       header=True)
-            enc = enc.replace('<', '=3C').replace('>', '=3E')
-            enc = enc.replace(',', '=2C')
-            return '=?utf-8?Q?%s?=' % enc
+            enc = enc.replace(b'<', b'=3C').replace(b'>', b'=3E')
+            enc = enc.replace(b',', b'=2C')
+            return '=?utf-8?Q?%s?=' % str(enc, 'latin-1')
         else:
             return '"%s"' % self.escape(strng)
 
@@ -277,7 +283,7 @@ class AddressHeaderParser(list):
                         groups[-1] = []
                         continue
             if token:
-                groups[-1].append(self.unquote(self._clean(token)))
+                groups[-1].append(rfc2074_unquote(self._clean(token)))
         if not groups[-1]:
             groups.pop(-1)
         return groups
@@ -352,6 +358,7 @@ class AddressHeaderParser(list):
             addresses.append(m)
         return addresses
 
+    @classmethod
     def normalized_addresses(self,
                              addresses=None, quote=True, with_keys=False,
                              force_name=False):

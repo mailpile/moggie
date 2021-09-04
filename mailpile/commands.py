@@ -214,7 +214,7 @@ class Command(object):
 
             return self.rendered[cache_id]
 
-    def __init__(self, session, name=None, arg=None, data=None, async=False):
+    def __init__(self, session, name=None, arg=None, data=None, _async=False):
         self.session = session
         self.context = None
         self.name = self.SYNOPSIS[1] or self.SYNOPSIS[2] or name
@@ -223,7 +223,7 @@ class Command(object):
         self.message = name
         self.error_info = {}
         self.result = None
-        self.run_async = async
+        self.run_async = _async
         if type(arg) in (type(list()), type(tuple())):
             self.args = tuple(arg)
         elif arg:

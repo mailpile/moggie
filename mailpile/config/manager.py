@@ -1,6 +1,6 @@
 from __future__ import print_function
 import copy
-import cPickle
+import pickle
 import io
 import jinja2
 import json
@@ -12,11 +12,10 @@ import re
 import threading
 import fasteners
 import traceback
-import ConfigParser
 import errno
 
-from urllib import quote, unquote, getproxies
-from urlparse import urlparse
+from urllib.parse import quote, unquote, urlparse
+from urllib.request import getproxies
 
 try:
     from appdirs import AppDirs
@@ -683,8 +682,8 @@ class ConfigManager(ConfigDict):
                         streamer.verify(_raise=IOError)
                 else:
                     data = fd.read()
-            return cPickle.loads(data)
-        except (cPickle.UnpicklingError, IOError, EOFError, OSError):
+            return pickle.loads(data)
+        except (pickle.UnpicklingError, IOError, EOFError, OSError):
             if delete_if_corrupt:
                 safe_remove(pickle_path)
             raise IOError('Load/unpickle failed: %s' % pickle_path)
@@ -697,11 +696,11 @@ class ConfigManager(ConfigDict):
                                     dir=self.tempfile_dir(),
                                     header_data={'subject': pfn},
                                     name='save_pickle') as fd:
-                cPickle.dump(obj, fd, protocol=0)
+                pickle.dump(obj, fd, protocol=0)
                 fd.save(ppath)
         else:
             with open(ppath, 'wb') as fd:
-                cPickle.dump(obj, fd, protocol=0)
+                pickle.dump(obj, fd, protocol=0)
 
     def _mailbox_info(self, mailbox_id, prefer_local=True):
         try:

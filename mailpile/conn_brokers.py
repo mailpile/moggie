@@ -252,6 +252,9 @@ class BaseConnectionBroker(Capability):
         self._config = None
         self._debug = master._debug if (master is not None) else None
 
+    def __lt__(self, other):
+        return str(self).__lt__(str(other))
+
     def configure(self):
         self.supports = list(self.SUPPORTS)[:]
 
@@ -686,7 +689,7 @@ class MasterBroker(BaseConnectionBroker):
         if context.address is None:
             context.address = address
 
-        et = v = t = None
+        et = v = tb = None
         for prio, cb in self.brokers:
             try:
                 conn = cb.debug(self._debug).create_conn_with_caps(
@@ -699,10 +702,10 @@ class MasterBroker(BaseConnectionBroker):
                 # for debugging but don't bother the user with them.
                 pass
             except:
-                et, v, t = sys.exc_info()
+                et, v, tb = sys.exc_info()
         if et is not None:
             context.error = '%s' % v
-            raise et, v, t
+            raise et(v).with_traceback(tb)
 
         context.error = _('No connection method found')
         raise CapabilityFailure(context.error)

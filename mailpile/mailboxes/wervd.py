@@ -1,7 +1,7 @@
 import email.generator
 import email.message
 import mailbox
-import StringIO
+import io
 import sys
 
 import mailpile.mailboxes
@@ -101,7 +101,7 @@ class MailpileMailbox(UnorderedPicklable(mailbox.Maildir, editable=True)):
 
     def get_file(self, key):
         with self._lock:
-            return StringIO.StringIO(self.get_string(key))
+            return io.StringIO(self.get_string(key))
 
     def get_metadata_keywords(self, toc_id):
         subdir, name = os.path.split(self._lookup(toc_id))

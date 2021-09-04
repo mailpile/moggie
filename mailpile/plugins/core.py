@@ -12,7 +12,7 @@ import socket
 import subprocess
 import sys
 import traceback
-import thread
+import _thread
 import threading
 import time
 import webbrowser
@@ -699,9 +699,9 @@ class ProgramStatus(Command):
         for thread in threads:
             try:
                 if hasattr(thread, 'lock'):
-                    locks.append([thread, 'lock', thread.lock])
+                    locks.append([thread, 'lock', _thread.lock])
                 if hasattr(thread, '_lock'):
-                    locks.append([thread, '_lock', thread._lock])
+                    locks.append([thread, '_lock', _thread._lock])
                 if locks and hasattr(locks[-1][-1], 'locked'):
                     locks[-1][-1] = locks[-1][-1].locked()
                 elif locks and hasattr(locks[-1][-1], '_is_owned'):
@@ -1816,7 +1816,7 @@ class Quit(Command):
         if self.session.config.http_worker:
             self.session.config.http_worker.quit()
 
-        thread.interrupt_main()
+        _thread.interrupt_main()
         return self._success(_('Shutting down...'))
 
 

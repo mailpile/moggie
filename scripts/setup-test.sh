@@ -23,9 +23,9 @@ fi
 if [ "$1" = "--dbg" ]; then
     shift
     ulimit -c unlimited
-    PYTHON=python2.7-dbg
+    PYTHON=python3-dbg
 else
-    PYTHON=python2.7
+    PYTHON=python3
 fi
 
 if [ "$1" = "--keep" ]; then

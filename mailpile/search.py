@@ -1,13 +1,12 @@
 from __future__ import print_function
-import cStringIO
+import io
 import email
 import random
 import re
-import rfc822
 import time
 import threading
 import traceback
-from urllib import quote, unquote
+from urllib.parse import quote, unquote
 
 import mailpile.util
 from mailpile.crypto.gpgi import GnuPG
@@ -82,12 +81,12 @@ class MailIndex(BaseIndex):
     # a mapping from unicode ordinals to either another unicode ordinal or
     # None, to remove a character. By default it removes the ASCII control
     # characters and replaces tabs and newlines with spaces.
-    NORM_TABLE = dict([(i, None) for i in range(0, 0x20)], **{
-        ord(u'\t'): ord(u' '),
-        ord(u'\r'): ord(u' '),
-        ord(u'\n'): ord(u' '),
-        0x7F: None
-    })
+    NORM_TABLE = dict([(i, None) for i in range(0, 0x20)] + [
+        (ord('\t'), ord(u' ')),
+        (ord('\r'), ord(u' ')),
+        (ord('\n'), ord(u' ')),
+        (0x7F, None)
+    ])
 
     @classmethod
     def m2l(self, message):
@@ -613,12 +612,12 @@ class MailIndex(BaseIndex):
                              % (mailbox_idx, msg_mbox_idx))
         try:
             if msg_data:
-                msg_fd = cStringIO.StringIO(msg_data)
+                msg_fd = io.StringIO(msg_data)
                 msg_metadata_kws = msg_metadata_kws or []
             elif lazy:
                 msg_data = mbox.get_bytes(msg_mbox_idx, 10240)
                 msg_data = msg_data.split('\r\n\r\n')[0].split('\n\n')[0]
-                msg_fd = cStringIO.StringIO(msg_data)
+                msg_fd = io.StringIO(msg_data)
                 msg_bytes = mbox.get_msg_size(msg_mbox_idx)
                 msg_metadata_kws = mbox.get_metadata_keywords(msg_mbox_idx)
             else:

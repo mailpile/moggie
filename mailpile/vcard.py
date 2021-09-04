@@ -61,7 +61,7 @@ class VCardLine(dict):
         "\n": "\\n",
         "\r": "\\r",
     }
-    QUOTE_RMAP = dict([(v, k) for k, v in QUOTE_MAP.iteritems()])
+    QUOTE_RMAP = dict([(v, k) for k, v in QUOTE_MAP.items()])
 
     def __init__(self, line=None, name=None, value=None, **attrs):
         self._name = name and unicode(name).lower() or None
@@ -1254,8 +1254,8 @@ class VCardStore(dict):
                     if n == 0 or (key not in self):
                         if key in self:
                             if collision_callback is not None:
-                                existing = self[key].get(attr, 0)
-                                if existing is not 0 and existing.value == key:
+                                existing = self[key].get(attr, None)
+                                if existing is not None and existing.value == key:
                                     collision_callback(key, card)
                                 self[key] = card
                             else:
@@ -1582,14 +1582,14 @@ class VCardImporter(VCardPluginClass):
                                        ) % (vcard.email, card.random_uid))
 
             # Otherwise, create new ones.
-            kindhint = vcard.get('x-mailpile-kind-hint', 0)
+            kindhint = vcard.get('x-mailpile-kind-hint', None)
             if not existing and (update_profiles or
-                                 kindhint is 0 or
+                                 kindhint is None or
                                  kindhint.value != 'profile'):
                 try:
                     new_vcard = MailpileVCard(config=self.config)
                     new_vcard.merge(self.get_guid(vcard), vcard.as_lines())
-                    if kindhint is not 0:
+                    if kindhint is not None:
                         new_vcard.add(VCardLine(name='kind',
                                                 value=kindhint.value))
                     vcard_store.add_vcards(new_vcard)

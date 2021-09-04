@@ -3,7 +3,7 @@ import copy
 import datetime
 import re
 import time
-import urllib2
+import urllib.request
 from email import encoders
 from email.mime.base import MIMEBase
 
@@ -267,7 +267,7 @@ class GPGKeyImport(Command):
                 key_data.append(file.read())
         for key_url in key_urls:
             with ConnBroker.context(need=[ConnBroker.OUTGOING_HTTP]):
-                uo = urllib2.urlopen(key_url)
+                uo = urllib.request.urlopen(key_url)
             key_data.append(uo.read())
 
         rv = self._gnupg().import_keys('\n'.join(key_data))

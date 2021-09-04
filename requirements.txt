@@ -5,7 +5,7 @@ lxml>=2.3.2
 imgsize
 Jinja2
 markupsafe
-py3DNS
+py3dns
 PySocks
 pgpdump
 pillow

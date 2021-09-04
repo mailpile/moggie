@@ -6,8 +6,8 @@ import random
 import socket
 import sys
 import time
-from urllib import urlencode
-from urllib2 import urlopen
+from urllib.parse import urlencode
+from urllib.request import urlopen
 from lxml import objectify
 
 import mailpile.auth
@@ -209,7 +209,7 @@ class SetupMagic(Command):
 
         # Create standard tags and filters
         created = []
-        for t, tag_settings in self.TAGS.iteritems():
+        for t, tag_settings in self.TAGS.items():
             tag_settings = copy.copy(tag_settings)
 
             tid = session.config.get_tag_id(t.replace(' ', '-'))
@@ -224,7 +224,7 @@ class SetupMagic(Command):
             tag_info = session.config.tags[tid]
 
             # Delete any old filters...
-            old_fids = [f for f, v in session.config.filters.iteritems()
+            old_fids = [f for f, v in session.config.filters.items()
                         if v.primary_tag == tid]
             if old_fids:
                 session.config.filter_delete(*old_fids)
@@ -396,7 +396,7 @@ class TestableWebbable(SetupMagic):
 
     def _advance(self):
         path = self.data.get('_path', [None])[0]
-        data = dict([(k, v) for k, v in self.data.iteritems()
+        data = dict([(k, v) for k, v in self.data.items()
                      if k not in self.HTTP_POST_VARS
                      and k not in ('_method',)])
 
@@ -409,7 +409,7 @@ class TestableWebbable(SetupMagic):
         else:
             url = '/'
 
-        qs = urlencode([(k, v) for k, vl in data.iteritems() for v in vl])
+        qs = urlencode([(k, v) for k, vl in data.items() for v in vl])
         raise UrlRedirectException(''.join([self.session.config.sys.http_path, url, '?%s' % qs if qs else '']))
 
     def _success(self, message, result=True, advance=False):
@@ -1029,7 +1029,7 @@ class SetupWelcome(TestableWebbable):
             config.slow_worker.add_unique_task(
                 session, 'Setup, Stage 1', lambda: self.bg_setup_stage_1())
 
-        languages = [(l, n) for l, n in ListTranslations(config).iteritems()]
+        languages = [(l, n) for l, n in ListTranslations(config).items()]
         languages.sort(key=lambda k: (k[1], k[0]))
         results = {
             'languages': languages,
@@ -1153,7 +1153,7 @@ class SetupTestRoute(TestableWebbable):
     HTTP_CALLABLE = ('POST', )
     HTTP_POST_VARS = dict_merge(TestableWebbable.HTTP_POST_VARS,
                                 dict((k, v[0]) for k, v in
-                                     CONFIG_RULES['routes'][1].iteritems()),
+                                     CONFIG_RULES['routes'][1].items()),
                                 {'route_id': 'ID of existing route'})
     TEST_DATA = {}
 

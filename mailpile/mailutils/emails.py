@@ -2,7 +2,6 @@
 #
 # FIXME: Refactor this monster into mailpile.mailutils.*
 #
-from __future__ import print_function
 import base64
 import copy
 import email.header
@@ -15,7 +14,7 @@ import os
 import quopri
 import random
 import re
-import StringIO
+import io
 import threading
 import traceback
 from email import encoders
@@ -26,7 +25,7 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from mailpile.util import *
 from platform import system
-from urllib import quote, unquote
+from urllib.parse import quote, unquote
 from datetime import datetime, timedelta
 
 from mailpile.crypto.gpgi import GnuPG
@@ -1060,7 +1059,7 @@ class Email(object):
                 attributes['thumb'] = True
                 attributes['mimetype'] = 'image/jpeg'
                 attributes['disposition'] = 'inline'
-                thumb = StringIO.StringIO()
+                thumb = io.StringIO()
                 if thumbnail(payload, thumb, height=250):
                     attributes['length'] = thumb.tell()
                     filename, fd = session.ui.open_for_data(

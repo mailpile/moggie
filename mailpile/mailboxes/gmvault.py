@@ -1,7 +1,7 @@
 import mailbox
 import os
 import gzip
-import rfc822
+import email.message
 
 import mailpile.mailboxes
 import mailpile.mailboxes.maildir as maildir
@@ -21,7 +21,7 @@ class MailpileMailbox(maildir.MailpileMailbox):
             return (fn, )
         raise ValueError('Not a Gmvault: %s' % fn)
 
-    def __init__(self, dirname, factory=rfc822.Message, create=True):
+    def __init__(self, dirname, factory=email.message.EmailMessage, create=True):
         maildir.MailpileMailbox.__init__(self, dirname, factory, create)
         self._paths = {'db': os.path.join(self._path, 'db')}
         self._toc_mtimes = {'db': 0}

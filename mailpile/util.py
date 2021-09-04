@@ -14,14 +14,12 @@ import os
 import platform
 import random
 import re
-import string
 import subprocess
 import sys
 import tempfile
 import threading
 import time
-import StringIO
-import cStringIO
+from io import StringIO
 from distutils import spawn
 
 from mailpile.i18n import gettext as _
@@ -107,9 +105,9 @@ ATT_EXTS['media'] = (ATT_EXTS['audio'] + ATT_EXTS['font'] +
 
 B64C_STRIP = '\r\n='
 
-B64C_TRANSLATE = string.maketrans('/', '_')
+B64C_TRANSLATE = str.maketrans('/', '_')
 
-B64W_TRANSLATE = string.maketrans('/+', '_-')
+B64W_TRANSLATE = str.maketrans('/+', '_-')
 
 STRHASH_RE = re.compile('[^0-9a-z]+')
 
@@ -305,7 +303,7 @@ def b64c(b):
     >>> b64c("a+b+c+123+")
     'a+b+c+123+'
     """
-    return string.translate(b, B64C_TRANSLATE, B64C_STRIP)
+    return b.translate(B64C_TRANSLATE, B64C_STRIP)
 
 
 def b64w(b):
@@ -318,7 +316,7 @@ def b64w(b):
     >>> b64w("a+b+c+123+")
     'a-b-c-123-'
     """
-    return string.translate(b, B64W_TRANSLATE, B64C_STRIP)
+    return b.translate(B64W_TRANSLATE, B64C_STRIP)
 
 
 def escape_html(t):
@@ -457,7 +455,7 @@ def string_to_rank(text, maxint=sys.maxsize):
 def string_to_intlist(text):
     """Converts a string into an array of integers"""
     try:
-        return [ord(c) for c in text.encode('utf-8')]
+        return [c for c in text.encode('latin-1')]
     except (UnicodeEncodeError, UnicodeDecodeError):
         return [ord(c) for c in text]
 
@@ -905,7 +903,7 @@ def play_nice_with_threads(sleep=True, weak=False, deadline=None):
     return delay
 
 
-class PeekableStringIO(StringIO.StringIO):
+class PeekableStringIO(StringIO):
     def peek(self, n):
         StringIO._complain_ifclosed(self.closed)
         if self.buflist:
@@ -965,7 +963,7 @@ def image_size(img_data, pure_python=False):
         if imgsize is not None:
             return imgsize.get_size(PeekableStringIO(img_data))
         if Image is not None and not pure_python:
-            return Image.open(cStringIO.StringIO(img_data)).size
+            return Image.open(StringIO(img_data)).size
     except (ValueError, imgsize.UnknownSize):
         pass
     return None
@@ -990,8 +988,8 @@ def thumbnail(fileobj, output_fd, height=None, width=None):
         return None
 
     # Ensure the source image is either a file-like object or a StringIO
-    if (not isinstance(fileobj, (file, StringIO.StringIO))):
-        fileobj = cStringIO.StringIO(fileobj)
+    if (not isinstance(fileobj, (file, StringIO))):
+        fileobj = StringIO(fileobj)
 
     image = Image.open(fileobj)
     fmt = image.format
@@ -1150,7 +1148,7 @@ def RunTimed(timeout, func, *args, **kwargs):
     RunTimedThread(func.__name__, work, unique=unique).run_timed(timeout)
     if exception:
         t, v, tb = exception[0]
-        raise t, v, tb
+        raise t(v).with_traceback(tb)
     return result[0]
 
 

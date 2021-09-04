@@ -53,7 +53,6 @@ import datetime
 import re
 import time
 import traceback
-import urllib2
 from email import encoders
 from email.mime.base import MIMEBase
 
@@ -618,7 +617,7 @@ if __name__ == "__main__":
     import doctest
 
     results = doctest.testmod(optionflags=doctest.ELLIPSIS)
-    print '%s' % (results, )
+    print('%s' % (results, ))
     if results.failed:
         sys.exit(1)
 

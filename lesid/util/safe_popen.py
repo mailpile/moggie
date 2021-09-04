@@ -25,7 +25,6 @@ from __future__ import print_function
 import os
 import subprocess
 import sys
-import thread
 import threading
 
 import mailpile.platforms
@@ -222,7 +221,7 @@ class Safe_Popen(Unsafe_Popen):
             self._SAFE_POPEN_hold_lock = False
             try:
                 SERIALIZE_POPEN_LOCK.release()
-            except thread.error:
+            except RuntimeError:
                 pass
 
     def communicate(self, *args, **kwargs):

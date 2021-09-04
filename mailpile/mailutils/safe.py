@@ -2,11 +2,11 @@ from __future__ import print_function
 import email
 import email.errors
 import email.message
+import email.utils
 import random
 import re
-import rfc822
 import time
-from urllib import quote, unquote
+from urllib.parse import quote, unquote
 
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
@@ -87,7 +87,7 @@ def safe_parse_date(date_hdr):
     try:
         if ';' in date_hdr:
             date_hdr = date_hdr.split(';')[-1].strip()
-        msg_ts = long(rfc822.mktime_tz(rfc822.parsedate_tz(date_hdr)))
+        msg_ts = long(email.utils.mktime_tz(email.utils.parsedate_tz(date_hdr)))
         if (msg_ts > (time.time() + 24 * 3600)) or (msg_ts < 1):
             return None
         else:

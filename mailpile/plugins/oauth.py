@@ -2,7 +2,7 @@ from __future__ import print_function
 import json
 import time
 import traceback
-from urllib import urlencode, quote_plus
+from urllib.parse import urlencode, quote_plus
 
 from mailpile.i18n import gettext
 from mailpile.i18n import ngettext as _n

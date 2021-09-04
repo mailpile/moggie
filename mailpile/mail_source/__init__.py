@@ -2,7 +2,7 @@ import datetime
 import os
 import random
 import re
-import thread
+import _thread
 import threading
 import traceback
 import time
@@ -1083,7 +1083,7 @@ class BaseMailSource(threading.Thread):
             for b, e, s in waiters:
                 try:
                     b.release()
-                except thread.error:
+                except _thread.error:
                     pass
                 if s:
                     self.session = s
@@ -1110,7 +1110,7 @@ class BaseMailSource(threading.Thread):
                 for b, e, s in waiters:
                     try:
                         e.release()
-                    except thread.error:
+                    except _thread.error:
                         pass
                 self.session = _original_session
             self._update_unknown_state()
@@ -1170,7 +1170,7 @@ class BaseMailSource(threading.Thread):
             for l in (begin, end):
                 try:
                     l.release()
-                except thread.error:
+                except _thread.error:
                     pass
 
     def quit(self, join=False):

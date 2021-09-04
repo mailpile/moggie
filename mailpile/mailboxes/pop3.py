@@ -1,9 +1,4 @@
-from __future__ import print_function
-try:
-    import cStringIO as StringIO
-except ImportError:
-    import StringIO
-
+import io
 import poplib
 import socket
 import ssl
@@ -172,7 +167,7 @@ class POP3Mailbox(Mailbox):
 
     def get_file(self, key):
         """Return a file-like representation or raise a KeyError."""
-        return StringIO.StringIO(self._get(key))
+        return io.StringIO(self._get(key))
 
     def get_msg_size(self, key):
         with self._lock:

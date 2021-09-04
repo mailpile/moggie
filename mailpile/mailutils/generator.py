@@ -59,13 +59,13 @@ from __future__ import print_function
 
 __all__ = ['Generator', 'DecodedGenerator']
 
+import io
 import re
 import sys
 import time
 import random
 import warnings
 
-from cStringIO import StringIO
 from email.header import Header
 
 from mailpile.i18n import gettext as _
@@ -169,7 +169,7 @@ class Generator:
         # necessary.
         oldfp = self._fp
         try:
-            self._fp = sfp = StringIO()
+            self._fp = sfp = io.StringIO()
             self._dispatch(msg)
         finally:
             self._fp = oldfp
@@ -265,7 +265,7 @@ class Generator:
             # Scalar payload
             subparts = [subparts]
         for part in subparts:
-            s = StringIO()
+            s = io.StringIO()
             g = self.clone(s)
             g.flatten(part, unixfrom=False, linesep=self._NL)
             msgtexts.append(s.getvalue())
@@ -328,7 +328,7 @@ class Generator:
         # block and the boundary.  Sigh.
         blocks = []
         for part in msg.get_payload():
-            s = StringIO()
+            s = io.StringIO()
             g = self.clone(s)
             g.flatten(part, unixfrom=False, linesep=self._NL)
             text = s.getvalue()
@@ -344,7 +344,7 @@ class Generator:
         self._fp.write(self._NL.join(blocks))
 
     def _handle_message(self, msg):
-        s = StringIO()
+        s = io.StringIO()
         g = self.clone(s)
         # The payload of a message/rfc822 part should be a multipart sequence
         # of length 1.  The zeroth element of the list should be the Message

@@ -4,7 +4,7 @@
 # It also takes care of safely downloading random stuff from the Internet,
 # using the appropriate proxying policies.
 #
-from urllib2 import urlopen, HTTPError
+from urllib.request import urlopen, HTTPError
 
 import mailpile.security as security
 from mailpile.commands import Command

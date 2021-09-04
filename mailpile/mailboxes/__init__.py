@@ -9,7 +9,7 @@
 ## larger mailbox.
 
 import time
-from urllib import quote, unquote
+from urllib.parse import quote, unquote
 
 from mailpile.i18n import gettext as _
 from mailpile.i18n import ngettext as _n
@@ -32,7 +32,7 @@ class NoSuchMailboxError(OSError):
 def register(prio, cls):
     global MAILBOX_CLASSES
     MAILBOX_CLASSES.append((prio, cls))
-    MAILBOX_CLASSES.sort()
+    MAILBOX_CLASSES.sort(key=lambda e: (e[0], str(e[1])))
 
 
 def IsMailbox(fn, config):
@@ -77,7 +77,6 @@ def UnorderedPicklable(parent, editable=False):
             self._encryption_key_func = lambda: None
             self._decryption_key_func = lambda: None
             self.__init2__(*args, **kwargs)
-
 
         def __init2__(self, *args, **kwargs):
             pass

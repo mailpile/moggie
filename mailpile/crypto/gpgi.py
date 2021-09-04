@@ -1,11 +1,11 @@
 #coding:utf-8
 from __future__ import print_function
+import io
 import os
 import string
 import sys
 import time
 import re
-import StringIO
 import tempfile
 import threading
 import traceback
@@ -475,7 +475,7 @@ class StreamWriter(Thread):
     def writeout(self, fd, output):
         if isinstance(output, (str, unicode, bytearray)):
             total = len(output)
-            output = StringIO.StringIO(output)
+            output = io.StringIO(output)
         else:
             total = 0
         try:
