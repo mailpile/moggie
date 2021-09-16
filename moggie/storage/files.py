@@ -15,7 +15,6 @@ class FileMap(mmap.mmap):
 class FileStorage(BaseStorage):
 
     def __init__(self, *args, **kwargs):
-        self.dict = None
         self.relative_to = kwargs.get('relative_to')
 
         if 'relative_to' in kwargs:
@@ -24,6 +23,7 @@ class FileStorage(BaseStorage):
             self.relative_to = self.relative_to.encode('utf-8')
 
         BaseStorage.__init__(self, *args, **kwargs)
+        self.dict = None
 
     def relpath(self, path):
         if self.relative_to:
@@ -111,18 +111,21 @@ class FileStorage(BaseStorage):
             info['contents'] = c = []
             for p in os.listdir(path):
                 if p not in (b'.', b'..'):
-                    c.append(dumb_encode_asc(p))
+                    c.append(dumb_encode_asc(os.path.join(path, p)))
             if ('Bnew' in c and 'Bcur' in c and 'Btmp' in c):
                 info['magic'] = 'maildir'
         elif os.path.isfile(path):
             if self[key][:5] == b'From ':
                 info['magic'] = 'mbox'
 
-        if parse and key:
-           if info['magic'] == 'mbox':
-               info['emails'] = list(self.parse_mbox(key))
-           elif info['magic'] == 'maildir':
-               info['emails'] = list(self.parse_maildir(key))
+        if parse and key and 'magic' in info:
+           try:
+               if info['magic'] == 'mbox':
+                   info['emails'] = list(self.parse_mbox(key))
+               elif info['magic'] == 'maildir':
+                   info['emails'] = list(self.parse_maildir(key))
+           except TypeError:
+               pass
 
         return info
 
@@ -202,7 +205,7 @@ if __name__ == "__main__":
     print('Found %d messages in %s' % (len(msgs), big))
     for msg in msgs[:5] + msgs[-5:]:
         m = msg.parsed()
-        f = m['from'][0]
+        f = m['from']
         print('%-38.38s %-40.40s' % (f.fn or f.address, m['subject']))
 
     for count in range(0, 5):

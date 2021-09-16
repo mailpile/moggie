@@ -1,3 +1,6 @@
+# FIXME: Implement a pattern whereby an HTTP response is returned,
+#        calculations performed, and the result uploaded elsewhere.
+#
 import json
 import os
 import socket
@@ -15,6 +18,7 @@ from multiprocessing import Process
 
 from ..config import APPNAME
 from ..util.dumbcode import *
+from ..util.http import http1x_connect
 
 
 class QuitException(Exception):
@@ -26,6 +30,12 @@ class BaseWorker(Process):
     An extremely simple authenticated HTTP/1.0 RPC server.
     """
     KIND = "base"
+    NICE = 0  # Raise this number to lower worker priority
+
+    # By default we disallow GET and HEAD, because these are RPC
+    # services, not public facing and certainly not intended for
+    # indexing (accidental or otherwise) by search engines.
+    METHODS = (b'PUT ', b'POST')  # Note: must be 4 bytes.
 
     ACCEPT_TIMEOUT = 5
     LISTEN_QUEUE = 50
@@ -42,10 +52,10 @@ class BaseWorker(Process):
     HTTP_JSON = HTTP_200 + b'Content-Type: application/json\r\n'
     HTTP_OK   = HTTP_JSON + b'Content-Length: 17\r\n\r\n{"result": true}\n'
 
-    def __init__(self, status_dir, name=KIND):
+    def __init__(self, status_dir, host=None, port=None, name=None):
         Process.__init__(self)
 
-        self.name = name
+        self.name = name or self.KIND
         self.keep_running = True
         self.url = None
         self.status = {
@@ -59,7 +69,9 @@ class BaseWorker(Process):
             b'status': (None, self.api_status)}
 
         self._secret = b64encode(os.urandom(18), b'-_').strip()
-        self._status_file = os.path.join(status_dir, name + '.url')
+        self._status_file = os.path.join(status_dir, self.name + '.url')
+        self._want_host = host or self.LOCALHOST
+        self._want_port = port or 0
         self._sock = None
         self._client = None
         self._client_addrinfo = None
@@ -69,10 +81,12 @@ class BaseWorker(Process):
 
     def run(self):
         if setproctitle:
+            if self.NICE and hasattr(os, 'nice'):
+                os.nice(self.NICE)
             setproctitle('%s: %s' % (APPNAME, self.KIND))
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._sock.bind((self.LOCALHOST, 0))
+            self._sock.bind((self._want_host, self._want_port))
             self._sock.settimeout(self.ACCEPT_TIMEOUT)
             self._sock.listen(self.LISTEN_QUEUE)
 
@@ -87,7 +101,10 @@ class BaseWorker(Process):
         except KeyboardInterrupt:
             pass
         finally:
-            os.remove(self._status_file)
+            try:
+                os.remove(self._status_file)
+            except FileNotFoundError:
+                pass
 
     def _make_url(self, s_host, s_port):
         return 'http://%s:%d/%s' % (s_host, s_port, str(self._secret, 'utf-8'))
@@ -98,8 +115,7 @@ class BaseWorker(Process):
             try:
                 (client, c_addrinfo) = self._sock.accept()
                 peeked = client.recv(self.PEEK_BYTES, socket.MSG_PEEK)
-                if ((peeked[:4] in (b'GET ', b'PUT ', b'POST', b'HEAD'))
-                        and (b'\r\n\r\n' in peeked)):
+                if ((peeked[:4] in self.METHODS) and (b'\r\n\r\n' in peeked)):
                     try:
                         method, path = peeked.split(b' ', 2)[:2]
                         secret, args = path.split(b'/', 2)[1:3]
@@ -153,31 +169,21 @@ class BaseWorker(Process):
             self.url = None
         return self.url
 
-    def _conn(self, path, method='GET', timeout=60, headers='', secret=None):
+    def _conn(self, path, method='POST', timeout=60, headers='', more=False, secret=None):
         try:
             proto, _, hostport, url_secret = self.url.split('/', 3)
-            fmt = '%s /%s/%s HTTP/1.0\r\n%s\r\n'
+            path = '/%s/%s' % ((secret or url_secret), path)
         except ValueError:
             proto, _, hostport = self.url.split('/', 2)
-            url_secret = secret = ''
-            fmt = '%s /%s%s HTTP/1.0\r\n%s\r\n'
+            path = '/' + path
 
         host, port = hostport.split(':')
-
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(max(1, timeout//30))
-        sock.connect((host, int(port)))
-        sock.settimeout(timeout)
-
-        sock.send((fmt % (method, secret or url_secret, path, headers)
-            ).encode('latin-1'))
-
-        return sock
+        return http1x_connect(host, port, path,
+            method=method, timeout=timeout, more=more, headers=headers)
 
     def _ping(self):
         try:
             conn = self._conn('ping', timeout=1, secret='-')
-            conn.shutdown(socket.SHUT_WR)
             result = conn.recv(len(self.HTTP_403))
         except:
             result = None
@@ -204,7 +210,7 @@ class BaseWorker(Process):
 
         return None
 
-    def call(self, fn, *args, qs=None, method='GET', upload=None):
+    def call(self, fn, *args, qs=None, method='POST', upload=None):
         # This will raise a KeyError if the function isn't defined
         fn = fn.encode('latin-1') if isinstance(fn, str) else fn
         argsig, func = self.functions[fn]
@@ -234,8 +240,6 @@ class BaseWorker(Process):
             conn.shutdown(socket.SHUT_WR)
         else:
             conn = self._conn(path, method=method)
-            if method in ('GET', 'HEAD'):
-                conn.shutdown(socket.SHUT_WR)
 
         peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)
         if peeked.startswith(self.HTTP_200):

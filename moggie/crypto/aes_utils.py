@@ -1,4 +1,3 @@
-from __future__ import print_function
 # This is a compatibility wrapper for using whatever AES library is handy.
 # By default we support Cryptography and pyCrypto, with a preference for
 # Cryptography.
@@ -17,6 +16,14 @@ import struct
 from hashlib import md5
 
 
+# This MD5 digest saves the caller from having to know our internal
+# size requirements; AES wants 128, we just mix all the bits we're
+# given. We expect the input to already be strongly random (so MD5's
+# weaknesses shouldn't matter), but it may of the wrong size.
+def make_aes_key(*key):
+    return md5(b'-'.join(key)).digest()
+
+
 def make_cryptography_utils():
     import os
     import cryptography.hazmat.backends
@@ -30,15 +37,9 @@ def make_cryptography_utils():
         # the prefix argument. Cryptography doesn't have such a counter API,
         # but if we carefully set the nonce we can achieve compatibility.
         #
-        # The MD5 digests save the caller from having to know our internal
-        # size requirements; AES wants 128, we just mix all the bits we're
-        # given. We expect the input to already be strongly random (so MD5's
-        # weaknesses shouldn't matter), but it may of the wrong size.
-        #
-        hashed_key = md5(key).digest()
-        prefixed_nonce = md5(nonce).digest()[:8] + '\0\0\0\0\0\0\0\1'
+        prefixed_nonce = md5(nonce).digest()[:8] + b'\0\0\0\0\0\0\0\1'
         return Cipher(
-            algorithms.AES(hashed_key),
+            algorithms.AES(key),
             modes.CTR(prefixed_nonce),
             backend=cryptography.hazmat.backends.default_backend())
 
@@ -66,15 +67,9 @@ def make_pycrypto_utils():
         # which limited us to 2**64 iterations. This has been change to just
         # set an initial value and allow wraparound.
         #
-        # The MD5 digests save the caller from having to know our internal
-        # size requirements; AES wants 128, we just mix all the bits we're
-        # given. We expect the input to already be strongly random (so MD5's
-        # weaknesses shouldn't matter), but it may of the wrong size.
-        #
-        hashed_key = md5(key).digest()
-        prefixed_nonce = md5(nonce).digest()[:8] + '\0\0\0\0\0\0\0\1'
+        prefixed_nonce = md5(nonce).digest()[:8] + b'\0\0\0\0\0\0\0\1'
         counter = Counter.new(128, initial_value=_nonce_as_int(prefixed_nonce))
-        return AES.new(hashed_key, mode=AES.MODE_CTR, counter=counter)
+        return AES.new(key, mode=AES.MODE_CTR, counter=counter)
 
     def aes_ctr_encryptor(key, nonce):
         return _aes_ctr(key, nonce).encrypt
@@ -124,9 +119,9 @@ def aes_ctr_decrypt(key, iv, data):
 if __name__ == "__main__":
     import base64
 
-    bogus_key = "01234567890abcdef"
-    bogus_nonce = "this is a bogus nonce that is bogus"
-    hello = "hello world"
+    bogus_key = make_aes_key(b"01234567890abcdef")
+    bogus_nonce = b"this is a bogus nonce that is bogus"
+    hello = b"hello world"
 
     results = []
     for name, backend in (('Cryptography', make_cryptography_utils),
@@ -155,11 +150,11 @@ if __name__ == "__main__":
 
     # This verifies we can decrypt some snippets of data that were
     # generated with a previous iteration of mailpile.crypto.streamer
-    from mailpile.util import sha512b64 as genkey
-    legacy_data = "part two, yeaaaah\n"
-    legacy_nonce = "2c1c43936034cae20eef86d961cb6570"
-    legacy_key = genkey("test key", legacy_nonce)[:32].strip()
-    legacy_ct = base64.b64decode("D+lBOPrtV+amUCAtoFPCzxsZ")
+    from ..util.mailpile import sha512b64 as genkey
+    legacy_data = b"part two, yeaaaah\n"
+    legacy_nonce = b"2c1c43936034cae20eef86d961cb6570"
+    legacy_key = make_aes_key(genkey(b"test key", legacy_nonce)[:32].strip())
+    legacy_ct = base64.b64decode(b"D+lBOPrtV+amUCAtoFPCzxsZ")
     decrypted = aes_ctr_decrypt(legacy_key, legacy_nonce, legacy_ct)
     assert(legacy_data == decrypted)
 

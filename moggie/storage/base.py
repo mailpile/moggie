@@ -17,11 +17,11 @@ class BaseStorage:
     def __getitem__(self, *args, **kwargs):
         return self.dict.__getitem__(*args, **kwargs)
 
-    def length(self, *args, **kwargs):
-        return self.dict.__setitem__(*args, **kwargs)
-
     def __setitem__(self, *args, **kwargs):
         return self.dict.__setitem__(*args, **kwargs)
+
+    def length(self, key):
+        return len(self.dict[key])
 
     def get(self, *args, **kwargs):
         return self.dict.get(*args, **kwargs)

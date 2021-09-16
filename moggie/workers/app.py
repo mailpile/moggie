@@ -1,55 +1,95 @@
+import os
+import sys
 import socket
-import traceback
 
 from upagekite import uPageKite, LocalHTTPKite
-from upagekite.httpd import HTTPD, url
+from upagekite.httpd import HTTPD, url, async_url
 from upagekite.proto import uPageKiteDefaults
+from upagekite.web import process_post
+from upagekite.websocket import websocket
 
-from ..config.paths import APPNAME as MAIN_APPNAME
-from .base import BaseWorker
+from ..config import APPNAME as MAIN_APPNAME
+from ..config import APPURL as MAIN_APPURL
+from ..storage.metadata import MetadataStore
+from ..util.rpc import JsonRpcClient
+from .public import PublicWorker, require
+
+#
+# TODO: Define how we handle RPCs over the websocket. There needs to be some
+#       structure there! Assume everything is always async.
+#
+
+from ..email.metadata import Metadata
+std_tags = [[
+        {'sc':'i', 'name': 'INBOX',    'count': 10},
+        {'sc':'c', 'name': 'Calendar', 'count': 1},
+        {'sc':'p', 'name': 'People',   'count': 2},
+    ],[
+        {'sc':'a', 'name': 'All Mail', 'count': 2},
+        {'sc':'d', 'name': 'Drafts',   'count': 1},
+        {'sc':'o', 'name': 'Outbox',   'count': 1},
+        {'sc':'s', 'name': 'Sent',     'count': 3},
+        {'sc':'j', 'name': 'Spam',     'count': 2},
+        {'sc':'t', 'name': 'Trash',    'count': 1}]]
+test_contexts = [{
+        'name': 'Local mail',
+        'emails': [],
+        'tags': std_tags}]
+unused = [{
+        'name': 'Personal',
+        'emails': ['bre@klaki.net', 'bjarni.runar@gmail.com'],
+        'tags': std_tags
+    },{
+        'name': 'PageKite',
+        'emails': ['bre@pagekite.net', 'ehf@beanstalks-project.net'],
+        'tags': std_tags
+    },{
+        'name': 'PageKite Support',
+        'emails': ['info@pagekite.net', 'help@pagekite.net'],
+        'tags': std_tags
+    },{
+        'name': 'Mailpile',
+        'emails': ['bre@mailpile.is'],
+        'tags': std_tags}]
+raw_msg = b'''\
+Date: Wed, 1 Sep 2021 00:03:01 GMT
+From: Bjarni <bre@example.org>
+To: "Some One" <someone@example.org>
+Subject: Hello world'''
+test_emails = ([
+    Metadata(0, b'/tmp/foo', 0, 0, 0, raw_msg).parsed()] * 10)
 
 
-@url('/ping', '/ping/*')
-def web_ping(req_env):
-    return {
-        'ttl': 30,
-        'code': 200,
-        'msg': 'PONG',
-        'mimetype': 'text/plain; charset="UTF-8"',
-        'body': 'Pong'}
+@async_url('/rpc')
+@websocket('app')
+async def web_websocket(opcode, msg, conn, ws,
+                        first=False, eof=False, websocket=True):
+    if not websocket:
+        return {'code': 400, 'body': 'Sorry\n'}
 
 
-@url('/in/*')
-def web_in(req_env):
-    return {
-        'ttl': 30,
-        'code': 500,
-        'msg': 'Unimplemented',
-        'mimetype': 'text/plain; charset="UTF-8"',
-        'body': 'FIXME'}
+@async_url('/')
+async def web_root(req_env):
+    require(req_env, secure=True)
+    return {'code': 500, 'body': 'Sorry\n'}
 
 
-class AppPageKiteSettings(uPageKiteDefaults):
-    APPNAME = MAIN_APPNAME
-    APPURL = 'https://github.com/mailpile/'
-    APPVER = '2.0.0'
-
-    info = uPageKiteDefaults.log
-    error = uPageKiteDefaults.log
-    debug = uPageKiteDefaults.log
-    #trace = uPageKiteDefaults.log
+@async_url('/', '/rpc/*')
+async def web_rpc(req_env):
+    require(req_env, post=True, secure=True)
+    return {'code': 500, 'body': 'Sorry\n'}
 
 
-class AppHTTPD(HTTPD):
-    def get_handler(self, path):
-        (func, fa) = HTTPD.get_handler(self, path)
-        while (not func) and ('/' in path):
-            path = path.rsplit('/', 1)[0]
-            (func, fa) = HTTPD.get_handler(self, path+'/*')
-        return func, fa
+@async_url('/recovery_svc/*')
+@process_post(max_bytes=2048, _async=True)
+async def proxy_recovery_svc(req_env):
+    require(req_env, post=True, secure=True)
+    posted = req_env.post_data
+    print('FIXME: Proxy to recovery_svc worker' % posted)
+    return {'code': 500, 'body': 'Proxy Not Ready\n'}
 
 
-class AppWorker(BaseWorker):
+class AppWorker(PublicWorker):
     """
     This is the main "public facing" app worker, it implements the main
     web API and application logic. It uses the upagekite event loop and
@@ -57,51 +97,23 @@ class AppWorker(BaseWorker):
     """
 
     KIND = 'app'
+    PUBLIC_PATHS = ['/']
+    PUBLIC_PREFIXES = ['/recovery_svc']
 
-    def __init__(self, profile_dir, name=KIND):
-        BaseWorker.__init__(self, profile_dir, name=name)
+    def websocket_url(self):
+        return 'ws' + self.url[4:] + '/rpc'
 
-        self.httpd = None
-        self.kite = None
-        self.pk_manager = None
+    def start_workers(self):
+        pass  # FIXME
 
-        # FIXME: Override these!
-        self.kite_name = 'mailpile.local'
-        self.kite_secret = None
+    def load_metadata(self):
+        self.metadata = MetadataStore(
+            os.path.join(self.profile_dir, 'metadata'), 'metadata',
+            aes_key=b'bogus AES key')  # FIXME
 
-        self.shared_req_env = {'app_worker': self}
-
-    def _ping(self):
-        pong = b'HTTP/1.0 200 PONG'
-        try:
-            host_hdr = 'Host: %s\r\n' % self.kite_name
-            conn = self._conn('ping', timeout=1, headers=host_hdr)
-            conn.shutdown(socket.SHUT_WR)
-            result = conn.recv(len(pong))
-        except:
-            result = None
-        return (result == pong)
-
-    def _make_url(self, s_host, s_port):
-        return 'http://%s:%d' % (s_host, s_port)
-
-    def _main_httpd_loop(self):
-        uPK = AppPageKiteSettings
-        port = self._sock.getsockname()[1]
-
-        self.httpd = AppHTTPD(self.kite_name, '.', self.shared_req_env, uPK)
-
-        self.kite = LocalHTTPKite(self._sock,
-            self.kite_name, self.kite_secret,
-            handler=self.httpd.handle_http_request)
-        self.kite.listening_port = port
-
-        self.pk_manager = uPageKite([self.kite],
-            socks=[self.kite],
-            public=(self.kite_name and self.kite_secret),
-            uPK=uPK)
-
-        self.pk_manager.run()
+    def startup_tasks(self):
+        self.start_workers()
+        self.load_metadata()
 
 
 if __name__ == '__main__':

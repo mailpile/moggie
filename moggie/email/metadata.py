@@ -9,13 +9,13 @@ from .headers import parse_header
 
 
 class Metadata(list):
-    TIMESTAMP = 0
-    MAILBOX = 1
-    OFFSET = 2
-    HEADER_LENGTH = 3
-    MESSAGE_LENGTH = 4
-    HEADERS = 5
-    MORE = 6
+    OFS_TIMESTAMP = 0
+    OFS_MAILBOX = 1
+    OFS_OFFSET = 2
+    OFS_HEADER_LENGTH = 3
+    OFS_MESSAGE_LENGTH = 4
+    OFS_HEADERS = 5
+    OFS_MORE = 6
     _FIELDS = 7
 
     # These are the headers we want extracted and stored in metadata.
@@ -52,44 +52,59 @@ class Metadata(list):
                     self[0] = int(time.mktime(email.utils.parsedate(date)))
                 except (ValueError, TypeError):
                     pass
+        self._raw_headers = {}
         self._parsed = None
+
+        self.idx = None
+        self.thread_id = None
+        self.mtime = 0
+
+    timestamp      = property(lambda s: s[s.OFS_TIMESTAMP])
+    mailbox        = property(lambda s: s[s.OFS_MAILBOX])
+    offset         = property(lambda s: s[s.OFS_OFFSET])
+    header_length  = property(lambda s: s[s.OFS_HEADER_LENGTH])
+    message_length = property(lambda s: s[s.OFS_MESSAGE_LENGTH])
+    more           = property(lambda s: s[s.OFS_MORE])
+    headers        = property(lambda s: s[s.OFS_HEADERS])
+    uuid           = property(
+        lambda s: hashlib.sha1(s.headers.encode('latin-1')).hexdigest())
 
     def __str__(self):
         return ('%s=%s@%d/%d/%d %d %s\n%s\n' % (
-            self.uuid(),
-            self[self.MAILBOX],
-            self[self.OFFSET],
-            self[self.HEADER_LENGTH],
-            self[self.MESSAGE_LENGTH],
-            self[self.TIMESTAMP],
-            self[self.MORE],
-            self[self.HEADERS]))
-
-    def uuid(self):
-        return hashlib.sha1(self[self.HEADERS].encode('latin-1')).hexdigest()
+            self.uuid,
+            self.mailbox,
+            self.offset,
+            self.header_length,
+            self.message_length,
+            self.timestamp,
+            self.more,
+            self.headers))
 
     def set(self, key, value):
-        self[self.MORE][key] = value
+        self.more[key] = value
         self._parsed = None
 
     def get(self, key, default=None):
-        self[self.MORE].get(key, default)
+        self.more.get(key, default)
 
     def get_raw_header(self, header):
         try:
-            fre = self.FIND_RE[header.lower()]
-            return fre.search(self[self.HEADERS]).group(1)
+            header = header.lower()
+            if header not in self._raw_headers:
+                fre = self.FIND_RE[header]
+                self._raw_headers[header] = fre.search(self.headers).group(1)
+            return self._raw_headers[header]
         except (AttributeError, IndexError):
             return None
 
     def parsed(self, force=False):
         if force or self._parsed is None:
             self._parsed = {
-                'ts': self[self.TIMESTAMP],
-                'ptr': [self[self.MAILBOX], self[self.OFFSET], self[self.MESSAGE_LENGTH]],
-                'uuid': self.uuid()}
-            self._parsed.update(parse_header(self[self.HEADERS]))
-            self._parsed.update(self[self.MORE])
+                'ts': self.timestamp,
+                'ptr': [self.mailbox, self.offset, self.message_length],
+                'uuid': self.uuid}
+            self._parsed.update(parse_header(self.headers))
+            self._parsed.update(self.more)
         return self._parsed
 
 

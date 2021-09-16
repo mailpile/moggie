@@ -74,7 +74,7 @@ class AddressHeaderParser(list):
     >>> ai.fn
     'Bjarni'
     >>> ai.address
-    'bre@klaki.net'
+    'bre@example.org'
     >>> ahpn = ahp.normalized_addresses()
     >>> (ahpn == ahp.TEST_EXPECT_NORMALIZED_ADDRESSES) or ahpn
     True
@@ -94,41 +94,41 @@ class AddressHeaderParser(list):
     TEST_BYTES_DATA = b'Bjarni R\xfanar <b@c.x#61A015763D28D4>'
     TEST_BYTES_NAME = 'Bjarni Rúnar'
     TEST_HEADER_DATA = """
-        bre@klaki.net  ,
-        bre@klaki.net Bjarni ,
-        bre@klaki.net bre@klaki.net,
-        bre@klaki.net (bre@notmail.com),
-        "<bre@notmail.com>" <bre@klaki.net>,
-        =?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@klaki.net>,
-        bre@klaki.net ((nested) bre@notmail.com comment),
-        (FIXME: (nested) bre@wrongmail.com parser breaker) bre@klaki.net,
+        bre@example.org  ,
+        bre@example.org Bjarni ,
+        bre@example.org bre@klaki.net,
+        bre@example.org (bre@notmail.com),
+        "<bre@notmail.com>" <bre@example.org>,
+        =?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@example.org>,
+        bre@example.org ((nested) bre@notmail.com comment),
+        (FIXME: (nested) bre@wrongmail.com parser breaker) bre@example.org,
         undisclosed-recipients-gets-ignored:,
-        Bjarni [mailto:bre@klaki.net],
-        "This is a key test" <bre@klaki.net#61A015763D28D410A87B197328191D9B3B4199B4>,
-        bre@klaki.net (Bjarni Runar Einar's son);
-        Bjarni =?iso-8859-1?Q??=is bre @klaki.net,
-        Bjarni =?iso-8859-1?Q?Runar?=Einarsson<' bre'@ klaki.net>,
-        "Einarsson, Bjarni" <bre@klaki.net>,
+        Bjarni [mailto:bre@example.org],
+        "This is a key test" <bre@example.org#61A015763D28D410A87B197328191D9B3B4199B4>,
+        bre@example.org (Bjarni Runar Einar's son);
+        Bjarni =?iso-8859-1?Q??=is bre @example.org,
+        Bjarni =?iso-8859-1?Q?Runar?=Einarsson<' bre'@ example.org>,
+        "Einarsson, Bjarni" <bre@example.org>,
         =?iso-8859-1?Q?Lonia_l=F6gmannsstofa?= <lonia@example.com>,
-        "Bjarni @ work" <bre@pagekite.net>,
+        "Bjarni @ work" <bre@example.com>,
     """
     TEST_EXPECT_NORMALIZED_ADDRESSES = [
-        '<bre@klaki.net>',
-        '"Bjarni" <bre@klaki.net>',
-        '"bre@klaki.net" <bre@klaki.net>',
-        '"bre@notmail.com" <bre@klaki.net>',
-        '=?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@klaki.net>',
-        '=?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@klaki.net>',
-        '"(nested bre@notmail.com comment)" <bre@klaki.net>',
-        '"(FIXME: nested parser breaker) bre@klaki.net" <bre@wrongmail.com>',
-        '"Bjarni" <bre@klaki.net>',
-        '"This is a key test" <bre@klaki.net>',
-        '"Bjarni Runar Einar\\\'s son" <bre@klaki.net>',
-        '"Bjarni is" <bre@klaki.net>',
-        '"Bjarni Runar Einarsson" <bre@klaki.net>',
-        '=?utf-8?Q?Einarsson=2C_Bjarni?= <bre@klaki.net>',
+        '<bre@example.org>',
+        '"Bjarni" <bre@example.org>',
+        '"bre@example.org" <bre@klaki.net>',
+        '"bre@notmail.com" <bre@example.org>',
+        '=?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@example.org>',
+        '=?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@example.org>',
+        '"(nested bre@notmail.com comment)" <bre@example.org>',
+        '"(FIXME: nested parser breaker) bre@example.org" <bre@wrongmail.com>',
+        '"Bjarni" <bre@example.org>',
+        '"This is a key test" <bre@example.org>',
+        '"Bjarni Runar Einar\\\'s son" <bre@example.org>',
+        '"Bjarni is" <bre@example.org>',
+        '"Bjarni Runar Einarsson" <bre@example.org>',
+        '=?utf-8?Q?Einarsson=2C_Bjarni?= <bre@example.org>',
         '=?utf-8?Q?Lonia_l=C3=B6gmannsstofa?= <lonia@example.com>',
-        '"Bjarni @ work" <bre@pagekite.net>']
+        '"Bjarni @ work" <bre@example.com>']
 
     # Escaping and quoting
     TXT_RE_QUOTE = '=\\?([^\\?\\s]+)\\?([QqBb])\\?([^\\?\\s]*)\\?='
