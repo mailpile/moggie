@@ -1,12 +1,19 @@
 import json
 import os
 import socket
+import sys
 import time
 import traceback
+
+try:
+    from setproctitle import getproctitle, setproctitle
+except ImportError:
+    setproctitle = None
 
 from base64 import b64encode
 from multiprocessing import Process
 
+from ..config import APPNAME
 from ..util.dumbcode import *
 
 
@@ -61,6 +68,8 @@ class BaseWorker(Process):
 
 
     def run(self):
+        if setproctitle:
+            setproctitle('%s: %s' % (APPNAME, self.KIND))
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._sock.bind((self.LOCALHOST, 0))

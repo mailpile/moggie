@@ -2,9 +2,7 @@ import os
 import sys
 
 from .. import platforms
-
-APPNAME    = 'lesid'  #'mailpile'
-APPNAME_UC = 'Lesid'  #'Mailpile'
+from . import *
 
 
 try:
