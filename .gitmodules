@@ -1,13 +1,13 @@
 [submodule "doc"]
-	path = doc
+	path = Attic/doc
 	url = https://github.com/pagekite/Mailpile.wiki.git
 	branch = master
 [submodule "shared-data/contrib/print"]
-	path = shared-data/contrib/print
+	path = Attic/shared-data/contrib/print
 	url = https://github.com/mailpile/Mailpile-print.git
 [submodule "submodules/gui-o-matic"]
-	path = submodules/gui-o-matic
+	path = Attic/submodules/gui-o-matic
 	url = https://github.com/mailpile/gui-o-matic
 [submodule "submodules/gui-o-mac-tic"]
-	path = submodules/gui-o-mac-tic
+	path = Attic/submodules/gui-o-mac-tic
 	url = https://github.com/mailpile/gui-o-mac-tic
