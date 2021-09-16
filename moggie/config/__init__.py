@@ -1,3 +1,3 @@
-APPNAME    = 'lesid'  #'mailpile'
-APPNAME_UC = 'Lesid'  #'Mailpile'
+APPNAME    = 'moggie'  #'mailpile'
+APPNAME_UC = 'Moggie'  #'Mailpile'
 APPVER     = '2.0.0'

@@ -387,7 +387,7 @@ if __name__ == '__main__':
                     traceback.print_exc()
             self.reply_json({pong: args})
 
-    tw = TestWorker('/tmp', name='lesid-test-worker').connect()
+    tw = TestWorker('/tmp', name='moggie-test-worker').connect()
     if tw:
         try:
             r = tw.call('ping', None, '\0\1\2', 1.976, [1,2],

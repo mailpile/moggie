@@ -214,7 +214,7 @@ if __name__ == '__main__':
         dumb_encode_asc(b'456'): b'0123456789abcdef'})
     print('%s' % objects.dict)
 
-    sw = StorageWorker('/tmp', objects, name='lesid-test-storage').connect()
+    sw = StorageWorker('/tmp', objects, name='moggie-test-storage').connect()
     if sw:
         try:
             print(sw.capabilities())
