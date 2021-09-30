@@ -11,6 +11,7 @@ SINGLETONS = (
     'content-disposition',
     'content-length',
     'content-type',
+    'date',
     'errors-to',
     'from',
     'mime-version',
@@ -84,7 +85,10 @@ def parse_header(raw_header):
     headers['_order'] = order
     for hdr in SINGLETONS:
         if hdr in headers:
-            headers[hdr] = headers[hdr][0]
+            if headers[hdr]:
+                headers[hdr] = headers[hdr][0]
+            else:
+                del headers[hdr]
 
     return headers
 
