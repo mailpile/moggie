@@ -1,0 +1,207 @@
+import binascii
+import numpy
+
+from .dumbcode import register_dumb_decoder
+
+
+class IntSet:
+    ENC_BIN = b'i'
+    ENC_ASC = 'I'
+
+    def __init__(self, other=None, binary=None):
+        if binary is None:
+            self.npa = numpy.zeros(256, dtype=numpy.uint64)
+        else:
+            self.frombinary(binary)
+        if other is not None:
+            self |= other
+ 
+    @classmethod
+    def And(cls, *sets):
+        result = cls(sets[0])
+        for s in sets[1:]:
+            result &= s
+        return result
+
+    @classmethod
+    def Or(cls, *sets):
+        result = cls(sets[0])
+        for s in sets[1:]:
+            result |= s
+        return result
+
+    @classmethod
+    def DumbDecode(cls, encoded):
+        if encoded[:1] in ('i', b'i'):
+            binary = encoded[1:]
+        elif encoded[:1] in ('I', b'I'):
+            binary = binascii.a2b_base64(encoded[1:])
+        else:
+            raise ValueError('Invalid IntSet encoding')
+        return cls().frombytes(binary)
+
+    def dumb_encode_bin(self):
+        return self.ENC_BIN + self.tobytes()
+
+    def dumb_encode_asc(self):
+        return self.ENC_ASC + str(
+            binascii.b2a_base64(self.tobytes(), newline=False),
+            'latin-1')
+
+    def frombytes(self, binary):
+        self.npa = numpy.frombuffer(binary, dtype=numpy.uint64)
+        return self
+
+    def tobytes(self):
+        return self.npa.tostring()
+
+    def __len__(self):
+        return (len(self.npa) * 8)
+
+    def __iand__(self, other):
+        if isinstance(other, IntSet):
+            maxlen = min(len(self.npa), len(other.npa))
+            self.npa[:maxlen] &= other.npa[:maxlen]
+            if maxlen < len(self.npa):
+                self.npa[maxlen:] = numpy.zeros(len(self.npa) - maxlen, dtype=numpy.uint64)
+
+        elif isinstance(other, (list, set)):
+            self &= IntSet(other)
+
+        else:
+            raise ValueError('Bad type %s' % type(other))
+        return self
+
+    def __ior__(self, other):
+        if isinstance(other, IntSet):
+            if len(other.npa) > len(self.npa):
+                self.npa.resize(len(other.npa) + 1024)
+            self.npa[:len(other.npa)] |= other.npa
+
+        elif isinstance(other, int):
+            val = other
+            pos = val // 64
+            if pos > len(self.npa):
+                self.npa.resize(pos + 1024)
+            bit = val % 64
+            self.npa[pos] = int(self.npa[pos]) | (1 << bit)
+
+        elif isinstance(other, (list, set)):
+            maxint = max(other)
+            bitmask = [0] * ((maxint+63) // 64)
+            for i in other:
+                bitmask[i // 64] |= (1 << (i % 64))
+            if len(bitmask) > len(self.npa):
+                self.npa.resize(len(bitmask) + 1024)
+
+            self.npa[:len(bitmask)] |= numpy.array(bitmask, dtype=numpy.uint64)
+
+        else:
+            raise ValueError('Bad type %s' % type(other))
+        return self
+
+    def chunks(self, size=1024, reverse=True):
+        result = []
+        if reverse:
+            rrange = lambda a,b: reversed(range(a, b))
+        else:
+            rrange = lambda a,b: range(a, b)
+        for i in rrange(0, len(self.npa)):
+            u64 = int(self.npa[i])
+            if u64:
+                for j in rrange(0, 64):
+                    if (u64 & (1 << j)):
+                        result.append((i * 64) + j)
+            while len(result) >= size:
+                yield result[:size]
+                result = result[size:]
+        if result:
+            yield result
+
+    def __iter__(self):
+        for i in range(0, len(self.npa)):
+            u64 = int(self.npa[i])
+            if u64:
+                for j in range(0, 64):
+                    if (u64 & (1 << j)):
+                        yield (i * 64) + j
+
+
+register_dumb_decoder(IntSet.ENC_ASC, IntSet.DumbDecode)
+
+
+if __name__ == "__main__":
+    import time
+    from ..util.dumbcode import *
+
+    is1 = IntSet([1, 3, 10])
+    assert(10 in list(is1))
+    assert(11 not in list(is1))
+    is1 |= 11
+    assert(10 in list(is1))
+    assert(11 in list(is1))
+    is1 &= [1, 3, 9, 44]
+    assert(3 in list(is1))
+    assert(11 not in list(is1))
+    assert(len(is1.tobytes()) == 2048)
+
+    e_is1 = dumb_encode_asc(is1, compress=128)
+    d_is1 = dumb_decode(e_is1)
+    print('%s' % e_is1)
+    assert(len(e_is1) < 1024)
+    assert(list(d_is1) == list(is1))
+    e_is1 = dumb_encode_bin(is1)
+    d_is1 = dumb_decode(e_is1)
+    assert(list(d_is1) == list(is1))
+
+    print('%s' % list(is1))
+    for i in is1.chunks(size=1, reverse=False):
+        print('%s' % list(i))
+    for i in is1.chunks(size=1, reverse=True):
+        print('%s' % list(i))
+
+    many = list(range(0, 10240000, 10))
+    some = list(range(0, 1024000, 10))
+    few = [0, 1020, 9990, 1024000-10]
+
+    t0 = time.time()
+    count = 10
+
+    for i in range(0, count):
+        b1 = IntSet(many)
+        b2 = IntSet(some)
+        b3 = IntSet(few)
+    t1 = time.time()
+    assert(len(b1.npa) == 1024 + 10 * len(many) // 64)
+    assert(len(b1.tobytes()) == 8 * (1024 + 10*len(many) // 64))
+    print('ints_to_bitmask x %d = %.2fs' % (3 * count, t1-t0))
+    t1 = time.time()
+
+    for i in range(0, 100*count):
+        b4 = IntSet.And(b1, b1, b1)
+        b4 = IntSet.And(b1, b2, b3)
+    t2 = time.time()
+    assert(list(b4) == list(b3))
+    print('bitmask_and x %d     = %.2fs' % (200 * count, t2-t1))
+    t2 = time.time()
+
+    for i in range(0, 100*count):
+        b5 = IntSet.Or(b1, b1, b1)
+        b5 = IntSet.Or(b1, b2, b3)
+    t3 = time.time()
+    assert(list(b5) == list(b1))
+    print('bitmask_or x %d      = %.2fs' % (200 * count, t3-t2))
+    t3 = time.time()
+
+    for i in range(0, count):
+        l1 = list(b1)
+        l2 = list(b2)
+        l3 = list(b3)
+    t4 = time.time()
+    assert(list(l1) == many)
+    assert(list(l2) == some)
+    assert(list(l3) == few)
+    print('bitmask_to_ints x %d = %.2fs' % (3 * count, t4-t3))
+    t4 = time.time()
+
+    print('Tests passed OK')

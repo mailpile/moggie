@@ -4,7 +4,10 @@ import zlib
 
 from urllib.parse import quote, unquote, unquote_to_bytes
 
-from ..crypto.aes_utils import aes_ctr_encrypt, aes_ctr_decrypt
+from ..crypto.aes_utils import aes_ctr_encrypt, aes_ctr_decrypt, make_aes_key
+
+
+DUMB_DECODERS = {}
 
 
 def dumb_encode_bin(v, compress=False, aes_key_iv=None):
@@ -31,6 +34,8 @@ def dumb_encode_bin(v, compress=False, aes_key_iv=None):
     if isinstance(v, bytearray): return (b'b' + bytes(v))
     if v is None:                return (b'-')
 
+    if hasattr(v, 'dumb_encode_bin'): return v.dumb_encode_bin()
+
     if isinstance(v, (dict, list, set, tuple)):
         if isinstance(v, set):
             pfx, v = b's', list(v)
@@ -54,19 +59,23 @@ def dumb_encode_asc(v, compress=False, aes_key_iv=None):
 
     try:
         if compress and len(v) > compress:
-            compressed = quote(zlib.compress(dumb_encode_bin(v, compress=False)))
+            compressed = str(binascii.b2a_base64(
+                zlib.compress(dumb_encode_bin(v, compress=False)),
+                newline=False), 'latin-1')
             if len(compressed) < len(v):
                 return 'Z' + compressed
     except TypeError:
         pass
 
-    if isinstance(v, bytes):     return ('B' + quote(v))
+    if isinstance(v, bytes):     return ('B' + str(binascii.b2a_base64(v, newline=False), 'latin-1'))
     if isinstance(v, str):       return ('U' + quote(v))
     if isinstance(v, bool):      return ('y' if v else 'n')
     if isinstance(v, int):       return ('d%d' % v)
     if isinstance(v, float):     return ('f%f' % v)
-    if isinstance(v, bytearray): return ('B' + quote(bytes(v)))
+    if isinstance(v, bytearray): return ('B' + str(binascii.b2a_base64(v, newline=False), 'latin-1'))
     if v is None:                return ('-')
+
+    if hasattr(v, 'dumb_encode_asc'): return v.dumb_encode_asc()
 
     if isinstance(v, (list, dict, set, tuple)):
         if isinstance(v, set):
@@ -85,15 +94,18 @@ def dumb_decode(v, aes_key=None):
     if isinstance(v, bytes):
         if v[:1] == b' ': v = v.lstrip(b' ')
         if v[:1] == b'b': return v[1:]
-        if v[:1] == b'B': return unquote_to_bytes(v[1:])
+        if v[:1] == b'B': return binascii.a2b_base64(v[1:])
         if v[:1] == b'u': return str(v[1:], 'utf-8')
         if v[:1] == b'U': return unquote(str(v[1:], 'latin-1'))
     else:
         if v[:1] == ' ': v = v.lstrip(' ')
         if v[:1] == 'b': return v[1:].encode('latin-1')
-        if v[:1] == 'B': return unquote_to_bytes(v[1:])
+        if v[:1] == 'B': return binascii.a2b_base64(v[1:])
         if v[:1] == 'u': return str(v[1:].encode('latin-1'), 'utf-8')
         if v[:1] == 'U': return unquote(v[1:])
+
+    if v[:1] in DUMB_DECODERS:
+        return DUMB_DECODERS[v[:1]](v)
 
     if v[:1] in ('d', b'd'): return int(v[1:])
     if v[:1] in ('f', b'f'): return float(v[1:])
@@ -109,7 +121,7 @@ def dumb_decode(v, aes_key=None):
     if v[:1] in ('T', b'T'): return tuple(json.loads(unquote_to_bytes(v[1:])))
 
     if v[:1] in ('Z', b'Z'):
-        return dumb_decode(zlib.decompress(unquote_to_bytes(v[1:])))
+        return dumb_decode(zlib.decompress(binascii.a2b_base64(v[1:])))
     if v[:1] == b'z':
         return dumb_decode(zlib.decompress(v[1:]))
     if v[:1] == 'z':
@@ -126,12 +138,19 @@ def dumb_decode(v, aes_key=None):
     return (v if isinstance(v, str) else str(v, 'utf-8'))
 
 
+def register_dumb_decoder(char, func):
+    global DUMB_DECODERS
+    for ch in (char.upper(), char.lower()):
+        DUMB_DECODERS[ch] = func
+        DUMB_DECODERS[bytes(ch, 'latin-1')] = func
+
+
 if __name__ == '__main__':
     assert(dumb_encode_bin(bytearray(b'1')) == b'b1')
     assert(dumb_encode_bin(None)            == b'-')
     assert(dumb_encode_bin({'hi':2})        == b'j{"hi":2}')
 
-    assert(dumb_encode_asc(bytearray(b'1')) == 'B1')
+    assert(dumb_encode_asc(bytearray(b'1')) == 'BMQ==')
     assert(dumb_encode_asc(None)            == '-')
     assert(dumb_encode_asc({'hi':2})        == 'J%7B%22hi%22%3A2%7D')
 
@@ -162,7 +181,7 @@ if __name__ == '__main__':
     assert(dumb_decode(str(dumb_encode_bin(longish, compress=10), 'latin-1')) == longish)
 
     iv = b'1234123412341234'
-    key = b'45674567'
+    key = make_aes_key(b'45674567')
     sec = 'hello encrypted world'
     enc_a = dumb_encode_asc(sec, aes_key_iv=(key, iv))
     enc_b = dumb_encode_bin(sec, aes_key_iv=(key, iv))
