@@ -1,3 +1,4 @@
+import copy
 import binascii
 import numpy
 
@@ -49,7 +50,7 @@ class IntSet:
             'latin-1')
 
     def frombytes(self, binary):
-        self.npa = numpy.frombuffer(binary, dtype=numpy.uint64)
+        self.npa = numpy.copy(numpy.frombuffer(binary, dtype=numpy.uint64))
         return self
 
     def tobytes(self):
@@ -65,7 +66,7 @@ class IntSet:
             if maxlen < len(self.npa):
                 self.npa[maxlen:] = numpy.zeros(len(self.npa) - maxlen, dtype=numpy.uint64)
 
-        elif isinstance(other, (list, set)):
+        elif isinstance(other, (list, tuple, set)):
             self &= IntSet(other)
 
         else:
@@ -86,7 +87,7 @@ class IntSet:
             bit = val % 64
             self.npa[pos] = int(self.npa[pos]) | (1 << bit)
 
-        elif isinstance(other, (list, set)):
+        elif isinstance(other, (tuple, list, set)):
             maxint = max(other)
             bitmask = [0] * ((maxint+63) // 64)
             for i in other:
