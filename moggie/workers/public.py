@@ -39,7 +39,7 @@ def web_ping(req_env):
 @url('/quit')
 def web_quit(req_env):
     require(req_env, post=True, local=True)
-    req_env['postpone_action'](lambda: sys.exit(0))
+    req_env['postpone_action'](lambda: req_env['worker'].quit())
     return {
         'ttl': 30,
         'mimetype': 'application/json',
@@ -51,10 +51,12 @@ class WorkerPageKiteSettings(uPageKiteDefaults):
     APPURL = MAIN_APPURL
     APPVER = '2.0.0'
 
+    MAX_POST_BYTES = 20480000
+
     info = uPageKiteDefaults.log
     error = uPageKiteDefaults.log
     debug = uPageKiteDefaults.log
-    trace = uPageKiteDefaults.log
+    #trace = uPageKiteDefaults.log
 
 
 class WorkerHTTPD(HTTPD):
@@ -112,11 +114,11 @@ class PublicWorker(BaseWorker):
         self.kite = None
         self.pk_manager = None
 
-        # FIXME: Override these!
         self.kite_name = kite_name or (self.KIND + '.local' )
         self.kite_secret = kite_secret
 
-        self.shared_req_env = {'app': self}
+        self.app = self.get_app()
+        self.shared_req_env = {'app': self.app, 'worker': self}
 
     @classmethod
     def FromArgs(cls, workdir, args):
@@ -138,11 +140,14 @@ class PublicWorker(BaseWorker):
         return cls(workdir,
             port=port, kite_name=kite_name, kite_secret=kite_secret)
 
-    def get_config(self):
-        return AppConfig(self.profile_dir)
+    def get_app(self):
+        return None
 
     def quit(self):
-        return self.call('quit')
+        if hasattr(self, 'pk_manager') and self.pk_manager:
+            self.pk_manager.keep_running = False
+        else:
+            return super().quit()
 
     def _ping(self):
         pong = b'HTTP/1.0 200 PONG'
@@ -158,27 +163,32 @@ class PublicWorker(BaseWorker):
     def startup_tasks(self):
         pass
 
+    def shutdown_tasks(self):
+        pass
+
     def _main_httpd_loop(self):
         self.startup_tasks()
+        try:
+            uPK = WorkerPageKiteSettings
+            port = self._sock.getsockname()[1]
 
-        uPK = WorkerPageKiteSettings
-        port = self._sock.getsockname()[1]
+            self.httpd = WorkerHTTPD(self._secret,
+                self.PUBLIC_PATHS, self.PUBLIC_PREFIXES,
+                self.kite_name, self.STATIC_PATH, self.shared_req_env, uPK)
 
-        self.httpd = WorkerHTTPD(self._secret,
-            self.PUBLIC_PATHS, self.PUBLIC_PREFIXES,
-            self.kite_name, self.STATIC_PATH, self.shared_req_env, uPK)
+            self.kite = LocalHTTPKite(self._sock,
+                self.kite_name, self.kite_secret,
+                handler=self.httpd.handle_http_request)
+            self.kite.listening_port = port
 
-        self.kite = LocalHTTPKite(self._sock,
-            self.kite_name, self.kite_secret,
-            handler=self.httpd.handle_http_request)
-        self.kite.listening_port = port
+            self.pk_manager = uPageKite([self.kite],
+                socks=[self.kite],
+                public=(self.kite_name and self.kite_secret),
+                uPK=uPK)
 
-        self.pk_manager = uPageKite([self.kite],
-            socks=[self.kite],
-            public=(self.kite_name and self.kite_secret),
-            uPK=uPK)
-
-        self.pk_manager.run()
+            self.pk_manager.run()
+        finally:
+            self.shutdown_tasks()
 
 
 if __name__ == '__main__':

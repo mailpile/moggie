@@ -1,0 +1,14 @@
+#!/bin/bash
+if [ "$2" != "" ]; then
+    FUNC="$1"
+    shift
+else
+    FUNC="jmap"
+fi
+JSON="$1"
+shift
+
+curl -s "$@" -d "$JSON" \
+    -H 'Content-Type: application/json' \
+    "$(cat ~/.local/share/Moggie/default/workers/app.url)/$FUNC"
+echo

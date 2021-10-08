@@ -84,6 +84,9 @@ class BridgeWorker:
             await self.ws.send(message)
         self.ev_loop.create_task(post_message)
 
+    async def async_send(self, message):
+        await self.ws.send(message)
+
     async def run(self):
         while self.keep_running:
             try:

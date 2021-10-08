@@ -1,6 +1,3 @@
-# FIXME: Implement a pattern whereby an HTTP response is returned,
-#        calculations performed, and the result uploaded elsewhere.
-#
 import json
 import os
 import socket
@@ -80,10 +77,10 @@ class BaseWorker(Process):
 
 
     def run(self):
+        if self.NICE and hasattr(os, 'nice'):
+            os.nice(self.NICE)
         if setproctitle:
-            if self.NICE and hasattr(os, 'nice'):
-                os.nice(self.NICE)
-            setproctitle('%s: %s' % (APPNAME, self.KIND))
+            setproctitle('%s: %s' % (APPNAME, self.name))
         try:
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._sock.bind((self._want_host, self._want_port))
@@ -137,7 +134,7 @@ class BaseWorker(Process):
                     client.send(self.HTTP_400)
             except OSError:
                 pass
-            except QuitException:
+            except (QuitException, KeyboardInterrupt):
                 self.keep_running = False
             except:
                 traceback.print_exc()
@@ -148,11 +145,16 @@ class BaseWorker(Process):
                 if client:
                     client.close()
 
-    def api_quit(self):
+    def quit(self):
+        self.keep_running = False
+        if self._sock is None:
+            return self.call('quit')
+
+    def api_quit(self, **kwargs):
         self.keep_running = False
         self.reply_json({'quitting': True})
 
-    def api_status(self, *args):
+    def api_status(self, *args, **kwargs):
         if args and args[0] == 'as.text':
             lines = ['%s: %s' % (k, self.status[k]) for k in self.status]
             self.reply(
@@ -364,6 +366,8 @@ class BaseWorker(Process):
                 if kwargs:
                     self.status['requests_ignored'] += 1
                     return self.reply(self.HTTP_400)  # This is a guess :-(
+            except KeyboardInterrupt:
+                pass
             except:
                 traceback.print_exc()
             self.status['requests_failed'] += 1
@@ -387,6 +391,8 @@ if __name__ == '__main__':
                 try:
                     uploaded = self.get_uploaded_data()
                     print('** Received upload: %s' % uploaded)
+                except KeyboardInterrupt:
+                    pass
                 except:
                     traceback.print_exc()
             self.reply_json({pong: args})

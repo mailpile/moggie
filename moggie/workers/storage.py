@@ -95,18 +95,18 @@ class StorageWorker(BaseWorker):
     def delete(self, key):
         return self.call('delete', key)
 
-    def api_capabilities(self):
+    def api_capabilities(self, **kwargs):
         self.reply_json(self.backend.capabilities())
 
-    def api_dump(self):
+    def api_dump(self, **kwargs):
         self.reply(
             self.HTTP_200 + b'Content-Type: application/octet-stream',
             self.backend.dump())
 
-    def api_info(self, key, details=False):
+    def api_info(self, key, details=False, method=None):
         self.reply_json(self.backend.info(key, details=details))
 
-    def api_get(self, key, *args, dumbcode=False):
+    def api_get(self, key, *args, dumbcode=False, method=None):
         if len(args) > 0 and dumbcode:
             return self.reply(self.HTTP_400)
         try:
@@ -139,7 +139,7 @@ class StorageWorker(BaseWorker):
         else:
             sendit()
 
-    def api_json(self, *args):
+    def api_json(self, *args, **kwargs):
         """
         This function assumes our backend data is already JSON formatted
         and we are just serving up a dictionary of results.
@@ -186,7 +186,7 @@ class StorageWorker(BaseWorker):
         self.backend.__setitem__(key, dumb_decode(value), **kwargs)
         self.reply_json({'set': key})
 
-    def api_append(self, key, data):
+    def api_append(self, key, data, method=None):
         key = str(key, 'latin-1')
         if hasattr(self.backend, 'append'):
             self.backend.append(key, dumb_decode(data))
@@ -194,7 +194,7 @@ class StorageWorker(BaseWorker):
             self.backend[key] += dumb_decode(data)
         self.reply_json({'appended': key})
 
-    def api_delete(self, key):
+    def api_delete(self, key, method=None):
         key = str(key, 'latin-1')
         try:
             del self.backend[key]
