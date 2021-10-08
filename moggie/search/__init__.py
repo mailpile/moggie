@@ -1,11 +1,10 @@
 import copy
 import os
-import random
-import re
 import struct
 
 from ..util.dumbcode import dumb_decode, dumb_encode_bin
 from ..util.intset import IntSet
+from ..util.wordblob import wordblob_search, create_wordblob
 from ..storage.records import RecordFile, RecordStore
 
 
@@ -137,29 +136,15 @@ class SearchEngine:
                 pass
 
     def create_part_space(self):
-        keywords = set([])
-        shortest = self.config['partial_shortest']
-        longest = self.config['partial_longest']
-        for kw in self.iter_byte_keywords():
-            if (shortest <= len(kw) <= longest) and (b'*' not in kw):
-                keywords.add(kw)
-
-        # Stay within our length limits; current strategy is to randomly
-        # drop long words until we fit. Is that sane? FIXME?
-        keywords = list(keywords)
-        maxlen = self.config['partial_list_len']
-        while len(keywords) > maxlen:
-            longish = [kw for kw in keywords if len(kw) == longest]
-            keywords = [kw for kw in keywords if len(kw) < longest]
-            more = maxlen - len(keywords)
-            if more > 0:
-                keywords.extend(random.sample(longish, more))
-                break
-            longest -= 1
-
-        self.part_space = b' '.join(sorted(keywords))
+        self.part_space = create_wordblob(self.iter_byte_keywords(),
+            shortest=self.config['partial_shortest'],
+            longest=self.config['partial_longest'],
+            maxlen=self.config['partial_list_len'])
         self.records[self.IDX_PART_SPACE] = self.part_space
         return self.part_space
+
+    def candidates(self, keyword, max_results):
+        return wordblob_search(keyword, self.part_space, max_results)
 
     def keyword_index(self, kw):
         kw_hash = self.records.hash_key(kw)
@@ -193,31 +178,6 @@ class SearchEngine:
                 plb = PostingListBucket(self.records.get(idx) or b'')
                 plb.add(kw, *keywords[kw])
                 self.records[idx] = plb.blob
-
-    def candidates(self, keyword, max_results):
-        keyword = bytes(keyword, 'utf-8')
-        matches = [(0, keyword.replace(b'*', b''))]
-        if not matches[0][1]:
-            return []
-
-        bind_beg = b'\\b' if (keyword[:1] != b'*') else b''
-        bind_end = b'\\b' if (keyword[-1:] != b'*') else b''
-        keyword = keyword.strip(b'*').replace(b'*', b'\\S+')
-
-        search_re = re.compile(bind_beg + keyword + bind_end)
-        ps = self.part_space
-        for m in re.finditer(search_re, ps):
-            beg, end = m.span()
-            b1 = beg
-            while (beg > 0) and (ps[beg-1:beg] != b' '):
-                beg -= 1
-            while (end < len(ps)) and (ps[end:end+1] != b' '):
-                end += 1
-            kw = ps[beg:end]
-            if kw not in (matches[0][1], matches[-1][1]):
-                matches.append((10 * len(kw) // len(keyword) + b1, kw))
-
-        return [str(kw, 'utf-8') for s, kw in sorted(matches)[:max_results]]
 
     def __getitem__(self, keyword):
         if '*' in keyword:
