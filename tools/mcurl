@@ -1,4 +1,5 @@
 #!/bin/bash
+APP=${APP:-app}
 if [ "$2" != "" ]; then
     FUNC="$1"
     shift
@@ -10,5 +11,5 @@ shift
 
 curl -s "$@" -d "$JSON" \
     -H 'Content-Type: application/json' \
-    "$(cat ~/.local/share/Moggie/default/workers/app.url)/$FUNC"
+    "$(cat ~/.local/share/Moggie/default/workers/$APP.url)/$FUNC"
 echo

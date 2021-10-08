@@ -355,10 +355,10 @@ class BaseWorker(Process):
                 else:
                     rv = func(*args, **kwargs)
 
-                t = time.time() - t0
+                t = 1000 * (time.time() - t0)
                 stats = self.status
                 stats[fn+'_ok'] = stats.get(fn+'_ok', 0) + 1
-                stats[fn+'_t'] = 0.95*stats.get(fn+'_t', t) + 0.05*t
+                stats[fn+'_ms'] = 0.95*stats.get(fn+'_ms', t) + 0.05*t
                 stats['requests_ok'] += 1
                 return rv
             except TypeError:

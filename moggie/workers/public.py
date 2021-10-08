@@ -1,6 +1,8 @@
+import json
 import os
 import sys
 import socket
+import time
 
 from upagekite import uPageKite, LocalHTTPKite
 from upagekite.httpd import HTTPD, url
@@ -11,6 +13,27 @@ from ..config import APPURL as MAIN_APPURL
 from ..config import AppConfig
 
 from .base import BaseWorker
+
+
+class RequestTimer:
+    def __init__(self, name, req_env, status=None):
+        self.t0 = time.time()
+        self.status = status
+        self.name = name
+        self.stats = req_env['worker'].status
+
+    def __enter__(self, *args, **kwargs):
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        if self.status is not None:
+            k = self.name +'_'+ self.status
+            self.stats[k] = self.stats.get(k, 0) + 1
+        else:
+            k = self.name
+        k += '_ms'
+        t = 1000 * (time.time() - self.t0)
+        self.stats[k] = (0.95*self.stats.get(k, t)) + (0.05*t)
 
 
 def require(req_env, post=True, local=False, secure=True):
@@ -46,6 +69,15 @@ def web_quit(req_env):
         'body': '{"quitting": true}'}
 
 
+@url('/status')
+def web_status(req_env):
+    require(req_env, post=True, local=True)
+    return {
+        'ttl': 30,
+        'mimetype': 'application/json',
+        'body': json.dumps(req_env['worker'].status, indent=1)}
+
+
 class WorkerPageKiteSettings(uPageKiteDefaults):
     APPNAME = MAIN_APPNAME
     APPURL = MAIN_APPURL
@@ -60,11 +92,24 @@ class WorkerPageKiteSettings(uPageKiteDefaults):
 
 
 class WorkerHTTPD(HTTPD):
+    CODE_STATUS = {
+        200: 'ok',
+        403: 'denied',
+        400: 'ignored',
+        404: 'ignored',
+        500: 'failed'}
+
     def __init__(self, secret, public_paths, public_prefixes, *args, **kwargs):
         HTTPD.__init__(self, *args, **kwargs)
         self._secret = str(secret, 'latin-1')
         self._public_paths = public_paths or []
         self._public_prefixes = public_prefixes or []
+        self.status = self.base_env['worker'].status
+
+    def log_request(self, *args, **kwargs):
+        scode = 'requests_%s' % self.CODE_STATUS.get(args[3], args[3])
+        self.status[scode] = self.status.get(scode, 0) + 1
+        super().log_request(*args, **kwargs)
 
     def get_handler(self, path, headers):
         public = (path in self._public_paths)
