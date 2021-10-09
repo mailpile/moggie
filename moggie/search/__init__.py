@@ -93,7 +93,7 @@ class SearchEngine:
     IDX_MAX_RESERVED = 100
 
     def __init__(self, workdir,
-            name='search', encryption_key=None, defaults=None):
+            name='search', encryption_key=None, defaults=None, maxint=0):
 
         self.records = RecordStore(os.path.join(workdir, name), name,
             aes_key=encryption_key or b'',
@@ -117,6 +117,8 @@ class SearchEngine:
 
         self.l1_begin = self.IDX_MAX_RESERVED + 1
         self.l2_begin = self.l1_begin + self.config['l1_keywords']
+        self.maxint = maxint
+        self.deleted = IntSet()
 
     def delete_everything(self, *args):
         self.records.delete_everything(*args)
@@ -163,6 +165,8 @@ class SearchEngine:
         for (r_id, kw_list) in results:
             if not isinstance(r_id, int):
                 raise ValueError('Results must be integers')
+            if r_id > self.maxint:
+                self.maxint = r_id
             for kw in kw_list:
                 kw = kw.replace('*', '')  # Otherwise partial search breaks..
                 keywords[kw] = keywords.get(kw, []) + [r_id]
@@ -192,26 +196,38 @@ class SearchEngine:
                 plb = PostingListBucket(self.records.get(idx) or b'')
                 return plb.get(keyword) or IntSet()
 
-    def search(self, term, _recursing=False):
-        """
-        Search for term in the index, returning an IntSet.
-
-        If term is a tuple, it will OR together results for all terms.
-        If term is a list, it will AND together results for all terms.
-
-        These rules are recursively applied to the elements of the sets and
-        tiples, allowing arbitrarily complex trees of AND/OR searches.
-        """
+    def _search(self, term):
         if isinstance(term, str):
             return self[term]
 
         if isinstance(term, list):
-            return IntSet.And(*[self.search(t, _recursing=True) for t in term])
+            return IntSet.And(*[self._search(t) for t in term])
 
         if isinstance(term, tuple):
-            return IntSet.Or(*[self.search(t, _recursing=True) for t in term])
+            op = term[0]
+            return op(*[self._search(t) for t in term[1:]])
+
+        if term == IntSet.All:
+            return IntSet.All(self.maxint + 1)
 
         raise ValueError('Unknown supported search type: %s' % type(term))
+
+    def search(self, term, mask_deleted=True):
+        """
+        Search for term in the index, returning an IntSet.
+
+        If term is a tuple, the first item must been an IntSet constructor
+        (And, Or, Sub) which will be applied to the results for all terms,
+        e.g. (IntSet.Sub, "hello", "world") to subtract all "world" matches
+        from the "hello" results.
+
+        These rules are recursively applied to the elements of the sets and
+        tuples, allowing arbitrarily complex trees of AND/OR/SUB searches.
+        """
+        if mask_deleted:
+            return IntSet.Sub(self._search(term), self.deleted)
+        else:
+            return self._search(term)
 
 
 if __name__ == '__main__':
@@ -237,6 +253,9 @@ if __name__ == '__main__':
         (1, ['hello', 'hell', 'hellscape', 'hellyeah', 'world', 'hooray']),
         (2, ['ell', 'hello', 'iceland', 'e*vil'])])
 
+    se.deleted |= 0
+    assert(list(se.search(IntSet.All)) == [1, 2])
+
     # Basic search correctnesss
     assert(1 in se.search(['hello', 'world']))
     assert(2 not in se.search(['hello', 'world']))
@@ -256,7 +275,7 @@ if __name__ == '__main__':
     assert(1 in se.search(['hell*', 'w*ld']))
 
     # Test our and/or functionality
-    assert(list(se.search('hello')) == list(se.search(('world', 'iceland'))))
+    assert(list(se.search('hello')) == list(se.search((IntSet.Or, 'world', 'iceland'))))
 
     print('Tests pass OK')
     import time

@@ -16,7 +16,23 @@ class IntSet:
             self.frombinary(binary)
         if other is not None:
             self |= other
- 
+
+    @classmethod
+    def All(cls, count):
+        iset = cls()
+        iset.npa = numpy.invert(
+            numpy.zeros(count // 64, dtype=numpy.uint64),
+            dtype=numpy.uint64)
+        iset |= list(range(64 * (count // 64), count))
+        return iset
+
+    @classmethod
+    def Sub(cls, *sets):
+        result = cls(sets[0])
+        for s in sets[1:]:
+            result -= s
+        return result
+
     @classmethod
     def And(cls, *sets):
         result = cls(sets[0])
@@ -59,6 +75,34 @@ class IntSet:
     def __len__(self):
         return (len(self.npa) * 8)
 
+    def __contains__(self, val):
+        pos = val // 64
+        if pos >= len(self.npa):
+            return False
+        bit = val % 64
+        return (int(self.npa[pos]) & (1 << bit))
+
+    def __isub__(self, other):
+        if isinstance(other, IntSet):
+            maxlen = min(len(self.npa), len(other.npa))
+            self.npa[:maxlen] &= numpy.invert(other.npa[:maxlen], dtype=numpy.uint64)
+
+        elif isinstance(other, int):
+            val = other
+            pos = val // 64
+            if pos < len(self.npa):
+                bitset = 1 << (val % 64)
+                bitnot = 0xffffffffffffffff - bitset
+                self.npa[pos] = int(self.npa[pos]) & bitnot
+
+        elif isinstance(other, (list, tuple, set)):
+            if len(other) > 0:
+                self -= IntSet(other)
+        else:
+            raise ValueError('Bad type %s' % type(other))
+
+        return self
+
     def __iand__(self, other):
         if isinstance(other, IntSet):
             maxlen = min(len(self.npa), len(other.npa))
@@ -67,8 +111,8 @@ class IntSet:
                 self.npa[maxlen:] = numpy.zeros(len(self.npa) - maxlen, dtype=numpy.uint64)
 
         elif isinstance(other, (list, tuple, set)):
-            self &= IntSet(other)
-
+            if len(other) > 0:
+                self &= IntSet(other)
         else:
             raise ValueError('Bad type %s' % type(other))
         return self
@@ -88,15 +132,15 @@ class IntSet:
             self.npa[pos] = int(self.npa[pos]) | (1 << bit)
 
         elif isinstance(other, (tuple, list, set)):
-            maxint = max(other)
-            bitmask = [0] * ((maxint+63) // 64)
-            for i in other:
-                bitmask[i // 64] |= (1 << (i % 64))
-            if len(bitmask) > len(self.npa):
-                self.npa.resize(len(bitmask) + 1024)
+            if len(other) > 0:
+                maxint = max(other)
+                bitmask = [0] * ((maxint+63) // 64)
+                for i in other:
+                    bitmask[i // 64] |= (1 << (i % 64))
+                if len(bitmask) > len(self.npa):
+                    self.npa.resize(len(bitmask) + 1024)
 
-            self.npa[:len(bitmask)] |= numpy.array(bitmask, dtype=numpy.uint64)
-
+                self.npa[:len(bitmask)] |= numpy.array(bitmask, dtype=numpy.uint64)
         else:
             raise ValueError('Bad type %s' % type(other))
         return self
@@ -136,6 +180,9 @@ if __name__ == "__main__":
     from ..util.dumbcode import *
 
     is1 = IntSet([1, 3, 10])
+    assert(10 in is1)
+    assert(4 not in is1)
+    assert(1024 not in is1)
     assert(10 in list(is1))
     assert(11 not in list(is1))
     is1 |= 11
@@ -143,12 +190,28 @@ if __name__ == "__main__":
     assert(11 in list(is1))
     is1 &= [1, 3, 9, 44]
     assert(3 in list(is1))
+    is1 -= 9
+    assert(9 not in is1)
+    is1 |= 9
+    assert(9 in is1)
+    is1 -= [9]
+    assert(9 not in is1)
     assert(11 not in list(is1))
     assert(len(is1.tobytes()) == 2048)
 
+    a100 = IntSet.All(100)
+    assert(99 in a100)
+    assert(100 not in a100)
+    assert(len(list(a100)) == 100)
+    assert(list(IntSet.Sub(a100, IntSet.All(99))) == [99])
+    a100 -= 99
+    assert(98 in a100)
+    assert(99 not in a100)
+    assert(0 in a100)
+
     e_is1 = dumb_encode_asc(is1, compress=128)
     d_is1 = dumb_decode(e_is1)
-    print('%s' % e_is1)
+    #print('%s' % e_is1)
     assert(len(e_is1) < 1024)
     assert(list(d_is1) == list(is1))
     e_is1 = dumb_encode_bin(is1)
@@ -183,7 +246,7 @@ if __name__ == "__main__":
         b4 = IntSet.And(b1, b2, b3)
     t2 = time.time()
     assert(list(b4) == list(b3))
-    print('bitmask_and x %d     = %.2fs' % (200 * count, t2-t1))
+    print('bitmask_and x %d   = %.2fs' % (200 * count, t2-t1))
     t2 = time.time()
 
     for i in range(0, 100*count):
@@ -191,7 +254,7 @@ if __name__ == "__main__":
         b5 = IntSet.Or(b1, b2, b3)
     t3 = time.time()
     assert(list(b5) == list(b1))
-    print('bitmask_or x %d      = %.2fs' % (200 * count, t3-t2))
+    print('bitmask_or x %d    = %.2fs' % (200 * count, t3-t2))
     t3 = time.time()
 
     for i in range(0, count):
