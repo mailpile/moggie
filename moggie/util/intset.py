@@ -73,7 +73,10 @@ class IntSet:
         return self.npa.tostring()
 
     def __len__(self):
-        return (len(self.npa) * 8)
+        # Estimate how large a naive binary encoding will be:
+        # 8 bytes per 64-bit int. This is used by dumb_encode to
+        # decide whether to compress or not.
+        return len(self.npa) * 8
 
     def __contains__(self, val):
         pos = val // 64
