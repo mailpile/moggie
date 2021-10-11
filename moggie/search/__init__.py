@@ -210,7 +210,7 @@ class SearchEngine:
     def _search(self, term):
         if isinstance(term, tuple):
             op = term[0]
-            return op(*[self._search(t) for t in term[1:]])
+            return op(*[self._search(t) for t in term[1:]], clone=True)
 
         if isinstance(term, str):
             return self[term]

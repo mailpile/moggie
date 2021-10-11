@@ -9,40 +9,90 @@ class IntSet:
     ENC_BIN = b'i'
     ENC_ASC = 'I'
 
-    def __init__(self, other=None, binary=None):
-        if binary is None:
-            self.npa = numpy.zeros(256, dtype=numpy.uint64)
-        else:
+    # We could change these to match the CPU we are running on, but
+    # doing so would make our data files non-portable. File portability
+    # is why we are explicit about endianness here.
+    DEF_BITS = 64
+    DEF_DTYPE = numpy.dtype('<u8')
+
+    DEF_INIT = 64
+    DEF_GROW = 1024
+
+    def __init__(self,
+            copy=None, clone=None, binary=None, init=DEF_INIT,
+            bits=DEF_BITS, dtype=DEF_DTYPE):
+        self.bits = bits
+        self.dtype = dtype
+
+        if clone is not None:
+            self.npa = clone.npa
+            self.bits = clone.bits
+            self.dtype = clone.dtype
+
+        elif copy is not None:
+            if isinstance(copy, IntSet):
+                self.npa = numpy.copy(copy.npa)
+                self.bits = copy.bits
+                self.dtype = copy.dtype
+            else:
+                self.npa = numpy.zeros(init, dtype=self.dtype)
+                self |= copy
+
+        elif binary is not None:
             self.frombinary(binary)
-        if other is not None:
-            self |= other
+
+        elif init:
+            self.npa = numpy.zeros(init or 1, dtype=self.dtype)
+
+        else:
+            self.npa = None
+
+        self.maxint = 0
+        for bit in range(0, self.bits):
+            self.maxint |= (1 << bit)
 
     @classmethod
     def All(cls, count):
-        iset = cls()
+        iset = cls(init=None)
+
+        maxpos = count // iset.bits
         iset.npa = numpy.invert(
-            numpy.zeros(count // 64, dtype=numpy.uint64),
-            dtype=numpy.uint64)
-        iset |= list(range(64 * (count // 64), count))
+            numpy.zeros(1 + maxpos, dtype=iset.dtype),
+            dtype=iset.dtype)
+
+        mask = 0
+        for i in range(iset.bits * maxpos, count):
+            mask |= (1 << (i % iset.bits))
+        iset.npa[maxpos] = int(iset.npa[maxpos]) & mask
+
         return iset
 
     @classmethod
-    def Sub(cls, *sets):
-        result = cls(sets[0])
+    def Sub(cls, *sets, clone=False):
+        if clone:
+            result = cls(clone=sets[0])
+        else:
+            result = cls(copy=sets[0])
         for s in sets[1:]:
             result -= s
         return result
 
     @classmethod
-    def And(cls, *sets):
-        result = cls(sets[0])
+    def And(cls, *sets, clone=False):
+        if clone:
+            result = cls(clone=sets[0])
+        else:
+            result = cls(copy=sets[0])
         for s in sets[1:]:
             result &= s
         return result
 
     @classmethod
-    def Or(cls, *sets):
-        result = cls(sets[0])
+    def Or(cls, *sets, clone=False):
+        if clone:
+            result = cls(clone=sets[0])
+        else:
+            result = cls(copy=sets[0])
         for s in sets[1:]:
             result |= s
         return result
@@ -66,7 +116,7 @@ class IntSet:
             'latin-1')
 
     def frombytes(self, binary):
-        self.npa = numpy.copy(numpy.frombuffer(binary, dtype=numpy.uint64))
+        self.npa = numpy.copy(numpy.frombuffer(binary, dtype=self.dtype))
         return self
 
     def tobytes(self):
@@ -76,26 +126,27 @@ class IntSet:
         # Estimate how large a naive binary encoding will be:
         # 8 bytes per 64-bit int. This is used by dumb_encode to
         # decide whether to compress or not.
-        return len(self.npa) * 8
+        return len(self.npa) * (self.bits // 8)
 
     def __contains__(self, val):
-        pos = val // 64
+        pos = val // self.bits
         if pos >= len(self.npa):
             return False
-        bit = val % 64
+        bit = val % self.bits
         return (int(self.npa[pos]) & (1 << bit))
 
     def __isub__(self, other):
         if isinstance(other, IntSet):
             maxlen = min(len(self.npa), len(other.npa))
-            self.npa[:maxlen] &= numpy.invert(other.npa[:maxlen], dtype=numpy.uint64)
+            self.npa[:maxlen] &= numpy.invert(
+                other.npa[:maxlen], dtype=self.dtype)
 
         elif isinstance(other, int):
             val = other
-            pos = val // 64
+            pos = val // self.bits
             if pos < len(self.npa):
-                bitset = 1 << (val % 64)
-                bitnot = 0xffffffffffffffff - bitset
+                bitset = 1 << (val % self.bits)
+                bitnot = self.maxint - bitset
                 self.npa[pos] = int(self.npa[pos]) & bitnot
 
         elif isinstance(other, (list, tuple, set)):
@@ -111,7 +162,7 @@ class IntSet:
             maxlen = min(len(self.npa), len(other.npa))
             self.npa[:maxlen] &= other.npa[:maxlen]
             if maxlen < len(self.npa):
-                self.npa[maxlen:] = numpy.zeros(len(self.npa) - maxlen, dtype=numpy.uint64)
+                self.npa[maxlen:] = numpy.zeros(len(self.npa) - maxlen, dtype=self.dtype)
 
         elif isinstance(other, (list, tuple, set)):
             if len(other) > 0:
@@ -123,27 +174,27 @@ class IntSet:
     def __ior__(self, other):
         if isinstance(other, IntSet):
             if len(other.npa) > len(self.npa):
-                self.npa.resize(len(other.npa) + 1024)
+                self.npa.resize(len(other.npa) + self.DEF_GROW)
             self.npa[:len(other.npa)] |= other.npa
 
         elif isinstance(other, int):
             val = other
-            pos = val // 64
+            pos = val // self.bits
             if pos > len(self.npa):
-                self.npa.resize(pos + 1024)
-            bit = val % 64
+                self.npa.resize(pos + self.DEF_GROW)
+            bit = val % self.bits
             self.npa[pos] = int(self.npa[pos]) | (1 << bit)
 
         elif isinstance(other, (tuple, list, set)):
             if len(other) > 0:
                 maxint = max(other)
-                bitmask = [0] * ((maxint+63) // 64)
+                bitmask = [0] * (1 + (maxint // self.bits))
                 for i in other:
-                    bitmask[i // 64] |= (1 << (i % 64))
+                    bitmask[i // self.bits] |= (1 << (i % self.bits))
                 if len(bitmask) > len(self.npa):
-                    self.npa.resize(len(bitmask) + 1024)
+                    self.npa.resize(len(bitmask) + self.DEF_GROW)
 
-                self.npa[:len(bitmask)] |= numpy.array(bitmask, dtype=numpy.uint64)
+                self.npa[:len(bitmask)] |= numpy.array(bitmask, dtype=self.dtype)
         else:
             raise ValueError('Bad type %s' % type(other))
         return self
@@ -157,9 +208,9 @@ class IntSet:
         for i in rrange(0, len(self.npa)):
             u64 = int(self.npa[i])
             if u64:
-                for j in rrange(0, 64):
+                for j in rrange(0, self.bits):
                     if (u64 & (1 << j)):
-                        result.append((i * 64) + j)
+                        result.append((i * self.bits) + j)
             while len(result) >= size:
                 yield result[:size]
                 result = result[size:]
@@ -170,9 +221,9 @@ class IntSet:
         for i in range(0, len(self.npa)):
             u64 = int(self.npa[i])
             if u64:
-                for j in range(0, 64):
+                for j in range(0, self.bits):
                     if (u64 & (1 << j)):
-                        yield (i * 64) + j
+                        yield (i * self.bits) + j
 
 
 register_dumb_decoder(IntSet.ENC_ASC, IntSet.DumbDecode)
@@ -181,6 +232,8 @@ register_dumb_decoder(IntSet.ENC_ASC, IntSet.DumbDecode)
 if __name__ == "__main__":
     import time
     from ..util.dumbcode import *
+
+    assert(IntSet.DEF_BITS == 64)
 
     is1 = IntSet([1, 3, 10])
     assert(10 in is1)
@@ -200,7 +253,7 @@ if __name__ == "__main__":
     is1 -= [9]
     assert(9 not in is1)
     assert(11 not in list(is1))
-    assert(len(is1.tobytes()) == 2048)
+    assert(len(is1.tobytes()) == (is1.DEF_INIT * is1.bits // 8))
 
     a100 = IntSet.All(100)
     assert(99 in a100)
@@ -239,8 +292,8 @@ if __name__ == "__main__":
         b2 = IntSet(some)
         b3 = IntSet(few)
     t1 = time.time()
-    assert(len(b1.npa) == 1024 + 10 * len(many) // 64)
-    assert(len(b1.tobytes()) == 8 * (1024 + 10*len(many) // 64))
+    assert(len(b1.npa) == b1.DEF_GROW + 10 * len(many) // b1.bits)
+    assert(len(b1.tobytes()) == b1.bits * (b1.DEF_GROW + 10*len(many) // b1.bits) // 8)
     print('ints_to_bitmask x %d = %.2fs' % (3 * count, t1-t0))
     t1 = time.time()
 
