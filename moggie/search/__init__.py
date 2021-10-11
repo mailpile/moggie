@@ -13,9 +13,10 @@ class PostingListBucket:
     A PostingListBucket is an unsorted sequence of binary packed
     (keyword, IntSet) pairs.
     """
-    def __init__(self, blob, compress=None):
+    def __init__(self, blob, deleted=None, compress=None):
         self.blob = blob
         self.compress = compress
+        self.deleted = deleted
 
     def __iter__(self):
         beg = 0
@@ -58,6 +59,8 @@ class PostingListBucket:
         if iset is None:
             iset = IntSet()
         iset |= ints
+        if self.deleted is not None:
+            iset -= self.deleted
         iset_blob = dumb_encode_bin(iset, compress=self.compress)
 
         chunks.append(struct.pack('II', len(bkeyword), len(iset_blob)))
@@ -120,6 +123,10 @@ class SearchEngine:
         self.maxint = maxint
         self.deleted = IntSet()
 
+        # Someday, this might be configurable?
+        from .parse_greedy import greedy_parse_terms
+        self.parse_terms = greedy_parse_terms
+
     def delete_everything(self, *args):
         self.records.delete_everything(*args)
 
@@ -176,10 +183,14 @@ class SearchEngine:
             if idx < self.l2_begin:
                 # These are instances of IntSet, de/serialization is done
                 # automatically by dumbcode.
-                self.records[idx] |= keywords[kw]
+                iset = self.records[idx]
+                iset |= keywords[kw]
+                iset -= self.deleted
+                self.records[idx] = iset
             else:
                 # These are instances of PostingList
                 plb = PostingListBucket(self.records.get(idx) or b'')
+                plb.deleted = self.deleted
                 plb.add(kw, *keywords[kw])
                 self.records[idx] = plb.blob
 
@@ -197,24 +208,24 @@ class SearchEngine:
                 return plb.get(keyword) or IntSet()
 
     def _search(self, term):
+        if isinstance(term, tuple):
+            op = term[0]
+            return op(*[self._search(t) for t in term[1:]])
+
         if isinstance(term, str):
             return self[term]
 
         if isinstance(term, list):
             return IntSet.And(*[self._search(t) for t in term])
 
-        if isinstance(term, tuple):
-            op = term[0]
-            return op(*[self._search(t) for t in term[1:]])
-
         if term == IntSet.All:
             return IntSet.All(self.maxint + 1)
 
         raise ValueError('Unknown supported search type: %s' % type(term))
 
-    def search(self, term, mask_deleted=True):
+    def search(self, terms, mask_deleted=True):
         """
-        Search for term in the index, returning an IntSet.
+        Search for terms in the index, returning an IntSet.
 
         If term is a tuple, the first item must been an IntSet constructor
         (And, Or, Sub) which will be applied to the results for all terms,
@@ -224,10 +235,14 @@ class SearchEngine:
         These rules are recursively applied to the elements of the sets and
         tuples, allowing arbitrarily complex trees of AND/OR/SUB searches.
         """
-        if mask_deleted:
-            return IntSet.Sub(self._search(term), self.deleted)
+        if isinstance(terms, str):
+            ops = self.parse_terms(terms)
         else:
-            return self._search(term)
+            ops = terms
+        if mask_deleted:
+            return IntSet.Sub(self._search(ops), self.deleted)
+        else:
+            return self._search(ops)
 
 
 if __name__ == '__main__':
