@@ -103,7 +103,7 @@ def date_term_magic(term):
 
 
 if __name__ == '__main__':
-    from . import explain_ops
+    from .engine import explain_ops
 
     assert(explain_ops(date_term_magic('dates:2012'))
         == '(year:2012)')
