@@ -84,14 +84,16 @@ def greedy_parse_terms(terms, magic_map={}):
                 # operator last time, but the current isn't AND: fix it.
                 search_stack[-1] = [IntSet.And, _flat(search_stack[-1])]
 
-            magic = None
-            for char in magic_map:
+            for char, magic in magic_map:
                 if char in term:
-                    magic = magic_map[char]
-            if magic is None:
+                    term = magic(term)
+                    if not isinstance(term, str):
+                        break
+
+            if isinstance(term, str):
                 search_stack[-1].append(term.lower())
             else:
-                search_stack[-1].append(_flat(magic(term)))
+                search_stack[-1].append(_flat(term))
             changed = False
 
     # Close all dangling parens
@@ -124,11 +126,16 @@ if __name__ == '__main__':
     assert(greedy_parse_terms('ALL - iceland')
         == (IntSet.Sub, IntSet.All, 'iceland'))
 
-    def swapper(kw):
+    def swapper_one(kw):
+        return ':'.join(reversed(kw.split(':')))
+
+    def swapper_many(kw):
         return (IntSet.Or, kw, ':'.join(reversed(kw.split(':'))))
 
-    assert(greedy_parse_terms('yes hel:lo world', {':': swapper})
-        == (IntSet.And, 'yes', (IntSet.Or, 'hel:lo', 'lo:hel'), 'world'))
+    assert(greedy_parse_terms('yes hel:lo world', [
+            (':', swapper_one),    # Maps to lo:hel
+            (':', swapper_many)])  # ORs with hel:lo
+        == (IntSet.And, 'yes', (IntSet.Or, 'lo:hel', 'hel:lo'), 'world'))
 
     print('Tests passed OK')
     import sys

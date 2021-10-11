@@ -8,6 +8,23 @@ from ..util.wordblob import wordblob_search, create_wordblob
 from ..storage.records import RecordFile, RecordStore
 
 
+def explain_ops(ops):
+    if isinstance(ops, str):
+        return ops
+    if ops == IntSet.All:
+        return 'ALL'
+
+    if ops[0] == IntSet.Or:
+        op = ' OR '
+    elif ops[0] == IntSet.And:
+        op = ' AND '
+    elif ops[0] == IntSet.Sub:
+        op = ' NOT '
+    else:
+        raise ValueError('What op is %s' % ops[0])
+    return '('+ op.join([explain_ops(term) for term in ops[1:]]) +')'
+
+
 class PostingListBucket:
     """
     A PostingListBucket is an unsorted sequence of binary packed
@@ -123,9 +140,19 @@ class SearchEngine:
         self.maxint = maxint
         self.deleted = IntSet()
 
-        # Someday, this might be configurable?
+        # Someday, these might be configurable/pluggable?
+
         from .parse_greedy import greedy_parse_terms
         self.parse_terms = greedy_parse_terms
+        self.magic_map = [
+            ('@', self.magic_emails),
+            (':', self.magic_terms),
+            ('*', self.magic_candidates)]
+
+        from .dates import date_term_magic
+        self.magic_term_map = {
+            'date': date_term_magic,
+            'dates': date_term_magic}
 
     def delete_everything(self, *args):
         self.records.delete_everything(*args)
@@ -195,17 +222,12 @@ class SearchEngine:
                 self.records[idx] = plb.blob
 
     def __getitem__(self, keyword):
-        if '*' in keyword:
-            matches = self.config.get('partial_matches', 10)
-            return IntSet.Or(*[
-                self[kw] for kw in self.candidates(keyword, matches)])
+        idx = self.keyword_index(keyword)
+        if idx < self.l2_begin:
+            raise KeyError('FIXME: Unimplemented')
         else:
-            idx = self.keyword_index(keyword)
-            if idx < self.l2_begin:
-                raise KeyError('FIXME: Unimplemented')
-            else:
-                plb = PostingListBucket(self.records.get(idx) or b'')
-                return plb.get(keyword) or IntSet()
+            plb = PostingListBucket(self.records.get(idx) or b'')
+            return plb.get(keyword) or IntSet()
 
     def _search(self, term):
         if isinstance(term, tuple):
@@ -223,7 +245,10 @@ class SearchEngine:
 
         raise ValueError('Unknown supported search type: %s' % type(term))
 
-    def search(self, terms, mask_deleted=True):
+    def explain(self, terms):
+        return explain_ops(self.parse_terms(terms, self.magic_map))
+
+    def search(self, terms, mask_deleted=True, cache=False, explain=False):
         """
         Search for terms in the index, returning an IntSet.
 
@@ -236,13 +261,40 @@ class SearchEngine:
         tuples, allowing arbitrarily complex trees of AND/OR/SUB searches.
         """
         if isinstance(terms, str):
-            ops = self.parse_terms(terms)
+            ops = self.parse_terms(terms, self.magic_map)
         else:
             ops = terms
         if mask_deleted:
-            return IntSet.Sub(self._search(ops), self.deleted)
+            rv = IntSet.Sub(self._search(ops), self.deleted)
         else:
-            return self._search(ops)
+            rv = self._search(ops)
+        if explain or cache:
+            rv = (ops, rv)
+        if cache:
+            cache_id = self._cache_result(rv)
+            return (cache_id, rv)
+        else:
+            return rv
+
+    def magic_terms(self, term):
+        what = term.split(':')[0].lower()
+        magic = self.magic_term_map.get(what)
+        if magic is not None:
+            return magic(term)
+
+        # FIXME: Convert to:me, from:me into e-mail searches
+
+        return term
+
+    def magic_emails(self, term):
+        return term  # FIXME: A no-op
+
+    def magic_candidates(self, term):
+        matches = self.candidates(term, self.config.get('partial_matches', 10))
+        if len(matches) > 1:
+            return tuple([IntSet.Or] + matches)
+        else:
+            return matches[0]
 
 
 if __name__ == '__main__':
@@ -272,8 +324,8 @@ if __name__ == '__main__':
     assert(list(se.search(IntSet.All)) == [1, 2])
 
     # Basic search correctnesss
-    assert(1 in se.search(['hello', 'world']))
-    assert(2 not in se.search(['hello', 'world']))
+    assert(1 in se.search('hello world'))
+    assert(2 not in se.search('hello world'))
     assert([] == list(se.search('notfound')))
 
     # Enable and test partial word searches
@@ -287,12 +339,20 @@ if __name__ == '__main__':
     assert(len(se.candidates('*ell', 10)) == 2)   # ell, hell
     assert(len(se.candidates('*ell*', 10)) == 4)  # ell, hell, hello, hellyeah
     assert(len(se.candidates('he*ah', 10)) == 2)  # hepe, hellyeah
-    assert(1 in se.search(['hell*', 'w*ld']))
+    assert(1 in se.search('hell* w*ld'))
 
     # Test our and/or functionality
     assert(list(se.search('hello')) == list(se.search((IntSet.Or, 'world', 'iceland'))))
 
+    # Test the explainer and parse_terms with candidate magic
+    assert(explain_ops(se.parse_terms('* - is:deleted he*o WORLD +Iceland', se.magic_map))
+        == '(((ALL NOT is:deleted) AND (heo OR hello) AND world) OR iceland)')
+
+    # Test the explainer and parse_terms with date range magic
+    assert(se.explain('dates:2012..2013 OR date:2015')
+        == '((year:2012 OR year:2013) OR year:2015)')
+
     print('Tests pass OK')
-    import time
-    time.sleep(10)
+    #import time
+    #time.sleep(10)
     se.delete_everything(True, False, True)
