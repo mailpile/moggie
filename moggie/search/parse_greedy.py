@@ -32,7 +32,7 @@ import re
 from ..util.intset import IntSet
 
 
-def greedy_parse_terms(terms):
+def greedy_parse_terms(terms, magic_map={}):
     terms = re.sub('["\'\s]+' , ' ',
         terms.replace('(', ' ( ').replace(')', ' ) ')
              .replace(' +', ' + ').replace('+ ', ' + ')
@@ -46,32 +46,53 @@ def greedy_parse_terms(terms):
             return tuple(search)
 
     search_stack = [[IntSet.And]]
+    changed = False
     for term in terms:
         if term == '(':
+            changed = False
             search_stack.append([IntSet.And])
 
         elif term == ')':
+            changed = False
             if len(search_stack) > 1:
+                changed = True
                 done = search_stack.pop(-1)
                 search_stack[-1].append(tuple(done))
 
         elif term in ('*', 'ALL'):
-             search_stack[-1].append(IntSet.All)
+            search_stack[-1].append(IntSet.All)
+            changed = False
 
         elif term in ('AND',):
+            changed = True
             if search_stack[-1][0] != IntSet.And:
                 search_stack[-1] = [IntSet.And, _flat(search_stack[-1])]
 
         elif term in ('+', 'OR'):
+            changed = True
             if search_stack[-1][0] != IntSet.Or:
                 search_stack[-1] = [IntSet.Or, _flat(search_stack[-1])]
 
         elif term in ('-', 'NOT'):
+            changed = True
             if search_stack[-1][0] != IntSet.Sub:
                 search_stack[-1] = [IntSet.Sub, _flat(search_stack[-1])]
 
         else:
-             search_stack[-1].append(term.lower())
+            if not changed and (search_stack[-1][0] != IntSet.And):
+                # No operator by default equals AND, so if we didn't set an
+                # operator last time, but the current isn't AND: fix it.
+                search_stack[-1] = [IntSet.And, _flat(search_stack[-1])]
+
+            magic = None
+            for char in magic_map:
+                if char in term:
+                    magic = magic_map[char]
+            if magic is None:
+                search_stack[-1].append(term.lower())
+            else:
+                search_stack[-1].append(_flat(magic(term)))
+            changed = False
 
     # Close all dangling parens
     while len(search_stack) > 1:
@@ -102,6 +123,12 @@ if __name__ == '__main__':
 
     assert(greedy_parse_terms('ALL - iceland')
         == (IntSet.Sub, IntSet.All, 'iceland'))
+
+    def swapper(kw):
+        return (IntSet.Or, kw, ':'.join(reversed(kw.split(':'))))
+
+    assert(greedy_parse_terms('yes hel:lo world', {':': swapper})
+        == (IntSet.And, 'yes', (IntSet.Or, 'hel:lo', 'lo:hel'), 'world'))
 
     print('Tests passed OK')
     import sys
