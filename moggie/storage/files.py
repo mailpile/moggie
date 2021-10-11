@@ -184,8 +184,9 @@ class FileStorage(BaseStorage):
 
 
 if __name__ == "__main__":
-    fs = FileStorage(relative_to=b'/home/bre')
+    import sys
 
+    fs = FileStorage(relative_to=b'/home/bre')
     fn = dumb_encode_asc(__file__)
     assert(fs.length(fn) == len(fs[fn]))
 
@@ -195,26 +196,26 @@ if __name__ == "__main__":
     del fs['B/tmp/test.txt']
 
     print('Tests passed OK')
+    if 'more' in sys.argv:
+        print('%s\n\n' % fs.info('B/home/bre/Mail/GMaildir/[Gmail].All Mail', details=True, parse=True))
+        print('%s\n\n' % fs.info('B/home/bre/Mail/mailpile/2013-08.mbx', details=True))
 
-    print('%s\n\n' % fs.info('B/home/bre/Mail/GMaildir/[Gmail].All Mail', details=True, parse=True))
-    print('%s\n\n' % fs.info('B/home/bre/Mail/mailpile/2013-08.mbx', details=True))
+        big = 'B/home/bre/Mail/klaki/gmail-2011-11-26.mbx'
+        print('%s\n\n' % fs.info(big, details=True))
+        msgs = sorted(list(fs.parse_mbox(big)))
+        print('Found %d messages in %s' % (len(msgs), big))
+        for msg in msgs[:5] + msgs[-5:]:
+            m = msg.parsed()
+            f = m['from']
+            print('%-38.38s %-40.40s' % (f.fn or f.address, m['subject']))
 
-    big = 'B/home/bre/Mail/klaki/gmail-2011-11-26.mbx'
-    print('%s\n\n' % fs.info(big, details=True))
-    msgs = sorted(list(fs.parse_mbox(big)))
-    print('Found %d messages in %s' % (len(msgs), big))
-    for msg in msgs[:5] + msgs[-5:]:
-        m = msg.parsed()
-        f = m['from']
-        print('%-38.38s %-40.40s' % (f.fn or f.address, m['subject']))
+        for count in range(0, 5):
+            i = count * (len(msgs) // 5)
+            print('len(msgs[%d]) == %d' % (i, len(dumb_encode_bin(msgs[i], compress=256))))
+        print('%s\n' % dumb_encode_bin(msgs[0], compress=None))
 
-    for count in range(0, 5):
-        i = count * (len(msgs) // 5)
-        print('len(msgs[%d]) == %d' % (i, len(dumb_encode_bin(msgs[i], compress=256))))
-    print('%s\n' % dumb_encode_bin(msgs[0], compress=None))
-
-    try:
-        print('%s' % fs['/tmp'])
-    except IsADirectoryError:
-        print('%s' % fs.info('/tmp', details=True))
-    print('%s' % fs.info('/lskjdf', details=True))
+        try:
+            print('%s' % fs['/tmp'])
+        except IsADirectoryError:
+            print('%s' % fs.info('/tmp', details=True))
+        print('%s' % fs.info('/lskjdf', details=True))

@@ -25,7 +25,7 @@ class SearchWorker(BaseWorker):
         self.engine = None
 
     def _main_httpd_loop(self):
-        from ..search import SearchEngine
+        from ..search.engine import SearchEngine
         self.engine = SearchEngine(self.engine_dir,
             name=self.name,
             encryption_key=self.encryption_key,

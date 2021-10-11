@@ -274,11 +274,11 @@ if __name__ == "__main__":
     d_is1 = dumb_decode(e_is1)
     assert(list(d_is1) == list(is1))
 
-    print('%s' % list(is1))
-    for i in is1.chunks(size=1, reverse=False):
-        print('%s' % list(i))
-    for i in is1.chunks(size=1, reverse=True):
-        print('%s' % list(i))
+    #print('%s' % list(is1))
+    #for i in is1.chunks(size=1, reverse=False):
+    #    print('%s' % list(i))
+    #for i in is1.chunks(size=1, reverse=True):
+    #    print('%s' % list(i))
 
     many = list(range(0, 10240000, 10))
     some = list(range(0, 1024000, 10))
@@ -287,6 +287,8 @@ if __name__ == "__main__":
     t0 = time.time()
     count = 10
 
+    print('Tests passed OK')
+
     for i in range(0, count):
         b1 = IntSet(many)
         b2 = IntSet(some)
@@ -294,7 +296,7 @@ if __name__ == "__main__":
     t1 = time.time()
     assert(len(b1.npa) == b1.DEF_GROW + 10 * len(many) // b1.bits)
     assert(len(b1.tobytes()) == b1.bits * (b1.DEF_GROW + 10*len(many) // b1.bits) // 8)
-    print('ints_to_bitmask x %d = %.2fs' % (3 * count, t1-t0))
+    print(' * ints_to_bitmask x %d = %.2fs' % (3 * count, t1-t0))
     t1 = time.time()
 
     for i in range(0, 100*count):
@@ -302,7 +304,7 @@ if __name__ == "__main__":
         b4 = IntSet.And(b1, b2, b3)
     t2 = time.time()
     assert(list(b4) == list(b3))
-    print('bitmask_and x %d   = %.2fs' % (200 * count, t2-t1))
+    print(' * bitmask_and x %d   = %.2fs' % (200 * count, t2-t1))
     t2 = time.time()
 
     for i in range(0, 100*count):
@@ -310,7 +312,7 @@ if __name__ == "__main__":
         b5 = IntSet.Or(b1, b2, b3)
     t3 = time.time()
     assert(list(b5) == list(b1))
-    print('bitmask_or x %d    = %.2fs' % (200 * count, t3-t2))
+    print(' * bitmask_or x %d    = %.2fs' % (200 * count, t3-t2))
     t3 = time.time()
 
     for i in range(0, count):
@@ -321,7 +323,6 @@ if __name__ == "__main__":
     assert(list(l1) == many)
     assert(list(l2) == some)
     assert(list(l3) == few)
-    print('bitmask_to_ints x %d = %.2fs' % (3 * count, t4-t3))
+    print(' * bitmask_to_ints x %d = %.2fs' % (3 * count, t4-t3))
     t4 = time.time()
 
-    print('Tests passed OK')

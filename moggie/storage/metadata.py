@@ -245,7 +245,7 @@ if __name__ == '__main__':
     t0 = time.time()
     tcount = count = 0
     stop = 400000
-    for dn in fs.info('B/home/bre/Mail', details=True)['contents']:
+    for dn in fs.info(b'b/home/bre/Mail', details=True)['contents']:
       if tcount > stop:
         break
       for fn in fs.info(dn, details=True).get('contents', []):
@@ -257,7 +257,7 @@ if __name__ == '__main__':
           tcount += count
           count = 0
           t1 = time.time()
-          print('Added %d messages to index in %.2fs (%d/s), %s'
+          print(' * Added %d messages to index in %.2fs (%d/s), %s'
               % (tcount, t1-t0, tcount / (t1-t0), fn))
           if tcount > stop:
             break
@@ -265,13 +265,13 @@ if __name__ == '__main__':
     t0 = time.time()
     which = ms[random.randint(0, len(ms))]
     #print('%s' % which)
-    print('%d: %s' % (which.idx, which.get_raw_header('Subject')))
-    print('thread_id=%d mtime=%d' % (which.thread_id, which.mtime))
+    print(' * %d: %s' % (which.idx, which.get_raw_header('Subject')))
+    print(' * thread_id=%d mtime=%d' % (which.thread_id, which.mtime))
     t1 = time.time()
     for (i, tid) in ms.get_thread_idxs(which.thread_id):
         print('%d/%d: %s' % (i, tid, ms[i].get_raw_header('Subject')))
     t2 = time.time()
-    print('Navigated thread in %.4fs (%.4f, %.4f)' % (t2-t0, t1-t0, t2-t1))
+    print(' * Navigated thread in %.4fs (%.4f, %.4f)' % (t2-t0, t1-t0, t2-t1))
 
     ms = MetadataStore('/tmp/metadata-test', 'metadata-test', b'123456789abcdef0')
     ms.delete_everything(True, False, True)
@@ -321,5 +321,5 @@ Subject: Sure, sure
         pass
 
     print('Tests passed OK')
-    time.sleep(30)
+    #time.sleep(30)
     ms.delete_everything(True, False, True)

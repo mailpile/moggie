@@ -33,8 +33,7 @@ class AddressInfo(dict):
         lambda s,v: s.__setitem__('keys', v))
 
     def normalized(self, **kwargs):
-        kwargs['addresses'] = [self]
-        return AddressHeaderParser.normalized_addresses(**kwargs)[0]
+        return AddressHeaderParser.normalized_addresses(self, **kwargs)[0]
 
     def __str__(self):
         return self.normalized()
@@ -75,11 +74,11 @@ class AddressHeaderParser(list):
     'Bjarni'
     >>> ai.address
     'bre@example.org'
-    >>> ahpn = ahp.normalized_addresses()
+    >>> ahpn = ahp.normalized()
     >>> (ahpn == ahp.TEST_EXPECT_NORMALIZED_ADDRESSES) or ahpn
     True
 
-    >>> AddressHeaderParser('Weird email@somewhere.com Header').normalized()
+    >>> AddressHeaderParser('Weird email@somewhere.com Header').normalized()[0]
     '"Weird Header" <email@somewhere.com>'
 
     >>> ai = AddressHeaderParser(data=ahp.TEST_BYTES_DATA)
@@ -96,7 +95,7 @@ class AddressHeaderParser(list):
     TEST_HEADER_DATA = """
         bre@example.org  ,
         bre@example.org Bjarni ,
-        bre@example.org bre@klaki.net,
+        bre@example.org bre@example.org,
         bre@example.org (bre@notmail.com),
         "<bre@notmail.com>" <bre@example.org>,
         =?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@example.org>,
@@ -106,16 +105,17 @@ class AddressHeaderParser(list):
         Bjarni [mailto:bre@example.org],
         "This is a key test" <bre@example.org#61A015763D28D410A87B197328191D9B3B4199B4>,
         bre@example.org (Bjarni Runar Einar's son);
-        Bjarni =?iso-8859-1?Q??=is bre @example.org,
+        Bjarni =?iso-8859-1?Q?i?=s bre @example.org,
         Bjarni =?iso-8859-1?Q?Runar?=Einarsson<' bre'@ example.org>,
         "Einarsson, Bjarni" <bre@example.org>,
         =?iso-8859-1?Q?Lonia_l=F6gmannsstofa?= <lonia@example.com>,
         "Bjarni @ work" <bre@example.com>,
     """
+
     TEST_EXPECT_NORMALIZED_ADDRESSES = [
         '<bre@example.org>',
         '"Bjarni" <bre@example.org>',
-        '"bre@example.org" <bre@klaki.net>',
+        '"bre@example.org" <bre@example.org>',
         '"bre@notmail.com" <bre@example.org>',
         '=?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@example.org>',
         '=?utf-8?Q?=3Cbre@notmail.com=3E?= <bre@example.org>',
@@ -124,11 +124,12 @@ class AddressHeaderParser(list):
         '"Bjarni" <bre@example.org>',
         '"This is a key test" <bre@example.org>',
         '"Bjarni Runar Einar\\\'s son" <bre@example.org>',
-        '"Bjarni is" <bre@example.org>',
+        '"Bjarni i s" <bre@example.org>',
         '"Bjarni Runar Einarsson" <bre@example.org>',
         '=?utf-8?Q?Einarsson=2C_Bjarni?= <bre@example.org>',
         '=?utf-8?Q?Lonia_l=C3=B6gmannsstofa?= <lonia@example.com>',
         '"Bjarni @ work" <bre@example.com>']
+
 
     # Escaping and quoting
     TXT_RE_QUOTE = '=\\?([^\\?\\s]+)\\?([QqBb])\\?([^\\?\\s]*)\\?='
@@ -359,13 +360,11 @@ class AddressHeaderParser(list):
         return addresses
 
     @classmethod
-    def normalized_addresses(self,
-                             addresses=None, quote=True, with_keys=False,
+    def normalized_addresses(cls,
+                             addresses, quote=True, with_keys=False,
                              force_name=False):
-        if addresses is None:
-            addresses = self
-        elif not addresses:
-            addresses = []
+        if not addresses:
+            return []
         def fmt(ai):
             email = ai.address
             if with_keys and ai.keys:
@@ -374,15 +373,15 @@ class AddressHeaderParser(list):
             else:
                 epart = '<%s>' % email
             if ai.fn:
-                 return ' '.join([quote and self.quote(ai.fn) or ai.fn, epart])
+                 return ' '.join([quote and cls.quote(ai.fn) or ai.fn, epart])
             elif force_name:
-                 return ' '.join([quote and self.quote(email) or email, epart])
+                 return ' '.join([quote and cls.quote(email) or email, epart])
             else:
                  return epart
         return [fmt(ai) for ai in addresses]
 
     def normalized(self, **kwargs):
-        return ', '.join(self.normalized_addresses(**kwargs))
+        return self.normalized_addresses(self, **kwargs)
 
 
 if __name__ == "__main__":
