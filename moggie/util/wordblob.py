@@ -22,7 +22,7 @@ import re
 import random
 
 
-def wordblob_search(term, blob, max_results):
+def wordblob_search(term, blob, max_results, order=0):
     """
     Search for <term> in <blob>, returning up the <max_results> matches,
     ordered by how exact the match is. The term itself, stripped of
@@ -37,7 +37,10 @@ def wordblob_search(term, blob, max_results):
     bind_beg = (keyword[:1] != b'*')
     bind_end = (keyword[-1:] != b'*')
 
-    search_re = re.compile(keyword.strip(b'*').replace(b'*', b'[^\\n]*'))
+    search_re = re.compile(
+        keyword.strip(b'*').replace(b'*', b'[^\\n]*'),
+        flags=re.IGNORECASE)
+
     for m in re.finditer(search_re, blob):
         beg, end = m.span()
 
@@ -49,7 +52,7 @@ def wordblob_search(term, blob, max_results):
             continue
 
         # Expand our match to grab the full keyword from the blob.
-        b1 = beg
+        offset = beg
         while (beg > 0) and (blob[beg-1:beg] != b'\n'):
             beg -= 1
         while (end < len(blob)) and (blob[end:end+1] != b'\n'):
@@ -59,24 +62,14 @@ def wordblob_search(term, blob, max_results):
         # close it is to being an exact match.
         kw = blob[beg:end]
         if kw not in (matches[0][1], matches[-1][1]):
-            matches.append((10 * len(kw) // len(keyword) + b1, kw))
-            if len(matches) > max_results*10:
-                break
+            orank = 1000000000 + len(matches) * order
+            ratio = 10 * len(kw) // len(keyword)
+            matches.append((ratio + (offset-beg) + orank, kw))
 
     return [str(kw, 'utf-8') for s, kw in sorted(matches)[:max_results]]
 
 
-def create_wordblob(iter_keywords, shortest=4, longest=40, maxlen=102400):
-    """
-    Generate a blob of keywords, applying the given criteria, for use
-    with the wordblob_search() function. The <iter_keywords> should be
-    a list or iterable of keywords encoded as bytes().
-    """
-    keywords = set([])
-    for kw in iter_keywords:
-        if (shortest <= len(kw) <= longest) and (b'*' not in kw):
-            keywords.add(kw)
-
+def _prune_longest(keywords, longest, maxlen):
     # Stay within our length limits; current strategy is to randomly
     # drop long words until we fit. Is that sane? FIXME?
     keywords = list(keywords)
@@ -88,8 +81,43 @@ def create_wordblob(iter_keywords, shortest=4, longest=40, maxlen=102400):
             keywords.extend(random.sample(longish, more))
             break
         longest -= 1
+    return keywords
 
-    return b'\n'.join(sorted(keywords))
+
+def update_wordblob(iter_kws, blob,
+        shortest=4, longest=40, maxlen=102400, lru=False):
+    """
+    Add to a blob of keywords, applying the given criteria, for use
+    with the wordblob_search() function. The <iter_kws> should be a list
+    or iterable of keywords encoded as bytes().
+    """
+    keywords = set([])
+    for kw in iter_kws:
+        if (shortest <= len(kw) <= longest) and (b'*' not in kw):
+            keywords.add(kw)
+
+    # Merge old keywords with new...
+    if blob and len(keywords) < maxlen:
+        old_kws = [kw for kw in blob.split(b'\n') if kw not in keywords]
+        keeping = maxlen - len(keywords)
+        if not lru:
+            old_kws = _prune_longest(old_kws, longest, keeping)
+        keywords = list(keywords) + old_kws[:keeping]
+    else:
+        keywords = _prune_longest(keywords, longest, maxlen)
+
+    if not lru:
+        keywords = sorted(keywords)
+    return b'\n'.join(keywords)
+
+
+def create_wordblob(iter_keywords, **kwargs):
+    """
+    Generate a blob of keywords, applying the given criteria, for use
+    with the wordblob_search() function. The <iter_keywords> should be
+    a list or iterable of keywords encoded as bytes().
+    """
+    return update_wordblob(iter_keywords, b'', **kwargs)
 
 
 if __name__ == '__main__':
@@ -145,5 +173,18 @@ if __name__ == '__main__':
     s2 = n / (t2-t1)
     s3 = n / (t3-t2)
     s4 = n / (t4-t3)
+
+    # Test the LRU updates and blob searches which roughly preserve the
+    # order within the blob (so we get more recent matches firstish).
+    b1 = create_wordblob(b'five four three two one'.split(), shortest=1)
+    b1 = update_wordblob([b'five'], b1, shortest=1, lru=True)
+    b1 = update_wordblob([b'four'], b1, shortest=1, lru=True)
+    b1 = update_wordblob([b'three'], b1, shortest=1, lru=True)
+    b1 = update_wordblob([b'two'], b1, shortest=1, lru=True)
+    b1 = update_wordblob([b'one'], b1, shortest=1, lru=True)
+    assert(b1 == b'one\ntwo\nthree\nfour\nfive')
+    b1 = b'One\nTwo\nThree\nFour\nFive'
+    assert(wordblob_search('f*', b1, 10, order=-1) == ['f', 'Five', 'Four'])
+    assert(wordblob_search('f*', b1, 10, order=+1) == ['f', 'Four', 'Five'])
 
     print('Tests pass OK: %d/%d/%d/%d qps in %d byte blob' % (s1, s2, s3, s4, len(blob2)))
