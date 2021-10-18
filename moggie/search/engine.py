@@ -233,6 +233,20 @@ class SearchEngine:
 
         return kw_idx_list, keywords, hits
 
+    def mutate(self, mset, op_kw_list):
+        op_idx_kw_list = [
+            (op, self.keyword_index(kw), kw)
+            for op, kw in op_kw_list]
+
+        for op, idx, kw in op_idx_kw_list:
+            if idx >= self.l2_begin:
+                raise KeyError('Mutations not supported in l2')
+
+        with self.lock:
+            for op, idx, kw in op_idx_kw_list:
+                iset = self.records[idx]
+                self.records[idx] = op(iset, mset)
+
     def del_results(self, results):
         kw_idx_list, keywords, hits = self._prep_results(results, False)
         for idx, kw in sorted(kw_idx_list):
@@ -375,7 +389,7 @@ if __name__ == '__main__':
         (3, ['please', 'remove', 'the', 'politeness']),
         (2, ['ell', 'hello', 'iceland', 'e*vil'])])
     se.add_results([
-        (4, ['in:inbox'])],
+        (4, ['in:inbox', 'in:testing', 'in:bjarni'])],
         prefer_l1=True)
 
     se.deleted |= 0
@@ -386,6 +400,18 @@ if __name__ == '__main__':
     se.del_results([(3, ['please'])])
     assert(3 not in se.search('please'))
     assert(3 in se.search('remove'))
+
+    assert(3 not in se.search('in:inbox'))
+    assert(4 in se.search('in:testing'))
+    se.mutate(IntSet([4, 3]), [(IntSet.Sub, 'in:testing'), (IntSet.Or, 'in:inbox')])
+    assert(4 not in se.search('in:testing'))
+    assert(3 in se.search('in:inbox'))
+    assert(4 in se.search('in:inbox'))
+    try:
+        se.mutate(IntSet([4, 3]), [(IntSet.Sub, 'hello'), (IntSet.Or, 'world')])
+        assert(not 'reached')
+    except KeyError:
+        pass
 
     for round in range(0, 2):
         se.close()
