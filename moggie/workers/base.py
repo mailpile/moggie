@@ -3,6 +3,7 @@ import os
 import socket
 import sys
 import time
+import threading
 import traceback
 
 try:
@@ -15,7 +16,7 @@ from multiprocessing import Process
 
 from ..config import APPNAME
 from ..util.dumbcode import *
-from ..util.http import http1x_connect
+from ..util.http import url_parts, http1x_connect
 
 
 class QuitException(Exception):
@@ -55,6 +56,7 @@ class BaseWorker(Process):
         self.name = name or self.KIND
         self.keep_running = True
         self.url = None
+        self.url_parts = None
         self.status = {
             'pid': os.getpid(),
             'started': int(time.time()),
@@ -62,8 +64,8 @@ class BaseWorker(Process):
             'requests_ignored': 0,
             'requests_failed': 0}
         self.functions = {
-            b'quit':   (b'', self.api_quit),
-            b'status': (None, self.api_status)}
+            b'quit':   (True,  self.api_quit),
+            b'status': (False, self.api_status)}
 
         self._secret = b64encode(os.urandom(18), b'-_').strip()
         self._status_file = os.path.join(status_dir, self.name + '.url')
@@ -74,7 +76,8 @@ class BaseWorker(Process):
         self._client_addrinfo = None
         self._client_peeked = None
         self._client_headers = None
-
+        self._background_jobs = []
+        self._background_thread = None
 
     def run(self):
         if self.NICE and hasattr(os, 'nice'):
@@ -89,6 +92,7 @@ class BaseWorker(Process):
 
             (s_host, s_port) = self._sock.getsockname()
             self.url = self._make_url(s_host, s_port)
+            self.url_parts = url_parts(self.url)[1:]
             with open(self._status_file, 'w') as fd:
                 fd.flush()
                 os.chmod(self._status_file, 0o600)
@@ -167,20 +171,18 @@ class BaseWorker(Process):
         try:
             with open(self._status_file, 'r') as fd:
                 self.url = fd.read().strip()
+            self.url_parts = url_parts(self.url)[1:]
         except:
-            self.url = None
+            self.url_parts = self.url = None
         return self.url
 
     def _conn(self, path, method='POST', timeout=60, headers='', more=False, secret=None):
-        try:
-            proto, _, hostport, url_secret = self.url.split('/', 3)
-            path = '/%s/%s' % ((secret or url_secret), path)
-        except ValueError:
-            proto, _, hostport = self.url.split('/', 2)
-            path = '/' + path
-
-        host, port = hostport.split(':')
-        return http1x_connect(host, port, path,
+        host, port, url_secret = self.url_parts
+        if secret is not None:
+            url_secret = '/' + secret
+        if url_secret[-1:] != '/':
+            url_secret += '/'
+        return http1x_connect(host, port, url_secret + path,
             method=method, timeout=timeout, more=more, headers=headers)
 
     def _ping(self):
@@ -188,6 +190,7 @@ class BaseWorker(Process):
             conn = self._conn('ping', timeout=1, secret='-')
             result = conn.recv(len(self.HTTP_403))
         except:
+            traceback.print_exc()
             result = None
         return (result == self.HTTP_403)
 
@@ -212,14 +215,64 @@ class BaseWorker(Process):
 
         return None
 
+    def callback_url(self, fn):
+        return '%s/%s' % (self.url, fn)
+
+    def results_to_callback_chain(self, callback_chain, rv, tries=3):
+        """
+        This is an ad-hoc pattern for chaining operations together; the first
+        argument is data to process, the second a chain of URLs to pass the
+        results to. Each function in the chain is expected to take those two
+        arguments, perform calculations and pass to the first URL in the chain,
+        passing the rest of the chain as a second argument.
+
+        Combining this with the singleton background job queue gives us
+        multi-CPU parallel processing pipelines, yay!
+        """
+        if not callback_chain:
+            return
+
+        callback_url = callback_chain.pop(0)
+        for tries in range(0, tries):
+            try:
+                self.call(callback_url, rv, callback_chain or None)
+            except PermissionError:
+                traceback.print_exc()
+            except OSError:
+                traceback.print_exc()
+                time.sleep(2**tries)
+
+    def _background_worker(self):
+        while self._background_jobs:
+            try:
+                job = self._background_jobs.pop(0)
+                job()
+            except:
+                traceback.print_exc()
+            time.sleep(1)
+        self._background_thread = None
+
+    def add_background_job(self, job):
+        self._background_jobs.append(job)
+        bgw = self._background_thread
+        if not (bgw and bgw.is_alive()):
+            bgw = threading.Thread(target=self._background_worker)
+            self._background_thread = bgw
+            bgw.start()
+
     def call(self, fn, *args, qs=None, method='POST', upload=None):
-        # This will raise a KeyError if the function isn't defined
         fn = fn.encode('latin-1') if isinstance(fn, str) else fn
-        argsig, func = self.functions[fn]
-        fn = str(fn, 'latin-1')
+        remote = fn[:6] in (b'http:/', b'https:')
+        if remote:
+            parts = list(url_parts(str(fn, 'latin-1'))[1:])
+            path = parts[-1].strip('/')
+        else:
+            # This will raise a KeyError if the function isn't defined
+            argdecode, func = self.functions[fn]
+            fn = str(fn, 'latin-1')
+            path = fn
 
         # Format positional arguments and query string
-        path = fn
         if args:
             path += ('/' + '/'.join([dumb_encode_asc(a) for a in args]))
         if qs:
@@ -233,15 +286,27 @@ class BaseWorker(Process):
             else:
                 raise ValueError('Too many arguments')
 
+        if remote:
+            parts[-1] = path
+            conn = lambda **kw: http1x_connect(*parts, **kw)
+        else:
+            conn = lambda **kw: self._conn(path, **kw)
+
+        #print('%s <= %s' % (path, upload))
+
         if upload:
-            conn = self._conn(path,
+            conn = conn(
                 method='POST',
-                headers='Content-Length: %d\r\n' % len(upload))
-            for i in range(0, len(upload)//4096 + 1):
-                conn.send(upload[i*4096:(i+1)*4096])
+                headers='Content-Length: %d\r\n' % len(upload),
+                more=True)
+            try:
+                for i in range(0, len(upload), 4096):
+                    conn.send(upload[i:i+4096])
+            except BrokenPipeError:
+                pass
             conn.shutdown(socket.SHUT_WR)
         else:
-            conn = self._conn(path, method=method)
+            conn = conn(method=method)
 
         peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)
         if peeked.startswith(self.HTTP_200):
@@ -317,19 +382,14 @@ class BaseWorker(Process):
         args = a_and_q[0].split(b'/')
 
         fn = args.pop(0)
-        argsig_and_func = self.functions.get(fn)
+        argdecode_and_func = self.functions.get(fn)
         fn = str(fn, 'latin-1')
 
-        if argsig_and_func is not None:
+        if argdecode_and_func is not None:
             try:
-                argsig, func = argsig_and_func
+                argdecode, func = argdecode_and_func
 
                 kwargs = {}
-                if len(a_and_q) > 1:
-                    pairs = [p.split(b'=', 1) for p in a_and_q[1].split(b'&')]
-                    kwargs = dict(
-                        (str(p[0], 'latin-1'), dumb_decode(p[1]))
-                        for p in pairs)
                 if method == 'POST':
                     hdr = self._client_peeked.split(b'\r\n\r\n')[0]
                     self._client.recv(len(hdr) + 4)
@@ -344,13 +404,15 @@ class BaseWorker(Process):
                     args = a_and_q[0].split(b'/')[1:]
                     del kwargs['method']
 
-                if argsig is not None:
-                    if len(argsig) != len(args):
-                        return self.reply(self.HTTP_400)
-                    for i, p in enumerate(argsig):
-                        if (args[i][0] != p or not args[i]) and (p not in b'*'):
-                            return self.reply(self.HTTP_400)
+                if len(a_and_q) > 1:
+                    pairs = [p.split(b'=', 1) for p in a_and_q[1].split(b'&')]
+                    kwargs = dict(
+                        (str(p[0], 'latin-1'), dumb_decode(p[1]))
+                        for p in pairs)
 
+                #print('%s(%s, %s)' % (fn, args, kwargs))
+
+                if argdecode:
                     rv = func(*[dumb_decode(a) for a in args], **kwargs)
                 else:
                     rv = func(*args, **kwargs)
