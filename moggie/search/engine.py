@@ -1,6 +1,7 @@
 import copy
 import os
 import struct
+import threading
 
 from ..util.dumbcode import dumb_decode, dumb_encode_bin
 from ..util.intset import IntSet
@@ -75,7 +76,8 @@ class PostingListBucket:
 
         if iset is None:
             iset = IntSet()
-        iset |= ints
+        if ints:
+            iset |= ints
         if self.deleted is not None:
             iset -= self.deleted
         iset_blob = dumb_encode_bin(iset, compress=self.compress)
@@ -139,6 +141,7 @@ class SearchEngine:
         self.l2_begin = self.l1_begin + self.config['l1_keywords']
         self.maxint = maxint
         self.deleted = IntSet()
+        self.lock = threading.Lock()
 
         # Someday, these might be configurable/pluggable?
 
@@ -155,19 +158,23 @@ class SearchEngine:
             'dates': date_term_magic}
 
     def delete_everything(self, *args):
-        self.records.delete_everything(*args)
+        with self.lock:
+            self.records.delete_everything(*args)
 
     def flush(self):
-        return self.records.flush()
+        with self.lock:
+            return self.records.flush()
 
     def close(self):
-        return self.records.close()
+        with self.lock:
+            return self.records.close()
 
     def iter_byte_keywords(self):
         for i in range(self.l2_begin, len(self.records)):
             try:
-                for kw in PostingListBucket(self.records[i]):
-                    yield kw
+                with self.lock:
+                    for kw in PostingListBucket(self.records[i]):
+                        yield kw
             except (IndexError, KeyError):
                 pass
 
@@ -194,8 +201,9 @@ class SearchEngine:
         kw_hash_int = struct.unpack('I', kw_hash[:4])[0] % self.config['l2_buckets']
         return kw_hash_int + self.l2_begin
 
-    def add_results(self, results):
+    def _prep_results(self, results):
         keywords = {}
+        hits = []
         for (r_id, kw_list) in results:
             if not isinstance(r_id, int):
                 raise ValueError('Results must be integers')
@@ -204,22 +212,52 @@ class SearchEngine:
             for kw in kw_list:
                 kw = kw.replace('*', '')  # Otherwise partial search breaks..
                 keywords[kw] = keywords.get(kw, []) + [r_id]
+            if kw_list:
+                hits.append(r_id)
 
         kw_idx_list = [(self.keyword_index(kw), kw) for kw in keywords]
+        return kw_idx_list, keywords, hits
+
+    def del_results(self, results):
+        kw_idx_list, keywords, hits = self._prep_results(results)
         for idx, kw in sorted(kw_idx_list):
-            if idx < self.l2_begin:
-                # These are instances of IntSet, de/serialization is done
-                # automatically by dumbcode.
-                iset = self.records[idx]
-                iset |= keywords[kw]
-                iset -= self.deleted
-                self.records[idx] = iset
-            else:
-                # These are instances of PostingList
-                plb = PostingListBucket(self.records.get(idx) or b'')
-                plb.deleted = self.deleted
-                plb.add(kw, *keywords[kw])
-                self.records[idx] = plb.blob
+            with self.lock:
+                if idx < self.l2_begin:
+                    # These are instances of IntSet, de/serialization is done
+                    # automatically by dumbcode.
+                    iset = self.records[idx]
+                    iset -= keywords[kw]
+                    iset -= self.deleted
+                    self.records[idx] = iset
+                else:
+                    # These are instances of PostingList
+                    plb = PostingListBucket(self.records.get(idx) or b'')
+                    plb.deleted = IntSet(copy=self.deleted)
+                    plb.deleted |= keywords[kw]
+                    plb.add(kw)
+                    self.records[idx] = plb.blob
+        # FIXME: Update our wordblob
+        return {'keywords': len(keywords), 'hits': hits}
+
+    def add_results(self, results):
+        kw_idx_list, keywords, hits = self._prep_results(results)
+        for idx, kw in sorted(kw_idx_list):
+            with self.lock:
+                if idx < self.l2_begin:
+                    # These are instances of IntSet, de/serialization is done
+                    # automatically by dumbcode.
+                    iset = self.records[idx]
+                    iset |= keywords[kw]
+                    iset -= self.deleted
+                    self.records[idx] = iset
+                else:
+                    # These are instances of PostingList
+                    plb = PostingListBucket(self.records.get(idx) or b'')
+                    plb.deleted = self.deleted
+                    plb.add(kw, *keywords[kw])
+                    self.records[idx] = plb.blob
+        # FIXME: Update our wordblob
+        return {'keywords': len(keywords), 'hits': hits}
 
     def __getitem__(self, keyword):
         idx = self.keyword_index(keyword)
@@ -248,7 +286,7 @@ class SearchEngine:
     def explain(self, terms):
         return explain_ops(self.parse_terms(terms, self.magic_map))
 
-    def search(self, terms, mask_deleted=True, cache=False, explain=False):
+    def search(self, terms, mask_deleted=True, explain=False):
         """
         Search for terms in the index, returning an IntSet.
 
@@ -264,17 +302,14 @@ class SearchEngine:
             ops = self.parse_terms(terms, self.magic_map)
         else:
             ops = terms
-        if mask_deleted:
-            rv = IntSet.Sub(self._search(ops), self.deleted)
-        else:
-            rv = self._search(ops)
-        if explain or cache:
+        with self.lock:
+            if mask_deleted:
+                rv = IntSet.Sub(self._search(ops), self.deleted)
+            else:
+                rv = self._search(ops)
+        if explain:
             rv = (ops, rv)
-        if cache:
-            cache_id = self._cache_result(rv)
-            return (cache_id, rv)
-        else:
-            return rv
+        return rv
 
     def magic_terms(self, term):
         what = term.split(':')[0].lower()
@@ -318,6 +353,7 @@ if __name__ == '__main__':
         'l2_buckets': 10240})
     se.add_results([
         (1, ['hello', 'hell', 'hellscape', 'hellyeah', 'world', 'hooray']),
+        (3, ['please', 'remove', 'the', 'politeness')),
         (2, ['ell', 'hello', 'iceland', 'e*vil'])])
 
     se.deleted |= 0
@@ -327,6 +363,12 @@ if __name__ == '__main__':
     assert(1 in se.search('hello world'))
     assert(2 not in se.search('hello world'))
     assert([] == list(se.search('notfound')))
+
+    assert(3 in se.search('please'))
+    assert(3 in se.search('remove'))
+    se.del_results([(3, ['please'])])
+    assert(3 not in se.search('please'))
+    assert(3 in se.search('remove'))
 
     # Enable and test partial word searches
     se.create_part_space()
