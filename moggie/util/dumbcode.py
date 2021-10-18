@@ -68,7 +68,7 @@ def dumb_encode_asc(v, compress=False, aes_key_iv=None):
         pass
 
     if isinstance(v, bytes):     return ('B' + str(binascii.b2a_base64(v, newline=False), 'latin-1'))
-    if isinstance(v, str):       return ('U' + quote(v))
+    if isinstance(v, str):       return ('U' + quote(v, safe=''))
     if isinstance(v, bool):      return ('y' if v else 'n')
     if isinstance(v, int):       return ('d%d' % v)
     if isinstance(v, float):     return ('f%f' % v)
@@ -85,7 +85,7 @@ def dumb_encode_asc(v, compress=False, aes_key_iv=None):
         else:
             pfx = 'J'
         j = json.dumps(v, separators=(',',':'), ensure_ascii=False)
-        return (pfx + quote(j))
+        return (pfx + quote(j, safe=''))
 
     raise ValueError('Unsupported type: <%s> = %s' % (type(v), v))
 

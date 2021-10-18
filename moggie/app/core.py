@@ -5,6 +5,7 @@ from ..storage.files import FileStorage
 from ..storage.metadata import MetadataStore
 from ..util.rpc import JsonRpcClient
 from ..workers.storage import StorageWorker
+from ..workers.search import SearchWorker
 
 #
 # TODO: Define how we handle RPCs over the websocket. There needs to be some
@@ -67,10 +68,13 @@ class AppCore:
         self.storage = StorageWorker(self.worker.worker_dir,
             FileStorage(relative_to=os.path.expanduser('~')),
             name='fs').connect()
+        self.search = SearchWorker(self.worker.worker_dir,
+            '/tmp', b'FIXME', len(self.metadata),
+            name='search').connect()
 
     def stop_workers(self):
         # The order here may matter
-        all_workers = (self.storage,)
+        all_workers = (self.storage, self.search)
         for p in (1, 2, 3):
             for worker in all_workers:
                 try:
@@ -90,8 +94,8 @@ class AppCore:
             aes_key=b'bogus AES key')  # FIXME
 
     def startup_tasks(self):
-        self.start_workers()
         self.load_metadata()
+        self.start_workers()
 
     def shutdown_tasks(self):
         self.stop_workers()

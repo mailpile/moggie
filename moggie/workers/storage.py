@@ -56,14 +56,14 @@ class StorageWorker(BaseWorker):
         BaseWorker.__init__(self, status_dir, name=name)
         self.backend = backend
         self.functions.update({
-            b'capabilities': (b'', self.api_capabilities),
-            b'dump':   (b'',  self.api_dump),
-            b'info':   (b'*', self.api_info),
-            b'get':    (None, self.api_get),
-            b'json':   (None, self.api_json),
-            b'set':    (None, self.api_set),
-            b'append': (None, self.api_append),
-            b'delete': (None, self.api_delete)})
+            b'capabilities': (True,  self.api_capabilities),
+            b'dump':         (True,  self.api_dump),
+            b'info':         (True,  self.api_info),
+            b'get':          (False, self.api_get),
+            b'json':         (False, self.api_json),
+            b'set':          (False, self.api_set),
+            b'append':       (False, self.api_append),
+            b'delete':       (False, self.api_delete)})
 
     def capabilities(self):
         return self.call('capabilities')

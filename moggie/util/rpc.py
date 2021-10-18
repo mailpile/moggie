@@ -46,8 +46,8 @@ class JsonRpcClient:
                 'Content-Type: application/json\r\nContent-Length: %d\r\n'
                 % len(upload)),
             more=True)
-        for i in range(0, len(upload)//4096 + 1):
-            conn.send(upload[i*4096:(i+1)*4096])
+        for i in range(0, len(upload), 4096):
+            conn.send(upload[i:i+4096])
         conn.shutdown(socket.SHUT_WR)
 
         peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)
