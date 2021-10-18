@@ -70,7 +70,8 @@ class RecordFile:
               fd.write(b'\0' * (self.header_size - len(self.prefix)))
 
         self.fd = open(path, 'rb+', buffering=0)
-        if (self.fd.read(len(self.prefix)) != self.prefix):
+        file_prefix = self.fd.read(len(self.prefix))
+        if (file_prefix != self.prefix):
             self.fd.close()
             raise ConfigMismatch('Config mismatch in %s' % path)
         self.fd.seek(0, io.SEEK_END)
@@ -244,7 +245,7 @@ class RecordFile:
         self.mmap[beg:end] = struct.pack('Q', int(time.time()))
 
     def compact(self,
-            target=None, padding=None, new_aes_key=False, force=False):
+            new_aes_key=None, target=None, padding=None, force=False):
 
         tempfile = self.path + '.tmp'
         if os.path.exists(tempfile):
@@ -261,7 +262,7 @@ class RecordFile:
         compacted = RecordFile(tempfile, self.file_id, self.chunk_records,
             compress=self.compress,
             padding=len(self.padding) if (padding is None) else padding,
-            aes_key=self.aes_key if (new_aes_key is False) else new_aes_key,
+            aes_key=new_aes_key,
             create=True)
         for i in range(0, self.chunk_records):
             if i in self:
@@ -289,7 +290,7 @@ class RecordStoreReadOnly:
             target_file_size=50*1024*1024):
 
         self.salt = salt or b'Symbolic Showmanship'
-        if (aes_key and salt == aes_key):
+        if (aes_key and (salt == aes_key)):
             print(
                 'WARNING: %s: salt and AES key are the same, cannot rekey!'
                 % self)
@@ -511,9 +512,10 @@ class RecordStore(RecordStoreReadOnly):
         return full_idx
 
     def compact(self, new_aes_key=False, force=False):
+        aes_key = self.aes_key if (new_aes_key is False) else new_aes_key
         for idx in range(0, self.next_idx, self.chunk_records):
             (_, chunk_obj) = self.get_chunk(idx)
-            chunk_obj = chunk_obj.compact(new_aes_key=new_aes_key, force=force)
+            chunk_obj = chunk_obj.compact(new_aes_key=aes_key, force=force)
             self.chunks[(idx // self.chunk_records)] = chunk_obj
 
 
@@ -530,7 +532,7 @@ if __name__ == "__main__":
         os.remove('/tmp/rs-test/testing')
     assert(len(rs) == 0)
 
-    rf = RecordFile('/tmp/rs-test/testing', 'test', 128, create=True)
+    rf = RecordFile('/tmp/rs-test/testing.tmp', 'test', 128, create=True)
     assert(rf.int_size == 4)
     assert(len(rf) == 0)
     rf[0] = 'hello1'
@@ -553,7 +555,7 @@ if __name__ == "__main__":
         pass
     rf[0] = b'I am back again and should be at the front, oh yes'
     assert(0 in rf)
-    rf = rf.compact(padding=0, force=True)
+    rf = rf.compact(new_aes_key=None, padding=0, force=True)
     assert(time.time() - rf.compacted_time() < 1)
 
     assert(rs.hash_size == 32)

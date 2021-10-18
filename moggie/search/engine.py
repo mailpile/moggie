@@ -189,7 +189,13 @@ class SearchEngine:
     def candidates(self, keyword, max_results):
         return wordblob_search(keyword, self.part_space, max_results)
 
-    def keyword_index(self, kw):
+    def _empty_l1_idx(self):
+        for idx in range(self.l1_begin, self.l2_begin):
+            if idx not in self.records:
+                return idx
+        raise None
+
+    def keyword_index(self, kw, prefer_l1=False):
         kw_hash = self.records.hash_key(kw)
 
         # This duplicates logic from records.py, but we want to avoid
@@ -197,11 +203,17 @@ class SearchEngine:
         kw_pos_idx = self.records.keys.get(kw_hash)
         if kw_pos_idx is not None:
             return kw_pos_idx[1]
+        elif prefer_l1:
+            with self.lock:
+                idx = self._empty_l1_idx()
+                self.records.set_key(kw, idx)
+                self.records[idx] = IntSet()
+                return idx
 
         kw_hash_int = struct.unpack('I', kw_hash[:4])[0] % self.config['l2_buckets']
         return kw_hash_int + self.l2_begin
 
-    def _prep_results(self, results):
+    def _prep_results(self, results, prefer_l1):
         keywords = {}
         hits = []
         for (r_id, kw_list) in results:
@@ -215,11 +227,14 @@ class SearchEngine:
             if kw_list:
                 hits.append(r_id)
 
-        kw_idx_list = [(self.keyword_index(kw), kw) for kw in keywords]
+        kw_idx_list = [
+            (self.keyword_index(kw, prefer_l1=prefer_l1), kw)
+            for kw in keywords]
+
         return kw_idx_list, keywords, hits
 
     def del_results(self, results):
-        kw_idx_list, keywords, hits = self._prep_results(results)
+        kw_idx_list, keywords, hits = self._prep_results(results, False)
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 if idx < self.l2_begin:
@@ -239,8 +254,8 @@ class SearchEngine:
         # FIXME: Update our wordblob
         return {'keywords': len(keywords), 'hits': hits}
 
-    def add_results(self, results):
-        kw_idx_list, keywords, hits = self._prep_results(results)
+    def add_results(self, results, prefer_l1=False):
+        kw_idx_list, keywords, hits = self._prep_results(results, prefer_l1)
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 if idx < self.l2_begin:
@@ -262,7 +277,7 @@ class SearchEngine:
     def __getitem__(self, keyword):
         idx = self.keyword_index(keyword)
         if idx < self.l2_begin:
-            raise KeyError('FIXME: Unimplemented')
+            return self.records.get(idx) or IntSet()
         else:
             plb = PostingListBucket(self.records.get(idx) or b'')
             return plb.get(keyword) or IntSet()
@@ -347,22 +362,24 @@ if __name__ == '__main__':
     assert(len(pl.blob) == 0)
 
     # Create a mini search engine...
-    se = SearchEngine('/tmp', name='se-test', defaults={
-        'partial_list_len': 7,  # Will exclude hellscape from partial set
-        'partial_shortest': 4,
-        'l2_buckets': 10240})
+    def mk_se():
+        k = b'1234123412349999'
+        return SearchEngine('/tmp', name='se-test', encryption_key=k, defaults={
+            'partial_list_len': 20,
+            'partial_shortest': 4,
+            'partial_longest': 8,  # Will exclude hellscape from partial set
+            'l2_buckets': 10240})
+    se = mk_se()
     se.add_results([
         (1, ['hello', 'hell', 'hellscape', 'hellyeah', 'world', 'hooray']),
-        (3, ['please', 'remove', 'the', 'politeness')),
+        (3, ['please', 'remove', 'the', 'politeness']),
         (2, ['ell', 'hello', 'iceland', 'e*vil'])])
+    se.add_results([
+        (4, ['in:inbox'])],
+        prefer_l1=True)
 
     se.deleted |= 0
-    assert(list(se.search(IntSet.All)) == [1, 2])
-
-    # Basic search correctnesss
-    assert(1 in se.search('hello world'))
-    assert(2 not in se.search('hello world'))
-    assert([] == list(se.search('notfound')))
+    assert(list(se.search(IntSet.All)) == [1, 2, 3, 4])
 
     assert(3 in se.search('please'))
     assert(3 in se.search('remove'))
@@ -370,31 +387,45 @@ if __name__ == '__main__':
     assert(3 not in se.search('please'))
     assert(3 in se.search('remove'))
 
-    # Enable and test partial word searches
-    se.create_part_space()
-    assert(b'*' not in se.part_space)
-    assert(b'evil' in se.part_space)  # Verify that * gets stripped
-    #print('%s' % se.part_space)
-    #print('%s' % se.candidates('*ell*', 10))
-    assert(len(se.candidates('***', 10)) == 0)
-    assert(len(se.candidates('ell*', 10)) == 1)   # ell
-    assert(len(se.candidates('*ell', 10)) == 2)   # ell, hell
-    assert(len(se.candidates('*ell*', 10)) == 4)  # ell, hell, hello, hellyeah
-    assert(len(se.candidates('he*ah', 10)) == 2)  # hepe, hellyeah
-    assert(1 in se.search('hell* w*ld'))
+    for round in range(0, 2):
+        se.close()
+        se = mk_se()
 
-    # Test our and/or functionality
-    assert(list(se.search('hello')) == list(se.search((IntSet.Or, 'world', 'iceland'))))
+        # Basic search correctnesss
+        assert(1 in se.search('hello world'))
+        assert(2 not in se.search('hello world'))
+        assert([] == list(se.search('notfound')))
 
-    # Test the explainer and parse_terms with candidate magic
-    assert(explain_ops(se.parse_terms('* - is:deleted he*o WORLD +Iceland', se.magic_map))
-        == '(((ALL NOT is:deleted) AND (heo OR hello) AND world) OR iceland)')
+        assert(4 in se.search('in:inbox'))
 
-    # Test the explainer and parse_terms with date range magic
-    assert(se.explain('dates:2012..2013 OR date:2015')
-        == '((year:2012 OR year:2013) OR year:2015)')
+        # Enable and test partial word searches
+        se.create_part_space()
+        assert(b'*' not in se.part_space)
+        assert(b'evil' in se.part_space)  # Verify that * gets stripped
+        #print('%s' % se.part_space)
+        #print('%s' % se.candidates('*ell*', 10))
+        assert(len(se.candidates('***', 10)) == 0)
+        assert(len(se.candidates('ell*', 10)) == 1)   # ell
+        assert(len(se.candidates('*ell', 10)) == 2)   # ell, hell
+        #print(se.candidates('*ell*', 10))
+        assert(len(se.candidates('*ell*', 10)) == 4)  # ell, hell, hello, hellyeah
+        assert(len(se.candidates('he*ah', 10)) == 2)  # hepe, hellyeah
+        assert(1 in se.search('hell* w*ld'))
 
-    print('Tests pass OK')
+        # Test our and/or functionality
+        assert(list(se.search('hello')) == list(se.search((IntSet.Or, 'world', 'iceland'))))
+
+        # Test the explainer and parse_terms with candidate magic
+        assert(explain_ops(se.parse_terms('* - is:deleted he*o WORLD +Iceland', se.magic_map))
+            == '(((ALL NOT is:deleted) AND (heo OR hello) AND world) OR iceland)')
+
+        # Test the explainer and parse_terms with date range magic
+        assert(se.explain('dates:2012..2013 OR date:2015')
+            == '((year:2012 OR year:2013) OR year:2015)')
+
+        se.records.compact()
+        print('Tests pass OK (%d/2)' % (round+1,))
+
     #import time
     #time.sleep(10)
     se.delete_everything(True, False, True)
