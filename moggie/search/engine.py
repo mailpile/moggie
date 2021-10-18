@@ -233,6 +233,11 @@ class SearchEngine:
 
         return kw_idx_list, keywords, hits
 
+    def rename_l1(self, kw, new_kw):
+        kw_pos_idx = self.records.keys[self.records.hash_key(kw)]
+        self.records.set_key(new_kw, kw_pos_idx[1])
+        self.records.del_key(kw)
+
     def mutate(self, mset, op_kw_list):
         op_idx_kw_list = [
             (op, self.keyword_index(kw), kw)
@@ -246,6 +251,8 @@ class SearchEngine:
             for op, idx, kw in op_idx_kw_list:
                 iset = self.records[idx]
                 self.records[idx] = op(iset, mset)
+
+        return {'mutations': len(op_idx_kw_list)}
 
     def del_results(self, results):
         kw_idx_list, keywords, hits = self._prep_results(results, False)
@@ -407,6 +414,9 @@ if __name__ == '__main__':
     assert(4 not in se.search('in:testing'))
     assert(3 in se.search('in:inbox'))
     assert(4 in se.search('in:inbox'))
+    se.rename_l1('in:inbox', 'in:outbox')
+    assert(4 in se.search('in:outbox'))
+    assert(4 not in se.search('in:inbox'))
     try:
         se.mutate(IntSet([4, 3]), [(IntSet.Sub, 'hello'), (IntSet.Or, 'world')])
         assert(not 'reached')
@@ -422,7 +432,8 @@ if __name__ == '__main__':
         assert(2 not in se.search('hello world'))
         assert([] == list(se.search('notfound')))
 
-        assert(4 in se.search('in:inbox'))
+        assert(4 in se.search('in:outbox'))
+        assert(4 not in se.search('in:inbox'))
 
         # Enable and test partial word searches
         se.create_part_space()

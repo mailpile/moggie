@@ -464,16 +464,39 @@ class RecordStore(RecordStoreReadOnly):
     def __delitem__(self, key):
         (idx, chunk) = self.get_chunk(self.key_to_index(key))
         del chunk[idx]
-        # FIXME: Remove all keys pointing to this data
+        to_delete = [
+            (k, self.keys[k][0]) for k in self.keys if self.keys[k][1] == idx]
+        try:
+            zero = struct.pack('I', 0) + self.hash_zero
+            for kh, beg in to_delete:
+                self.keys_fd.seek(beg, 0)
+                self.keys_fd.write(zero)
+                del self.keys[kh]
+        finally:
+            self.keys_fd.seek(0, io.SEEK_END)
 
     def del_key(self, key):
-        pass  # FIXME: Remove only the key, not the data
+        hashed_key = self.hash_key(key)
+        try:
+            if hashed_key in self.keys:
+                beg = self.keys[hashed_key][0]
+                self.keys_fd.seek(beg, 0)
+                self.keys_fd.write(struct.pack('I', 0) + self.hash_zero)
+                del self.keys[hashed_key]
+        finally:
+            self.keys_fd.seek(0, io.SEEK_END)
 
     def set_key(self, key, idx):
         hashed_key = self.hash_key(key)
-        self.keys[hashed_key] = (self.keys_fd.tell(), idx)
-        output = struct.pack('I', idx) + hashed_key
-        self.keys_fd.write(output)
+        try:
+            if hashed_key not in self.keys:
+                self.keys[hashed_key] = (self.keys_fd.tell(), idx)
+            else:
+                self.keys_fd.seek(self.keys[hashed_key][0], 0)
+            output = struct.pack('I', idx) + hashed_key
+            self.keys_fd.write(output)
+        finally:
+            self.keys_fd.seek(0, io.SEEK_END)
 
     def __setitem__(self, key, value):
         self.set(key, value)

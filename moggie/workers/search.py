@@ -13,6 +13,15 @@ class SearchWorker(BaseWorker):
 
     KIND = 'search'
 
+    _OP_STR_MAP = {
+        IntSet.Or: 'OR',
+        IntSet.And: 'AND',
+        IntSet.Sub: 'SUB'}
+    _STR_OP_MAP = {
+        'OR': IntSet.Or,
+        'AND': IntSet.And,
+        'SUB': IntSet.Sub}
+
     def __init__(self, status_dir, engine_dir, encryption_key, maxint,
             name=KIND, defaults=None):
 
@@ -20,6 +29,7 @@ class SearchWorker(BaseWorker):
         self.functions.update({
             b'add_results': (True, self.api_add_results),
             b'del_results': (True, self.api_del_results),
+            b'mutate':      (True, self.api_mutate),
             b'term_search': (True, self.api_term_search),
             b'explain':     (True, self.api_explain),
             b'search':      (True, self.api_search)})
@@ -46,6 +56,10 @@ class SearchWorker(BaseWorker):
     def del_results(self, results, callback_chain=None):
         return self.call('del_results', results, callback_chain)
 
+    def mutate(self, mset, op_kw_list):
+        strop_kw_list = [[self._OP_STR_MAP(op), kw] for op, kw in op_kw_list]
+        return self.call('mutate', mset, storp_kw_list)
+
     def term_search(self, term, count=10):
         return self.call('term_search', term, count)
 
@@ -54,6 +68,10 @@ class SearchWorker(BaseWorker):
 
     def search(self, terms):
         return self.call('search', terms)
+
+    def api_mutate(self, mset, strop_kw_list):
+        op_kw_list = [(self._STR_OP_MAP(op), kw) for op, kw in strop_kw_list]
+        self.reply_json(self._engine.mutate(mset, op_kw_list))
 
     def api_add_results(self, results, callback_chain, **kwargs):
         if kwargs.get('wait') and not callback_chain:
