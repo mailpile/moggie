@@ -19,6 +19,10 @@ from ..util.dumbcode import *
 from ..util.http import url_parts, http1x_connect
 
 
+def _qsp(qs_raw):
+    return [p.split(b'=', 1) for p in qs_raw.split(b'&')]
+
+
 class QuitException(Exception):
     pass
 
@@ -376,39 +380,48 @@ class BaseWorker(Process):
     def decode_args(self, args):
         return [dumb_decode(a) for a in args]
 
+
     def handler(self, method, args):
-        t0 = time.time()
         a_and_q = args.split(b'?', 1)
         args = a_and_q[0].split(b'/')
-
         fn = args.pop(0)
+
+        def prep(method):
+            kwargs = {}
+            if method == 'POST':
+                hdr = self._client_peeked.split(b'\r\n\r\n')[0]
+                self._client.recv(len(hdr) + 4)
+                kwargs['method'] = method
+            else:
+                self._client.recv(len(self._client_peeked))
+            return kwargs
+
+        qs_pairs = _qsp(a_and_q[1]) if (len(a_and_q) > 1) else []
+        return self.common_rpc_handler(fn,
+             method, args, qs_pairs,
+             prep,
+             self.get_uploaded_data)
+
+    def common_rpc_handler(self, fn, method, args, qs_pairs, prep, uploaded):
+        t0 = time.time()
         argdecode_and_func = self.functions.get(fn)
         fn = str(fn, 'latin-1')
-
         if argdecode_and_func is not None:
             try:
                 argdecode, func = argdecode_and_func
-
-                kwargs = {}
-                if method == 'POST':
-                    hdr = self._client_peeked.split(b'\r\n\r\n')[0]
-                    self._client.recv(len(hdr) + 4)
-                    kwargs['method'] = method
-                else:
-                    self._client.recv(len(self._client_peeked))
+                kwargs = prep(method)
 
                 # Support arbitrarily large arguments, via POST
                 if method == 'POST' and (len(args) == 1) and (args[0] == b'*'):
-                    posted = self.get_uploaded_data()
+                    posted = uploaded()
                     a_and_q = posted.split(b'?', 1)
                     args = a_and_q[0].split(b'/')[1:]
+                    qs_pairs = _qsp(a_and_q[1]) if (len(a_and_q) > 1) else []
                     del kwargs['method']
 
-                if len(a_and_q) > 1:
-                    pairs = [p.split(b'=', 1) for p in a_and_q[1].split(b'&')]
-                    kwargs = dict(
-                        (str(p[0], 'latin-1'), dumb_decode(p[1]))
-                        for p in pairs)
+                kwargs.update(dict(
+                    (str(p[0], 'latin-1'), dumb_decode(p[1]))
+                    for p in qs_pairs))
 
                 #print('%s(%s, %s)' % (fn, args, kwargs))
 

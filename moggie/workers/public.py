@@ -3,16 +3,31 @@ import os
 import sys
 import socket
 import time
+import threading
 
 from upagekite import uPageKite, LocalHTTPKite
 from upagekite.httpd import HTTPD, url
 from upagekite.proto import uPageKiteDefaults
+from upagekite.web import process_post
 
 from ..config import APPNAME as MAIN_APPNAME
 from ..config import APPURL as MAIN_APPURL
 from ..config import AppConfig
 
 from .base import BaseWorker
+
+
+class WorkerPageKiteSettings(uPageKiteDefaults):
+    APPNAME = MAIN_APPNAME
+    APPURL = MAIN_APPURL
+    APPVER = '2.0.0'
+
+    MAX_POST_BYTES = 256*1024*1024
+
+    info = uPageKiteDefaults.log
+    error = uPageKiteDefaults.log
+    debug = uPageKiteDefaults.log
+    #trace = uPageKiteDefaults.log
 
 
 class RequestTimer:
@@ -78,17 +93,11 @@ def web_status(req_env):
         'body': json.dumps(req_env['worker'].status, indent=1)}
 
 
-class WorkerPageKiteSettings(uPageKiteDefaults):
-    APPNAME = MAIN_APPNAME
-    APPURL = MAIN_APPURL
-    APPVER = '2.0.0'
-
-    MAX_POST_BYTES = 20480000
-
-    info = uPageKiteDefaults.log
-    error = uPageKiteDefaults.log
-    debug = uPageKiteDefaults.log
-    #trace = uPageKiteDefaults.log
+@url('/rpc/*')
+@process_post(max_bytes=WorkerPageKiteSettings.MAX_POST_BYTES)
+def web_rpc(req_env):
+    require(req_env, post=True, local=True)
+    return req_env['worker'].handle_web_rpc(req_env)
 
 
 class WorkerHTTPD(HTTPD):
@@ -165,6 +174,14 @@ class PublicWorker(BaseWorker):
         self.app = self.get_app()
         self.shared_req_env = {'app': self.app, 'worker': self}
 
+        self._rpc_lock = threading.Lock()
+        self._rpc_response = None
+        self._rpc_response_map = {
+            self.HTTP_400: {'code': 400, 'msg': 'Invalid Request'},
+            self.HTTP_403: {'code': 403, 'msg': 'Access Denied'},
+            self.HTTP_404: {'code': 404, 'msg': 'Not Found'},
+            self.HTTP_500: {'code': 500, 'msg': 'Internal Error'}}
+
     @classmethod
     def FromArgs(cls, workdir, args):
         port = 0
@@ -210,6 +227,38 @@ class PublicWorker(BaseWorker):
 
     def shutdown_tasks(self):
         pass
+
+    def call(self, func, *args, **kwargs):
+        func = func.encode('latin-1') if isinstance(fn, str) else fn
+        remote = func[:6] in (b'http:/', b'https:')
+        if remote:
+            return super().call(func, *args, **kwargs)
+        else:
+            return super().call(b'rpc/' + func, *args, **kwargs)
+
+    def reply(self, what, *args, **kwargs):
+        self._rpc_response = self._rpc_response_map.get(what)
+        if not self._rpc_response:
+            raise Exception('Not Implemented')
+
+    def reply_json(self, data):
+        self._rpc_response = {
+            'ttl': 30,
+            'mimetype': 'application/json',
+            'body': bytes(json.dumps(data, indent=1), 'utf-8') + b'\n'}
+
+    def handle_web_rpc(self, req_env):
+        args = bytes(req_env.request_path, 'latin-1').split(b'/')[3:]
+        func = args.pop(0)
+        with self._rpc_lock:
+            self.common_rpc_handler(
+                func,
+                req_env.http_method,
+                args,
+                req_env.query_tuples,
+                lambda m: {'method': m},
+                lambda: req_env.payload)
+            return self._rpc_response
 
     def _main_httpd_loop(self):
         self.startup_tasks()
