@@ -11,3 +11,6 @@
 [submodule "submodules/gui-o-mac-tic"]
 	path = Attic/submodules/gui-o-mac-tic
 	url = https://github.com/mailpile/gui-o-mac-tic
+[submodule "submodules/upagekite"]
+	path = submodules/upagekite
+	url = https://github.com/pagekite/upagekite/
