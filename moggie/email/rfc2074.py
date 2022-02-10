@@ -10,6 +10,22 @@ QUOTED_RE = re.compile(
     flags=(re.IGNORECASE + re.DOTALL))
 
 
+def quoted_printable_to_bytearray(payload, header=False):
+    if header:
+        clean = lambda c: c.replace('_', ' ')
+    else:
+        clean = lambda c: c.replace('=\r\n', '').replace('=\n', '')
+
+    chars = QUOTED_QP.split(payload)
+    payload = bytearray()
+    while len(chars) > 1:
+        payload.extend(clean(chars.pop(0)).encode('latin-1'))
+        payload.append(int(chars.pop(0)[1:], 16))
+    if chars:
+        payload.extend(clean(chars[0]).encode('latin-1'))
+    return payload
+
+
 def rfc2074_unquote(quoted):
     text = []
     parts = QUOTED_RE.split(re.sub(FOLDING_QUOTED_RE, '?==?', quoted))
@@ -23,13 +39,7 @@ def rfc2074_unquote(quoted):
             if method in ('q', 'Q'):
                 # Note: For some reason email.quoprimime insists on returning
                 # strings. We want to work with bytes, so do this ourselves.
-                chars = QUOTED_QP.split(payload)
-                payload = bytearray()
-                while len(chars) > 1:
-                    payload.extend(chars.pop(0).replace('_', ' ').encode('latin-1'))
-                    payload.append(int(chars.pop(0)[1:], 16))
-                if chars:
-                    payload.extend(chars[0].replace('_', ' ').encode('latin-1'))
+                payload = quoted_printable_to_bytearray(payload, header=True)
 
             elif method in ('b', 'B'):
                 padmore = 4 - (len(payload) % 4)

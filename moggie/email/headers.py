@@ -8,6 +8,7 @@ FOLDING_RE = re.compile(r'\r?\n\s+', flags=re.DOTALL)
 
 SINGLETONS = (
     '_mbox_separator',
+    'content-transfer-encoding',
     'content-disposition',
     'content-length',
     'content-type',
@@ -37,6 +38,60 @@ ADDRESS_HEADERS = (
     'resent-sender',
     'resent-to',
     'sender')
+
+HEADERS_WITH_PARAMS = (
+    'content-type',
+    'content-disposition')
+
+HWP_CONTENT_TYPE_RE = re.compile(r'^([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+)', flags=re.DOTALL)
+HWP_VALUE_RE = re.compile(r'^([^;]+)', flags=re.DOTALL)
+HWP_TOKEN_RE = re.compile(r'^([a-zA-Z0-9_-]+)', flags=re.DOTALL)
+HWP_PARAM_RE = re.compile(r'(;\s*([a-zA-Z0-9_-]+)=([a-zA-Z0-9_-]+|\"(?:\\"|[^"]+)+\"))', flags=re.DOTALL)
+HWP_COMMENT_RE = re.compile(r'^(;?\s*\(([^\(]*)\))', flags=re.DOTALL)
+
+
+def parse_parameters(hdr, value_re=HWP_VALUE_RE):
+    """
+    This will parse a typical value-with-parameters into a descriptive
+    dictionary. The algorithm does not preserve white-space, and is a
+    best-effort algorithm which puts comments and unparsable junk into
+    parameters named _COMMENT and _JUNK respectively.
+    """
+    m0 = value_re.match(hdr)
+    if not m0:
+        return [None, {'_JUNK': hdr}]
+
+    params = {}
+    m0 = m0.group(0)
+    hdr = hdr[len(m0):]
+    while hdr:
+        p = HWP_PARAM_RE.match(hdr)
+        if p:
+            hdr = hdr[len(p.group(0)):]
+            val = p.group(3)
+            if val[:1] == '"':
+                val = bytes(val[1:-1], 'latin-1').decode('unicode-escape')
+            params[p.group(2).lower()] = val
+        else:
+            c = HWP_COMMENT_RE.match(hdr)
+            if c:
+                cmatch = c.group(0)
+                params['_COMMENT'] = c.group(2)
+                hdr = hdr[len(cmatch):]
+                if cmatch[:1] == ';':
+                    hdr = '; ' + hdr
+            else:
+                params['_JUNK'] = hdr
+                break
+
+    return [m0, params]
+
+
+def parse_content_type(hdr):
+    ct, params = parse_parameters(hdr, HWP_CONTENT_TYPE_RE)
+    if ct:
+        ct = ct.lower()
+    return [ct, params]
 
 
 def parse_header(raw_header):
@@ -79,10 +134,16 @@ def parse_header(raw_header):
         elif hdr in TEXT_HEADERS:
             headers[hdr] = headers.get(hdr, []) + [rfc2074_unquote(val)]
 
+        elif hdr == 'content-type':
+            headers[hdr] = headers.get(hdr, []) + [parse_content_type(val)]
+
+        elif hdr in HEADERS_WITH_PARAMS:
+            headers[hdr] = headers.get(hdr, []) + [parse_parameters(val)]
+
         else:
             headers[hdr] = headers.get(hdr, []) + [val]
 
-    headers['_order'] = order
+    headers['_ORDER'] = order
     for hdr in SINGLETONS:
         if hdr in headers:
             if headers[hdr]:
@@ -118,5 +179,36 @@ Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is =?utf-8?b?SGVsbG8gd29ybGQ=?=
     assert(len(parse['to']) == 2)
     assert(len(parse['received']) == 2)
     assert(not parse.get('_has_errors'))
+
+    p0v, p0p = parse_parameters('text/plain; charset=us-ascii (Ugh Ugh)')
+    assert(p0v == 'text/plain')
+    assert(p0p['charset'] == 'us-ascii')
+    assert(p0p['_COMMENT'] == 'Ugh Ugh')
+    assert('_JUNK' not in p0p)
+
+    p1v, p1p = parse_parameters('text/plain; charset=us ascii')
+    assert(p1v == 'text/plain')
+    assert(p1p['charset'] == 'us')
+    assert(p1p['_JUNK'] == ' ascii')
+    assert('_COMMENT' not in p1p)
+
+    p2v, p2p = parse_parameters('multipart/x-mixed; charset="us ascii"')
+    assert(p2v == 'multipart/x-mixed')
+    assert(p2p['charset'] == 'us ascii')
+    assert('_JUNK' not in p2p)
+    assert('_COMMENT' not in p2p)
+
+    p3v, p3p = parse_content_type('multipart/x-mixed;(Yuck) CHARSET="us ascii"')
+    assert(p3v == 'multipart/x-mixed')
+    assert(p3p['charset'] == 'us ascii')
+    assert(p3p['_COMMENT'] == 'Yuck')
+    assert('_JUNK' not in p2p)
+
+    p4v, p4p = parse_parameters('multipart/mixed')
+    assert(p4v == 'multipart/mixed')
+
+    p5v, p5p = parse_content_type('invalid data garbage')
+    assert(p5v is None)
+    assert(p5p['_JUNK'] == 'invalid data garbage')
 
     print('Tests passed OK')
