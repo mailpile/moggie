@@ -1,8 +1,11 @@
+import binascii
+import base64
 import json
 import math
 import os
 import re
 import time
+import threading
 import struct
 from configparser import ConfigParser, NoOptionError, _UNSET
 
@@ -10,6 +13,7 @@ from ..crypto.aes_utils import make_aes_key
 from ..crypto.passphrases import stretch_with_scrypt
 from ..crypto.recovery import RecoverableData, RecoverySvc, generate_recovery_code
 from ..util.dumbcode import dumb_decode, dumb_encode_asc
+from .helpers import ListItemProxy, DictItemProxy, ConfigSectionProxy
 
 
 APPNAME    = 'moggie'  #'mailpile'
@@ -20,40 +24,6 @@ APPURL     = 'https://github.com/BjarniRunar/moggie'
 RECOVERY_SERVICE_URL = 'https://recovery.mailpile.is/recovery_svc'
 
 
-class ConfigSectionProxy:
-    _KEYS = {}
-
-    def __init__(self, ac, section):
-        self._ac = ac
-        self._section = section
-
-    def __contains__(self, attr):
-        return (attr in self._ac[self._section])
-
-    def __getattr__(self, attr):
-        if attr[:1] == '_':
-            return object.__getattribute__(self, attr)
-        if attr in self._KEYS:
-            try:
-                return self._KEYS[attr](self._ac.get(self._section, attr))
-            except NoOptionError:
-                return None
-        else:
-            return object.__getattribute__(self, attr)
-
-    def __setattr__(self, attr, val):
-        if attr[:1] == '_':
-            return object.__setattr__(self, attr, val)
-        if attr in self._KEYS:
-            if val is not None:
-                val = str(val)
-            return self._ac.set(self._section, attr, val)
-        raise KeyError(attr)
-
-    def magic_test(self):
-        return 'magic'
-
-
 class RecoverySvcConfig(ConfigSectionProxy):
     _KEYS = {
          'host': str,
@@ -62,10 +32,72 @@ class RecoverySvcConfig(ConfigSectionProxy):
          'kite_secret': str}
 
 
+class AccessConfig(ConfigSectionProxy):
+    _KEYS = {
+        'name': str,
+        #tokens = dict of token->creation ts
+        #roles = dict of profile->role
+        # These are optional
+        'description': str,
+        'password': str,
+        'username': str}
+
+    MAX_TOKEN_AGE = 7 * 24 * 3600  #FIXME: is this sane?
+
+    def __init__(self, *args, **kwarg):
+        super().__init__(*args, **kwarg)
+        self._role_dict = DictItemProxy(self._ac, self._section, 'roles')
+        self._token_dict = DictItemProxy(self._ac, self._section, 'tokens')
+
+    roles = property(lambda self: self._role_dict)
+    tokens = property(lambda self: self._token_dict)
+
+    def expire_tokens(self, max_age=MAX_TOKEN_AGE):
+        oldest = time.time() - max_age
+        expired = [t for t, c in self.tokens.items()
+            if int(c) and (int(c) < oldest)]
+        for token in expired:
+            del self.tokens[token]
+
+    def new_token(self):
+        # Tokens: 80 bits of entropy, encoded using base32
+        token = str(base64.b32encode(os.urandom(10)), 'latin-1')
+        self.tokens[token] = int(time.time())
+        return token
+
+    def get_fresh_token(self):
+        age, tok = max((int(a), t) for t, a in self.tokens.items())
+        exp = age + self.MAX_TOKEN_AGE
+        if exp < time.time() + (self.MAX_TOKEN_AGE/2):
+            tok = self.new_token()
+        return tok, int(self.tokens[tok])
+
+
+class AccountConfig(ConfigSectionProxy):
+    _KEYS = {
+        'name': str,
+        #addresses = list of e-mails
+        'mailbox_proto': str,    # none, imap, imaps, jmap, pop3, pop3s, files
+        'mailbox_config': str,
+        'sendmail_proto': str,   # none, smtp, jmap, imap, imaps, proc
+        # Optional...
+        'mailbox_server': str,
+        'mailbox_username': str,  # unset=no auth
+        'mailbox_password': str,  # unset=no pass
+        'mailbox_inbox': str,     # Which "mailbox" is the inbox?
+        'mailbox_sent': str,
+        'mailbox_spam': str,
+        'mailbox_trash': str,
+        'sendmail_username': str,  # unset=no auth, special: ==mailbox_username
+        'sendmail_password': str,  # unset=no pass, special: ==mailbox_password
+        'description': str}
+
+
 class ProfileConfig(ConfigSectionProxy):
     _KEYS = {
-        'username': str,
-        'password': str}
+        'name': str,
+        # Optional...
+        'description': str}
 
 
 class AppConfig(ConfigParser):
@@ -74,6 +106,10 @@ class AppConfig(ConfigParser):
     SECRETS = 'Secrets'
     RECOVERY = 'Recovery Data'
     RECOVERY_SVC = 'Recovery Service'
+    SMTP_BRIDGE_SVC = 'SMTP Bridge Service'
+    ACCESS_PREFIX = 'Access '
+    ACCOUNT_PREFIX = 'Account '
+    IDENTITY_PREFIX = 'Identity '
     PROFILE_PREFIX = 'Profile '
 
     INITIAL_SETTINGS = [
@@ -93,9 +129,16 @@ class AppConfig(ConfigParser):
     DIGIT_RE = re.compile('\d')
 
     ALLOWED_SECTIONS = [GENERAL, SECRETS, RECOVERY, RECOVERY_SVC]
-    ALLOWED_SECTION_PREFIXES = [PROFILE_PREFIX]
+    ALLOWED_SECTION_PREFIXES = [
+        ACCESS_PREFIX,
+        ACCOUNT_PREFIX,
+        IDENTITY_PREFIX,
+        PROFILE_PREFIX]
 
     def __init__(self, profile_dir):
+        self.lock = threading.RLock()
+        self.suppress_saves = []
+
         self.filepath = os.path.join(profile_dir, 'config.rc')
         self.backups = os.path.join(profile_dir, 'backups')
         super().__init__(
@@ -121,10 +164,69 @@ class AppConfig(ConfigParser):
         if 'passphrase' in self[self.SECRETS]:
             self.provide_passphrase(self[self.SECRETS]['passphrase'])
 
-        self.last_rotate = os.path.getmtime(self.filepath)
-        self.recovery_svc = RecoverySvcConfig(self, self.RECOVERY_SVC)
-        self.profiles = dict((p, ProfileConfig(self, p))
-            for p in self if p.startswith(self.PROFILE_PREFIX))
+        try:
+            self.last_rotate = os.path.getmtime(self.filepath)
+        except OSError:
+            self.last_rotate = 0
+
+        self._caches = {}
+        self.access_zero()
+
+    recovery_svc = property(lambda s: RecoverySvcConfig(s, s.RECOVERY_SVC))
+
+    all_access = property(lambda self:
+        dict((a, AccessConfig(self, a))
+            for a in self if a.startswith(self.ACCESS_PREFIX)))
+
+    accounts = property(lambda self:
+        dict((a, AccountConfig(self, a))
+            for a in self if a.startswith(self.ACCOUNT_PREFIX)))
+
+    identities = property(lambda self:
+        dict((a, IdentityConfig(self, a))
+            for a in self if a.startswith(self.IDENTITY_PREFIX)))
+
+    profiles = property(lambda self:
+        dict((p, ProfileConfig(self, p))
+            for p in self if p.startswith(self.PROFILE_PREFIX)))
+
+    def __enter__(self, *args, **kwargs):
+        self.lock.acquire()
+        self.suppress_saves.append(0)
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        if self.suppress_saves.pop(-1):
+            self.save()
+        self.lock.release()
+
+    def access_zero(self):
+        with self:
+            azero = self.ACCESS_PREFIX + '0'
+            roles = ', '.join(['%s:owner' % p
+                for p in self if p.startswith(self.PROFILE_PREFIX)])
+            self[azero].update({
+                'name': 'Local access',
+                'roles': roles})
+            return AccessConfig(self, azero)
+
+    def access_from_token(self, token):
+        if 'tokens' not in self._caches:
+            with self:
+                token_cache = {}
+                for acl in self.all_access.values():
+                    acl.expire_tokens()
+                    for token in acl.tokens:
+                        token_cache[token] = acl
+            self._caches['tokens'] = token_cache
+        acl = self._caches.get('tokens', {}).get(token)
+        if acl is not None:
+            return acl
+        raise PermissionError('No access granted')
+
+    def access_from_user(self, username, password):
+        #FIXME
+        raise PermissionError('No access granted')
 
     def rotate(self):
         now = time.time()
@@ -155,6 +257,12 @@ class AppConfig(ConfigParser):
         self.last_rotate = now
 
     def save(self):
+        if self.suppress_saves:
+            self.suppress_saves[-1] += 1
+            return
+
+        self._caches = {}  # A save means something changed
+
         sections = list(self.keys())
         sections.sort(key=lambda k: (
             self.ALLOWED_SECTIONS.index(k) if k in self.ALLOWED_SECTIONS else 99+len(k)))
@@ -309,7 +417,7 @@ if __name__ == '__main__':
 
     ac = AppConfig('/tmp')
     ac.provide_passphrase('Hello world, this is my passphrase')
-    ac.provide_passphrase('Hello world, this is my passphrase')
+    #ac.provide_passphrase('Hello world, this is my passphrase')
     try:
         ac.provide_passphrase('Bogus')
         assert(not 'reached')
@@ -320,7 +428,12 @@ if __name__ == '__main__':
     except PermissionError:
         pass
 
-    ac['Profile 1'].update({
+    ac[ac.IDENTITY_PREFIX + '1'].update({
+        'name': 'Bjarni',
+        'address': 'bre@example.org',
+        'signature': 'Multiline\nsignature'})
+
+    ac[ac.PROFILE_PREFIX + '1'].update({
         'username': 'Bjarni',
         'context.1.foo': 'bar',
         'context.2.foo': 'bar',
@@ -330,6 +443,29 @@ if __name__ == '__main__':
 
     ac.set_private(ac.PROFILE_PREFIX + '1', 'password', 'very secret password')
     ac.set(ac.PROFILE_PREFIX + '1', 'password', 'another very secret password')
+
+    with ac:
+      ac.access_zero() 
+      ac[ac.ACCESS_PREFIX + '1'].update({
+        'name': 'Test access',
+        'tokens': '12341234:0, 9999:1',
+        'roles': 'Profile 1:owner, Profile 2:guest'})
+
+      for acl in ac.all_access.values():
+        print('%s: tokens=%s, roles=%s' % (acl.name, acl.tokens, acl.roles)) 
+        acl.roles['Profile 2'] = 'admin'
+        acl.tokens['abacab'] = int(time.time())
+
+    print('woot')
+
+    assert(ac.access_from_token('12341234').name == 'Test access')
+    try:
+        ac.access_from_token('9999')
+        assert(not 'reached')
+    except PermissionError:
+        pass
+
+    print('woot')
 
     ac.recovery_svc.host = 'localhost'
     ac.recovery_svc.port = '80'

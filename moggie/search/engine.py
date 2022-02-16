@@ -463,6 +463,6 @@ if __name__ == '__main__':
         se.records.compact()
         print('Tests pass OK (%d/2)' % (round+1,))
 
-    #import time
-    #time.sleep(10)
+    import time
+    time.sleep(10)
     se.delete_everything(True, False, True)

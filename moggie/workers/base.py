@@ -72,6 +72,7 @@ class BaseWorker(Process):
             b'status': (False, self.api_status)}
 
         self._secret = b64encode(os.urandom(18), b'-_').strip()
+        self._auth_header = ''
         self._status_file = os.path.join(status_dir, self.name + '.url')
         self._want_host = host or self.LOCALHOST
         self._want_port = port or 0
@@ -264,6 +265,14 @@ class BaseWorker(Process):
             self._background_thread = bgw
             bgw.start()
 
+    def set_rpc_authorization(self, auth_header=None):
+        if auth_header:
+            self._auth_header = 'Authorization: %s\r\n' % auth_header
+        else:
+            self._auth_header = ''
+
+    # FIXME: We really would like this to be available as async, so
+    #        we can multiplex things while our workers work.
     def call(self, fn, *args, qs=None, method='POST', upload=None):
         fn = fn.encode('latin-1') if isinstance(fn, str) else fn
         remote = fn[:6] in (b'http:/', b'https:')
@@ -301,7 +310,8 @@ class BaseWorker(Process):
         if upload:
             conn = conn(
                 method='POST',
-                headers='Content-Length: %d\r\n' % len(upload),
+                headers=(self._auth_header
+                    + 'Content-Length: %d\r\n' % len(upload)),
                 more=True)
             try:
                 for i in range(0, len(upload), 4096):
@@ -310,7 +320,7 @@ class BaseWorker(Process):
                 pass
             conn.shutdown(socket.SHUT_WR)
         else:
-            conn = conn(method=method)
+            conn = conn(method=method, headers=self._auth_header)
 
         peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)
         if peeked.startswith(self.HTTP_200):
@@ -415,7 +425,7 @@ class BaseWorker(Process):
                 if method == 'POST' and (len(args) == 1) and (args[0] == b'*'):
                     posted = uploaded()
                     a_and_q = posted.split(b'?', 1)
-                    args = a_and_q[0].split(b'/')[1:]
+                    args = a_and_q[0][len(fn):].split(b'/')[1:]
                     qs_pairs = _qsp(a_and_q[1]) if (len(a_and_q) > 1) else []
                     del kwargs['method']
 

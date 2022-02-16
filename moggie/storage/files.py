@@ -1,9 +1,13 @@
+import email.utils
 import mmap
 import time
+import threading
 import os
 import re
 
 from ..email.metadata import Metadata
+from ..email.headers import parse_header
+from ..email.parsemime import parse_message as ep_parse_message
 from ..util.dumbcode import *
 from .base import BaseStorage
 
@@ -13,6 +17,8 @@ class FileMap(mmap.mmap):
 
 
 class FileStorage(BaseStorage):
+
+    EMAIL_PTR_TYPES = (Metadata.PTR.IS_MBOX, Metadata.PTR.IS_MAILDIR)
 
     def __init__(self, *args, **kwargs):
         self.relative_to = kwargs.get('relative_to')
@@ -37,6 +43,8 @@ class FileStorage(BaseStorage):
             path = path.encode('utf-8')
         if not isinstance(path, bytes):
             raise KeyError('Invalid key %s' % key)
+        if self.relative_to and not path.startswith(self.relative_to):
+            return os.path.join(self.relative_to, path)
         return path
 
     def __contains__(self, key):
@@ -85,7 +93,7 @@ class FileStorage(BaseStorage):
     def capabilities(self):
         return ['info', 'get', 'length', 'set']  #, 'del']
 
-    def info(self, key=None, details=False, parse=False):
+    def info(self, key=None, details=False, limit=None, skip=0):
         path = self.key_to_path(key or b'B/')
         try:
             stat = os.stat(path)
@@ -100,32 +108,26 @@ class FileStorage(BaseStorage):
             'mode': stat.st_mode,
             'owner': stat.st_uid,
             'group': stat.st_gid,
-            'mtime': stat.st_mtime,
-            'atime': stat.st_atime,
-            'ctime': stat.st_ctime}
+            'mtime': int(stat.st_mtime),
+            'atime': int(stat.st_atime),
+            'ctime': int(stat.st_ctime)}
 
         if not details:
             return info
 
         if is_dir:
             info['contents'] = c = []
+            maildir = 0
             for p in os.listdir(path):
                 if p not in (b'.', b'..'):
                     c.append(dumb_encode_asc(os.path.join(path, p)))
-            if ('Bnew' in c and 'Bcur' in c and 'Btmp' in c):
+                if p in (b'new', b'cur', b'tmp'):
+                    maildir += 1
+            if maildir == 3:
                 info['magic'] = 'maildir'
         elif os.path.isfile(path):
             if self[key][:5] == b'From ':
                 info['magic'] = 'mbox'
-
-        if parse and key and 'magic' in info:
-           try:
-               if info['magic'] == 'mbox':
-                   info['emails'] = list(self.parse_mbox(key))
-               elif info['magic'] == 'maildir':
-                   info['emails'] = list(self.parse_maildir(key))
-           except TypeError:
-               pass
 
         return info
 
@@ -146,41 +148,142 @@ class FileStorage(BaseStorage):
 
         return hend, hdrs
 
-    def parse_mbox(self, key):
+    def parse_mailbox(self, key, skip=0, limit=None):
+        path = self.key_to_path(key)
+
+        if (limit is not None) and limit <= 0:
+            parser = iter([])
+        elif os.path.isfile(path) and self[key][:5] == b'From ':
+            parser = self.parse_mbox(key, skip=skip)
+        elif os.path.isdir(os.path.join(path, b'cur')):
+            parser = self.parse_maildir(key, skip=skip)
+        else:
+            parser = iter([])
+
+        if limit is None:
+            yield from parser
+        else:
+            for msg in parser:
+                yield msg
+                limit -= 1
+                if limit <= 0:
+                    break
+
+    def _ts_and_Metadata(self, now, lts, raw_headers, *args):
+        # Extract basic metadata. If we fail to find a plausible timestamp,
+        # try harder and then make one up that seems plausible, based on the
+        # assumption that messages are in chronological order in the mailbox.
+        md = Metadata(0, *args)
+        if md.timestamp and (md.timestamp > lts/2) and (md.timestamp < now):
+            return (max(lts, md.timestamp), md)
+
+        md[md.OFS_TIMESTAMP] = lts
+
+        # Could not parse Date - do we have a From line with a date?
+        raw_headers = str(raw_headers, 'latin-1')
+        if raw_headers[:5] == 'From ':
+            dt = raw_headers.split('\n', 1)[0].split('  ', 1)[-1].strip()
+            try:
+                ts = int(time.mktime(email.utils.parsedate(dt)))
+                md[md.OFS_TIMESTAMP] = ts
+                return (max(lts, md.timestamp), md)
+            except (ValueError, TypeError):
+                pass
+
+        # Fall back to scanning the Received headers
+        rcvd_ts = []
+        for rcvd in parse_header(raw_headers).get('received', []):
+            try:
+                tail = rcvd.split(';')[-1].strip()
+                rcvd_ts.append(int(time.mktime(email.utils.parsedate(tail))))
+            except (ValueError, TypeError):
+                pass
+        if rcvd_ts:
+            rcvd_ts.sort()
+            md[md.OFS_TIMESTAMP] = rcvd_ts[len(rcvd_ts) // 2]
+
+        return (max(lts, md.timestamp), md)
+
+    def parse_mbox(self, key, skip=0):
         path = self.key_to_path(key)
         relpath = self.relpath(path)
         obj = self.get_filemap(path, prefer_access=mmap.ACCESS_READ)
         beg = 0
         end = 0
+        lts = 0
+        now = int(time.time())
         try:
-         while end < len(obj):
+          while end < len(obj):
             hend, hdrs = self.quick_msgparse(obj, beg)
 
             end = obj.find(b'\nFrom ', hend-1)
             if end < 0:
                 end = len(obj)
 
-            yield(Metadata(0, relpath, beg, hend-beg, end-beg, hdrs))
+            if skip > 0:
+                skip -= 1
+            else:
+                lts, md = self._ts_and_Metadata(
+                    now, lts, obj[beg:hend],
+                    [Metadata.PTR(Metadata.PTR.IS_MBOX, relpath, beg)],
+                    hend-beg, end-beg, hdrs)
+                yield(md)
+
             beg = end+1
         except ValueError:
             return
 
-    def parse_maildir(self, key):
-        path = self.key_to_path(key or b'B/')
+    def parse_maildir(self, key, skip=0):
+        path = self.key_to_path(key or b'b/')
+        lts = 0
+        now = int(time.time())
         for sd in (b'new', b'cur'):
             sd = os.path.join(path, sd)
+
+            # FIXME: For very large maildirs, this os.listdir() call can
+            #        be quite costly. We *might* want to cache the result.
             for fn in sorted(os.listdir(sd)):
                 if fn.startswith(b'.'):
                     continue
+                if skip > 0:
+                    skip -= 1
+                    continue
+
                 fn = os.path.join(sd, fn)
                 with open(fn, 'rb') as fd:
-                 with FileMap(fd.fileno(), 0, access=mmap.ACCESS_READ) as fm:
+                  with FileMap(fd.fileno(), 0, access=mmap.ACCESS_READ) as fm:
                     try:
                         hend, hdrs = self.quick_msgparse(fm, 0)
                         end = os.path.getsize(fn)
-                        yield(Metadata(0, self.relpath(fn), 0, hend, end, hdrs))
+
+                        lts, md = self._ts_and_Metadata(
+                            now, lts, fm[:hend],
+                            [Metadata.PTR(Metadata.PTR.IS_MAILDIR,
+                                          self.relpath(fn), 0)],
+                            hend, end, hdrs)
+                        yield(md)
                     except ValueError:
                         pass
+
+    def message(self, metadata, with_ptr=False):
+        """
+        Returns a slice of bytes that map to the message on disk.
+        Works for both maildir and mbox messages.
+        """
+        ptr = metadata.pointers[0]  # Filesystem pointers are always first
+        if ptr.ptr_type not in self.EMAIL_PTR_TYPES:
+            raise KeyError('Not a filesystem pointer: %s' % ptr)
+        beg = ptr.offset
+        end = ptr.offset + metadata.message_length
+        if with_ptr:
+            return ptr, self[ptr.mailbox][beg:end]
+        else:
+            return self[ptr.mailbox][beg:end]
+
+    def parse_message(self, metadata):
+        ptr, msg = self.message(metadata, with_ptr=True)
+        return ep_parse_message(msg,
+            fix_mbox_from=(ptr.ptr_type == Metadata.PTR.IS_MBOX))
 
 
 if __name__ == "__main__":
@@ -197,12 +300,12 @@ if __name__ == "__main__":
 
     print('Tests passed OK')
     if 'more' in sys.argv:
-        print('%s\n\n' % fs.info('B/home/bre/Mail/GMaildir/[Gmail].All Mail', details=True, parse=True))
-        print('%s\n\n' % fs.info('B/home/bre/Mail/mailpile/2013-08.mbx', details=True))
+        print('%s\n\n' % fs.info('b/home/bre/Mail/GMaildir/[Gmail].All Mail', details=True))
+        print('%s\n\n' % fs.info('b/home/bre/Mail/mailpile/2013-08.mbx', details=True))
 
-        big = 'B/home/bre/Mail/klaki/gmail-2011-11-26.mbx'
+        big = 'b/home/bre/Mail/klaki/gmail-2011-11-26.mbx'
         print('%s\n\n' % fs.info(big, details=True))
-        msgs = sorted(list(fs.parse_mbox(big)))
+        msgs = sorted(list(fs.parse_mailbox(big)))
         print('Found %d messages in %s' % (len(msgs), big))
         for msg in msgs[:5] + msgs[-5:]:
             m = msg.parsed()
@@ -213,6 +316,11 @@ if __name__ == "__main__":
             i = count * (len(msgs) // 5)
             print('len(msgs[%d]) == %d' % (i, len(dumb_encode_bin(msgs[i], compress=256))))
         print('%s\n' % dumb_encode_bin(msgs[0], compress=None))
+
+        import json, random
+        print(json.dumps(
+            fs.parse_message(random.choice(msgs)).with_text().with_data(),
+            indent=2))
 
         try:
             print('%s' % fs['/tmp'])

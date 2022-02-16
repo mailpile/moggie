@@ -16,8 +16,9 @@ class MessagePart(dict):
     of the source message content around until it is explicity asked to
     provide data (raw or decoded).
     """
-    def __init__(self, msg_bin):
+    def __init__(self, msg_bin, fix_mbox_from=False):
         self.msg_bin = msg_bin
+        self.fix_mbox_from = fix_mbox_from
         try:
             self.eol = b'\r\n'
             self.hend = msg_bin.index(self.eol+self.eol)
@@ -90,7 +91,7 @@ class MessagePart(dict):
             return self
         self['_PARTS'] = parts = []
 
-        ct, ctp = self.get('content-type', ['', {}])
+        ct, ctp = self.get('content-type', ['text/plain', {}])
         body_beg = self.hend + 2*len(self.eol)
         body_end = len(self.msg_bin)
         parts.append({
@@ -116,7 +117,9 @@ class MessagePart(dict):
                 elif i == len(begs)-1:
                     part['content-type'] = ['text/x-mime-postamble', {}]
                 elif recurse:
-                    sub = MessagePart(self._raw(part)).with_structure(recurse)
+                    sub = MessagePart(
+                        self._raw(part), self.fix_mbox_from
+                        ).with_structure(recurse)
                     for p in sub['_PARTS']:
                         p['_BYTES'][0] += part['_BYTES'][0]
                         p['_BYTES'][1] += part['_BYTES'][0]
@@ -154,6 +157,10 @@ class MessagePart(dict):
 
         if encoding == 'base64':
             return base64.b64decode(raw_data)
+
+        # Not base64, do we need to undo mbox From mangling?
+        if self.fix_mbox_from:
+            pass  # FIXME
 
         if encoding == 'quoted-printable':
             return bytes(
@@ -275,8 +282,8 @@ class MessagePart(dict):
         return self
 
 
-def parse_message(msg_bin):
-    return MessagePart(msg_bin)
+def parse_message(msg_bin, fix_mbox_from=False):
+    return MessagePart(msg_bin, fix_mbox_from)
 
 
 if __name__ == '__main__':

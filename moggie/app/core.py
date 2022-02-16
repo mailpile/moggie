@@ -1,16 +1,19 @@
+import asyncio
+import json
 import os
+import threading
 import time
 
+from ..config import AppConfig
 from ..storage.files import FileStorage
 from ..storage.metadata import MetadataStore
-from ..util.rpc import JsonRpcClient
+from ..workers.importer import ImportWorker
 from ..workers.storage import StorageWorker
 from ..workers.search import SearchWorker
+from ..jmap.core import JMAPSessionResource
+from ..jmap.requests import *
+from ..jmap.responses import *
 
-#
-# TODO: Define how we handle RPCs over the websocket. There needs to be some
-#       structure there! Assume everything is always async.
-#
 
 from ..email.metadata import Metadata
 std_tags = [[
@@ -49,17 +52,52 @@ Date: Wed, 1 Sep 2021 00:03:01 GMT
 From: Bjarni <bre@example.org>
 To: "Some One" <someone@example.org>
 Subject: Hello world'''
-test_emails = ([
-    Metadata(0, b'/tmp/foo', 0, 0, 0, raw_msg).parsed()] * 10)
+test_emails = [[0, [[0, b'/tmp/foo.mbx', 0]], 0, 0, raw_msg]] * 10
 
 
+async def async_run_in_thread(method, *m_args, **m_kwargs):
+    def runner(l, q):
+        l.call_soon_threadsafe(q.put_nowait, method(*m_args, **m_kwargs))
+
+    loop = asyncio.get_event_loop()
+    queue = asyncio.Queue()
+    thr = threading.Thread(target=runner, args=(loop, queue))
+    thr.daemon = True
+    thr.start()
+
+    return await queue.get()
+
+
+class AppSessionResource(JMAPSessionResource):
+    def __init__(self, app, access):
+        super().__init__(self)
+        self.app = app
+        self.access = access
+        if access.username:
+            self.username = access.username
+        accounts = {}
+        for profile, role in access.roles.items():
+            accounts[profile] = {}  #FIXME: Present profile as JMAP
+        self.accounts = accounts
 
 
 class AppCore:
     def __init__(self, app_worker):
+        self.work_dir = os.path.normpath(# FIXME: This seems a bit off
+            os.path.join(app_worker.worker_dir, '..'))
+
         self.worker = app_worker
-        self.config = None
+        self.config = AppConfig(self.work_dir)
         self.metadata = None
+
+        self.rpc_functions = {
+            b'rpc/jmap_session':      (True, self.rpc_session_resource),
+            b'rpc/crypto_status':     (True, self.rpc_crypto_status),
+            b'rpc/get_access_token':  (True, self.rpc_get_access_token),
+            b'rpc/register_metadata': (True, self.rpc_register_metadata)}
+
+        self.jmap = {
+            'session': self.api_jmap_session}
 
     # Lifecycle
 
@@ -71,10 +109,12 @@ class AppCore:
         self.search = SearchWorker(self.worker.worker_dir,
             '/tmp', b'FIXME', len(self.metadata),
             name='search').connect()
+        self.importer = ImportWorker(self.worker.worker_dir,
+            name='importer').connect()
 
     def stop_workers(self):
         # The order here may matter
-        all_workers = (self.storage, self.search)
+        all_workers = (self.importer, self.search, self.storage)
         for p in (1, 2, 3):
             for worker in all_workers:
                 try:
@@ -103,10 +143,86 @@ class AppCore:
 
     # Public API
 
-    async def api_jmap(self, request_user, jmap_request):
-        print('Request: %s' % (jmap_request,))
+    async def api_jmap(self, access, client_request):
+        # The JMAP API sends multiple requests in a blob, and wants some magic
+        # interpolation as well. Where do we implement that? Is there a lib we
+        # should depend upon? DIY?
+        #
+        # results = {}
+        # for jr in jmap_request_iter(jmap_request, results):
+        #     results[jr.id] = await self.jmap[jr.method](access, jr)
+        # return {... results ...}
+        #
+        try:
+            jmap_request = to_jmap_request(client_request)
+        except KeyError as e:
+            print('Invalid request: %s' % e)
+            return {'code': 500}
+
+        # FIXME: This is a hack
+
+        if type(jmap_request) == RequestMailbox:
+            info = await async_run_in_thread(self.storage.mailbox,
+                jmap_request['mailbox'],
+                limit=jmap_request['limit'],
+                skip=jmap_request['skip'])
+            result = json.dumps(ResponseMailbox(jmap_request, info), indent=2)
+
+        elif type(jmap_request) == RequestEmail:
+            info = await async_run_in_thread(self.storage.email,
+                jmap_request['metadata'],
+                text=jmap_request.get('text', False),
+                data=jmap_request.get('data', False))
+            result = json.dumps(ResponseEmail(jmap_request, info), indent=2)
+
+        elif type(jmap_request) == RequestPing:
+            result = json.dumps(ResponsePing(jmap_request))
+
+        else:
+            result = json.dumps({'error': 'Unknown %s' % type(jmap_request)})
+
         return {
             'code': 200,
             'mimetype': 'application/json',
-            'body': 'Nice'}
+            'body': bytes(result, 'utf-8')}
+
+    def api_jmap_session(self, access):
+        # FIXME: What does this user have access to?
+        jsr = AppSessionResource(self, access)
+        return {
+            'code': 200,
+            'mimetype': 'application/json',
+            'body': str(jsr)}
+
+
+    # Internal API
+
+    def rpc_session_resource(self, **kwargs):
+        jsr = AppSessionResource(self, self.config.access_zero())
+        self.worker.reply_json(jsr)
+
+    def rpc_crypto_status(self, **kwargs):
+        locked = (self.config.has_crypto_enabled and not self.config.aes_key)
+        self.worker.reply_json({
+            'encrypted': self.config.has_crypto_enabled,
+            'locked': locked})
+
+    def rpc_get_access_token(self, **kwargs):
+        a0 = self.config.access_zero()
+        token, expiration = a0.get_fresh_token()
+        self.worker.reply_json({
+            'token': token,
+            'expires': expiration})
+
+    def rpc_register_metadata(self, emails, *args, **kwargs):
+        added = []
+        for m in (Metadata(*e) for e in emails):
+             idx = self.metadata.add_if_new(m)
+             if idx is not None:
+                 added.append(idx)
+
+        # FIXME: Tag these new messages as INCOMING.
+        #        Other tags as well? Which context is this?
+
+        self.worker.reply_json(added)
 

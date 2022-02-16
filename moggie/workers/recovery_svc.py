@@ -1,11 +1,62 @@
 """
-Privacy-preserving password recovery!
+This server will assist with a privacy-preserving password recovery
+flow, suitable for use with encryption keys of moderate importance.
 
-Service at recovery.mailpile.is?
+## User Interface Recommendations
+
+From the point of view of the user, this scheme requires the following
+user interactions:
+
+### Setup
+
+   * The app requests permission to allow password resets (key recovery)
+      1. The user provides e-mail addresses and/or cell phone numbers
+      2. The user chooses a reset policy (require all, accept any, N of M)
+
+### Recovery
+
+   1. The user triggers a "password reset"
+      * The user is informed that codes have been sent via e-mail and/or SMS
+   2. The user inputs all recieved codes into the app
+   3. The user chooses a new password
+
+### Renewal
+
+   1. About 1x per year, the user should be reminded they have recovery
+      enabled, and asked whether they want to make any changes; if they
+      choose to make changes, this becomes the Setup interaction.
+
+
+If the app developer chooses to keep things as simple as possible, they can
+decide to only prompt for a single recovery method (e-mail or SMS), or decide
+on the user's behalf what policy to use.
+
+This is deliberately very similar to the "password reset" flow provided
+by popular "software as a service" systems.
+
+
+## How Does It Work?
+
+...
+
+
+
+## Security vs. Reliability
+
+
+## API Documentation
+
+------
+
+Service at %(servername)s?
 
    POST /recovery_svc/register
        <- (hint, passcode, e-mails or phone numbers)
        -> (reset-code, id, expiration-date)
+
+   POST /recovery_svc/renew
+       <- (id, old-expiration-date)
+       -> (id, new-expiration-date)
 
    POST /recovery_svc/recover
        <- (reset-code, id)
@@ -54,6 +105,8 @@ import socket
 import time
 import traceback
 
+import markdown
+
 from upagekite.httpd import url
 from upagekite.web import process_post
 
@@ -69,6 +122,35 @@ EXPIRATION_TIME = 2*365*24*3600  # 2 years
 TEMP_CODE_TIME = 20 * 60
 
 LAST_EXPIRATION = 0
+
+WEB_ROOT = None
+
+
+@url('/')
+def web_root(req_env):
+    global WEB_ROOT
+    if WEB_ROOT is None:
+        params = {
+            'servername': req_env['worker'].kite_name}
+        params.update({
+            'docs': markdown.markdown(__doc__ % params)})
+        WEB_ROOT = ("""\
+<html><head>
+  <title>Secret Recovery Service</title>
+  <style type="text/css">
+    body {background: #eef; color: #111;}
+    .content {margin: 0 auto 1em auto; max-width: 600px;}
+  </style>
+</head><body><div class=content>
+  <h1>Secret Recovery Service</h1>
+  <p>Welcome to the Secret Recovery Service on <b>%(servername)s</b>.</p>
+  <hr><h1>Technical Details</h1>
+  %(docs)s
+<div></body></html>
+""") % params
+
+    return {'mimetype': 'text/html', 'body': WEB_ROOT}
+
 
 @url('/recovery_svc/register')
 @process_post(max_bytes=2048)
@@ -180,7 +262,8 @@ class RecoverySvcWorker(PublicWorker):
 
     CONFIG_SECTION = AppConfig.RECOVERY_SVC
 
-    PUBLIC_PREFIXES = ['/recovery_svc/']
+    PUBLIC_PATHS = ['/']
+    PUBLIC_PREFIXES = ['/recovery_svc']
 
     def __init__(self, *args, **kwargs):
         PublicWorker.__init__(self, *args, **kwargs)

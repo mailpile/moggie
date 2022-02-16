@@ -180,6 +180,13 @@ class MetadataStore(RecordStore):
         else:
             return self.set(msgid, metadata)
 
+    def add_if_new(self, metadata):
+        msgid = metadata.get_raw_header('Message-Id')
+        if msgid in self:
+            return None
+        else:
+            return self.set(msgid, metadata)
+
     def append(self, metadata, **kwargs):
         if not isinstance(metadata, Metadata):
             raise ValueError('Need instance of Metadata')

@@ -4,6 +4,7 @@ import traceback
 import threading
 
 from ..util.dumbcode import dumb_encode_asc
+from ..util.intset import IntSet
 from .base import BaseWorker
 
 

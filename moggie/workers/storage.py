@@ -1,8 +1,10 @@
 import json
+import time
 import traceback
 import threading
 
 from ..util.dumbcode import *
+from ..email.metadata import Metadata
 
 from .base import BaseWorker
 
@@ -52,6 +54,8 @@ class StorageWorker(BaseWorker):
     PEEK_BYTES = 8192
     BLOCK = 8192
 
+    PARSE_CACHE_TTL = 180
+
     def __init__(self, status_dir, backend, name=KIND):
         BaseWorker.__init__(self, status_dir, name=name)
         self.backend = backend
@@ -59,11 +63,29 @@ class StorageWorker(BaseWorker):
             b'capabilities': (True,  self.api_capabilities),
             b'dump':         (True,  self.api_dump),
             b'info':         (True,  self.api_info),
+            b'mailbox':      (True,  self.api_mailbox),
+            b'email':        (True,  self.api_email),
             b'get':          (False, self.api_get),
             b'json':         (False, self.api_json),
             b'set':          (False, self.api_set),
             b'append':       (False, self.api_append),
             b'delete':       (False, self.api_delete)})
+
+        self.parsed_mailboxes = {}
+        self.background_thread = None
+
+    def _expire_parse_cache(self):
+        et = time.time() - self.PARSE_CACHE_TTL
+        expired = [k for k, v in self.parsed_mailboxes.items() if v[0] <= et]
+        for key in expired:
+            del self.parsed_mailboxes[key]
+
+    def _background(self, task):
+        if self.background_thread is not None:
+            self.background_thread.join()
+        self.background_thread = threading.Thread(target=task)
+        self.background_thread.daemon = True
+        self.background_thread.start()
 
     def capabilities(self):
         return self.call('capabilities')
@@ -75,8 +97,20 @@ class StorageWorker(BaseWorker):
 
     def info(self, key=None, details=None):
         if details is not None:
-            return self.call('info', key, qs={'details': details})
+            return self.call('info', key, qs={
+                'details': details, 'limit': limit, 'skip': skip})
         return self.call('info', key)
+
+    def mailbox(self, key, skip=0, limit=None):
+        return self.call('mailbox', key, qs={
+            'skip': skip,
+            'limit': limit})
+
+    def email(self, metadata, text=False, data=False):
+        return self.call('email', qs={
+            'metadata': metadata[:Metadata.OFS_HEADERS],
+            'text': text,
+            'data': data})
 
     def get(self, key, *args, dumbcode=None):
         if dumbcode is not None:
@@ -106,6 +140,48 @@ class StorageWorker(BaseWorker):
     def api_info(self, key, details=False, method=None):
         self.reply_json(self.backend.info(key, details=details))
 
+    def api_mailbox(self, key, skip=0, limit=None, method=None):
+        self._expire_parse_cache()
+        if key in self.parsed_mailboxes:
+            pm = self.parsed_mailboxes[key][1]
+            beg = skip
+            end = skip + (limit or (len(pm)-skip))
+            while (end > len(pm)) and self.background_thread is not None:
+                time.sleep(0.1)
+            return self.reply_json(pm[beg:end])
+
+        parser = self.backend.parse_mailbox(key, skip=skip)
+        collect = []
+        self.parsed_mailboxes[key] = (time.time(), collect)
+
+        if limit is None:
+            collect.extend(parser)
+            return self.reply_json(collect)
+
+        result = []
+        for msg in parser:
+            collect.append(msg)
+            if limit and len(result) >= limit:
+                break
+            result.append(msg)
+        self.reply_json(result)
+
+        # Finish in background thread
+        if limit and len(result) >= limit:
+            def finish():
+                collect.extend(msg for msg in parser)
+                self.background_thread = None
+            self._background(finish)
+
+    def api_email(self, metadata=None, text=False, data=False, method=None):
+        metadata = Metadata(*(metadata[:Metadata.OFS_HEADERS] + [b'']))
+        parsed = self.backend.parse_message(metadata)
+        if text:
+            parsed.with_text()
+        if data:
+            parsed.with_data()
+        self.reply_json(parsed)
+
     def api_get(self, key, *args, dumbcode=False, method=None):
         if len(args) > 0 and dumbcode:
             return self.reply(self.HTTP_400)
@@ -133,9 +209,7 @@ class StorageWorker(BaseWorker):
             self._client.close()
 
         if length > self.BLOCK * 5:
-            sender = threading.Thread(target=sendit)
-            sender.daemon = True
-            sender.run()
+            self._background(sendit)
         else:
             sendit()
 
@@ -182,7 +256,7 @@ class StorageWorker(BaseWorker):
 
     def api_set(self, key, value, **kwargs):
         key = str(key, 'latin-1')
-        print('Setting %s = %s' % (key, dumb_decode(value)))
+        #print('Setting %s = %s' % (key, dumb_decode(value)))
         self.backend.__setitem__(key, dumb_decode(value), **kwargs)
         self.reply_json({'set': key})
 

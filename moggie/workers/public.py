@@ -29,6 +29,10 @@ class WorkerPageKiteSettings(uPageKiteDefaults):
     debug = uPageKiteDefaults.log
     #trace = uPageKiteDefaults.log
 
+    @classmethod
+    async def network_send_sleep(uPK, sent):
+      pass
+
 
 class RequestTimer:
     def __init__(self, name, req_env, status=None):
@@ -62,6 +66,11 @@ def require(req_env, post=True, local=False, secure=True):
             raise PermissionError('Method is localhost-only, got %s' % req_env.remote_ip)
         if secure and not req_env.frame.tls:
             raise PermissionError('Method requires TLS or localhost')
+    info = {}
+    if 'Authorization' in req_env.http_headers:
+        meth, data = req_env.http_headers['Authorization'].split(' ', 1)
+        info['auth_%s' % meth.strip().lower()] = data.strip()
+    return info
 
 
 @url('/ping', '/ping/*')
@@ -228,14 +237,6 @@ class PublicWorker(BaseWorker):
     def shutdown_tasks(self):
         pass
 
-    def call(self, func, *args, **kwargs):
-        func = func.encode('latin-1') if isinstance(fn, str) else fn
-        remote = func[:6] in (b'http:/', b'https:')
-        if remote:
-            return super().call(func, *args, **kwargs)
-        else:
-            return super().call(b'rpc/' + func, *args, **kwargs)
-
     def reply(self, what, *args, **kwargs):
         self._rpc_response = self._rpc_response_map.get(what)
         if not self._rpc_response:
@@ -245,11 +246,11 @@ class PublicWorker(BaseWorker):
         self._rpc_response = {
             'ttl': 30,
             'mimetype': 'application/json',
-            'body': bytes(json.dumps(data, indent=1), 'utf-8') + b'\n'}
+            'body': json.dumps(data, indent=1) + '\n'}
 
     def handle_web_rpc(self, req_env):
         args = bytes(req_env.request_path, 'latin-1').split(b'/')[3:]
-        func = args.pop(0)
+        func = b'rpc/' + args.pop(0)
         with self._rpc_lock:
             self.common_rpc_handler(
                 func,
