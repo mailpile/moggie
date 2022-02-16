@@ -1,5 +1,6 @@
 #!/bin/bash
 APP=${APP:-app}
+CTYPE=${CTYPE:-application/json}
 if [ "$2" != "" ]; then
     FUNC="$1"
     shift
@@ -10,6 +11,6 @@ JSON="$1"
 shift
 
 curl -s "$@" -d "$JSON" \
-    -H 'Content-Type: application/json' \
+    -H "Content-Type: $CTYPE" \
     "$(cat ~/.local/share/Moggie/default/workers/$APP.url)/$FUNC"
 echo
