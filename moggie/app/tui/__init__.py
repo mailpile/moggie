@@ -39,109 +39,40 @@ class Selectable(urwid.WidgetWrap):
     def keypress(self, size, key):
         if self.on_select and key in ('enter',):
             self.on_select(self)
-        return key
+        else:
+            return key
 
 
-class EmailDisplay(urwid.Filler):
-    def __init__(self, tui_frame, metadata, parsed):
-        self.metadata = Metadata(*metadata)
-        self.parsed = self.metadata.parsed()
-        self.email = parsed
-
+class SplashCat(urwid.Filler):
+    COLUMN_NEEDS = 40
+    COLUMN_FIT = 'weight'
+    COLUMN_STYLE = 'content'
+    def __init__(self):
         urwid.Filler.__init__(self, urwid.Text(
-            [self.parsed.get('subject', 'ohai')], 'center'),
+            [HELLO, ('subtle', HELLO_CREDITS)], 'center'),
             valign='middle')
 
 
-class EmailListWalker(urwid.ListWalker):
-    def __init__(self, tui_frame, mailbox, emails=None):
-        self.focus = 0
-        self.mailbox = mailbox
-        self.emails = emails or []
-        self.tui_frame = tui_frame
-        self.app_bridge = tui_frame.app_bridge
-        self.loading = 0
-        self.want_more = len(self.emails) < 100
-        self._load_more()
-
-    def __len__(self):
-        return len(self.emails)
-
-    def _load_more(self):
-        now = time.time()
-        if (self.loading > now - 5) or not self.want_more:
-            return
-        self.loading = time.time()
-        self.app_bridge.send_json(RequestMailbox(self.mailbox,
-            skip=len(self.emails),
-            limit=min(max(500, 2*len(self.emails)), 10000)))
-
-    def incoming_message(self, message):
-        if (message.get('prototype') != 'mailbox' or
-                message.get('mailbox') != self.mailbox):
-            return
-
-        try:
-            self.emails[message['skip']:] = message['emails']
-            self.emails.sort()
-            self.emails.reverse()
-
-            self.want_more = (message['limit'] == len(message['emails']))
-            self.loading = 0
-            self._load_more()
-
-            self._modified()
-        except:
-            traceback.print_exc()
-
-    def set_focus(self, focus):
-        self.focus = focus
-        if focus > len(self.emails) - 100:
-            self._load_more()
-
-    def next_position(self, pos):
-        if pos + 1 < len(self.emails):
-            return pos + 1
-        self._load_more()
-        raise IndexError
-
-    def prev_position(self, pos):
-        if pos > 0:
-            return pos - 1
-        raise IndexError
-
-    def positions(self, reverse=False):
-        if reverse:
-            return reversed(range(0, len(self.emails)))
-        return range(0, len(self.emails))
-
-    def __getitem__(self, pos):
-        try:
-            md = Metadata(*self.emails[pos]).parsed()
-            frm = md.get('from', {})
-            frm = frm.get('fn') or frm.get('address') or '(none)'
-            attrs = '(    )'
-            subj = md.get('subject', '(no subject)')
-            dt = datetime.datetime.fromtimestamp(md.get('ts', 0))
-            dt = dt.strftime('%Y-%m-%d')
-            cols = urwid.Columns([
-              ('weight', 15, urwid.Text(('email_from', frm), wrap='clip')),
-              (6,            urwid.Text(('email_attrs', attrs))),
-              ('weight', 27, urwid.Text(('email_subject', subj), wrap='clip')),
-              (10,           urwid.Text(('email_date', dt)))],
-              dividechars=1)
-            return Selectable(cols,
-                on_select=lambda x: self.tui_frame.show_email(self.emails[pos]))
-        except:
-            traceback.print_exc()
-        raise IndexError
+class SplashMore(urwid.Filler):
+    COLUMN_NEEDS = 60
+    COLUMN_FIT = 'weight'
+    COLUMN_STYLE = 'content'
+    def __init__(self):
+        urwid.Filler.__init__(self, urwid.Text(
+            [ENVELOPES], 'center'),
+            valign='middle')
 
 
 class ContextList(urwid.ListBox):
+    COLUMN_NEEDS = 18
+    COLUMN_FIT = 'fixed'
+    COLUMN_STYLE = 'sidebar'
+
     def __init__(self, tui_frame, contexts, expanded=0):
         self.contexts = contexts
         self.expanded = expanded
         self.tui_frame = tui_frame
+        self.crumb = 'ohai'
 
         def _sel_ctx(which):
             return lambda x: self.tui_frame.set_context(self.contexts, which)
@@ -159,6 +90,7 @@ class ContextList(urwid.ListBox):
                 ('subtle', ctx['name'])], 'left', 'clip')
 
             if i == expanded:
+                self.crumb = ctx['name']
                 widgets.append(Selectable(urwid.AttrMap(ctx_name,
                     {None: 'active', 'subtle': 'active', 'hotkey': 'act_hk'}),
                     on_select=_sel_ctx(-1)))
@@ -193,34 +125,154 @@ class ContextList(urwid.ListBox):
 
         urwid.ListBox.__init__(self, urwid.SimpleListWalker(widgets))
 
+    def incoming_message(self, message):
+        pass
+
+
+class EmailListWalker(urwid.ListWalker):
+    def __init__(self, parent):
+        self.focus = 0
+        self.emails = []
+        self.parent = parent
+
+    def __len__(self):
+        return len(self.emails)
+
+    def add_emails(self, skip, emails):
+        self.emails[skip:] = emails
+        self.emails.sort()
+        self.emails.reverse()
+        self._modified()
+
+    def set_focus(self, focus):
+        self.focus = focus
+        if focus > len(self.emails) - 100:
+            self.parent.load_more()
+
+    def next_position(self, pos):
+        if pos + 1 < len(self.emails):
+            return pos + 1
+        self.parent.load_more()
+        raise IndexError
+
+    def prev_position(self, pos):
+        if pos > 0:
+            return pos - 1
+        raise IndexError
+
+    def positions(self, reverse=False):
+        if reverse:
+            return reversed(range(0, len(self.emails)))
+        return range(0, len(self.emails))
+
+    def __getitem__(self, pos):
+        try:
+            md = Metadata(*self.emails[pos]).parsed()
+            frm = md.get('from', {})
+            frm = frm.get('fn') or frm.get('address') or '(none)'
+            attrs = '(    )'
+            subj = md.get('subject', '(no subject)')
+            dt = datetime.datetime.fromtimestamp(md.get('ts', 0))
+            dt = dt.strftime('%Y-%m-%d')
+            cols = urwid.Columns([
+              ('weight', 15, urwid.Text(('email_from', frm), wrap='clip')),
+              (6,            urwid.Text(('email_attrs', attrs))),
+              ('weight', 27, urwid.Text(('email_subject', subj), wrap='clip')),
+              (10,           urwid.Text(('email_date', dt)))],
+              dividechars=1)
+            return Selectable(cols,
+                on_select=lambda x: self.parent.show_email(self.emails[pos]))
+        except:
+            traceback.print_exc()
+        raise IndexError
+
+
+class EmailList(urwid.ListBox):
+    COLUMN_NEEDS = 40
+    COLUMN_FIT = 'weight'
+    COLUMN_STYLE = 'content'
+
+    def __init__(self, tui_frame, search_obj):
+        self.search_obj = search_obj
+        self.tui_frame = tui_frame
+        self.app_bridge = tui_frame.app_bridge
+        self.crumb = search_obj.get('mailbox', 'FIXME')
+
+        self.walker = EmailListWalker(self)
+        self.emails = self.walker.emails
+        urwid.ListBox.__init__(self, self.walker)
+
+        self.loading = 0
+        self.want_more = True
+        self.load_more()
+
+    def show_email(self, metadata):
+        self.tui_frame.show(self, EmailDisplay(self.tui_frame, metadata, None))
+
+    def load_more(self):
+        now = time.time()
+        if (self.loading > now - 5) or not self.want_more:
+            return
+        self.loading = time.time()
+        self.search_obj['skip'] = len(self.emails)
+        self.search_obj['limit'] = min(max(500, 2*len(self.emails)), 10000)
+        self.app_bridge.send_json(self.search_obj)
+
+    def incoming_message(self, message):
+        if (message.get('prototype') != self.search_obj['prototype'] or
+                message.get('mailbox') != self.search_obj.get('mailbox')):
+            return
+        try:
+            self.walker.add_emails(message['skip'], message['emails'])
+
+            self.want_more = (message['limit'] == len(message['emails']))
+            self.loading = 0
+            self.load_more()
+        except:
+            traceback.print_exc()
+
+
+class EmailDisplay(urwid.Filler):
+    COLUMN_NEEDS = 60
+    COLUMN_FIT = 'weight'
+    COLUMN_STYLE = 'content'
+
+    def __init__(self, tui_frame, metadata, parsed):
+        self.metadata = Metadata(*metadata)
+        self.parsed = self.metadata.parsed()
+        self.email = parsed
+        self.crumb = self.parsed.get('subject', 'FIXME')
+
+        urwid.Filler.__init__(self, urwid.Text(
+            [self.parsed.get('subject', 'FIXME')], 'center'),
+            valign='middle')
+
+    def incoming_message(self, message):
+        pass
+
 
 class TuiFrame(urwid.Frame):
     def __init__(self, screen):
         self.screen = screen
         self.render_cols_rows = self.screen.get_cols_rows()
-        self.column_needs = (18, 40, 62)
-        self.history = []
         self.app_bridge = None
 
-        self.left = ContextList(self, test_contexts)
-        self.middle = urwid.Filler(urwid.Text(
-            [HELLO, ('subtle', HELLO_CREDITS)], 'center'),
-            valign='middle')
-        self.right = urwid.Filler(urwid.Text(
-            [ENVELOPES], 'center'),
-            valign='middle')
+        self.filler1 = SplashCat()
+        self.filler2 = SplashMore()
 
-        self.default_topbar()
-        self.visible_columns = 0
-        self.swap_visible = False
+        self.hidden = 0
+        self.crumbs = []
+        self.columns = self.filler1
+        self.all_columns = [ContextList(self, test_contexts)]
+        self.update_topbar(update=False)
         self.update_columns(update=False)
 
         urwid.Frame.__init__(self, self.columns, header=self.topbar)
 
     def incoming_message(self, message):
         message = json.loads(message)
-        for _, _, _, widget in self.history:
-            if widget is not None:
+        for widget in self.all_columns:
+            if hasattr(widget, 'incoming_message'):
                 widget.incoming_message(message)
 
     def link_bridge(self, app_bridge):
@@ -228,33 +280,17 @@ class TuiFrame(urwid.Frame):
         return self.incoming_message
 
     def set_context(self, contexts, i):
-        widget = ContextList(self, contexts, expanded=i)
-        if self.visible_columns > 1:
-            self.left = widget
-        else:
-            self.history.append((time.time(), 'middle', self.middle, None))
-            self.middle = widget
+        self.all_columns[0] = ContextList(self, contexts, expanded=i)
         self.update_columns()
 
     def show_tag(self, which):
-        elw = EmailListWalker(self, None, test_emails)  # FIXME
-        self.history.append((time.time(), 'middle', self.middle, elw))
-        #self.app_bridge.send_json(RequestTag(which))
-        self.middle = urwid.ListBox(elw)
-        self.update_columns()
+        self.show(self.all_columns[0], EmailList(self, RequestTag(which)))
 
     def show_mailbox(self, which):
-        elw = EmailListWalker(self, which)
-        self.history.append((time.time(), 'middle', self.middle, elw))
-        self.middle = urwid.ListBox(elw)
-        self.update_columns()
+        self.show(self.all_columns[0], EmailList(self, RequestMailbox(which)))
 
     def show_search_result(self, which):
-        elw = EmailListWalker(self, None, test_emails)  # FIXME
-        self.history.append((time.time(), 'middle', self.middle, elw))
-        #self.app_bridge.send_json(RequestSearch(which))
-        self.middle = urwid.ListBox(elw)
-        self.update_columns()
+        self.show(self.all_columns[0], EmailList(self, RequestSearch(which)))
 
     def show_email(self, metadata):
         edw = EmailDisplay(self, metadata, None)
@@ -275,16 +311,45 @@ class TuiFrame(urwid.Frame):
             self.update_columns()
         return urwid.Frame.render(self, *args, **kwargs)
 
-    def default_topbar(self):
+    def update_topbar(self, update=True):
+        # FIXME: Calculate/hint hotkeys based on what our columns suggest?
+
+        maxwidth = self.render_cols_rows[0] - 2
+        crumbtrail = ' -> '.join(self.crumbs)
+        if len(crumbtrail) > maxwidth:
+            crumbtrail = '...' + crumbtrail[-(maxwidth-3):]
+
         self.topbar = urwid.Pile([
             urwid.AttrMap(urwid.Columns([
                 urwid.Text(' %s v%s ' % (APPNAME, APPVER), align='left'),
                 urwid.Text([
                          ('top_hk', '/:'), 'Search  ',
                          ('top_hk', '?:'), 'Help  ',
+                         ('top_hk', 'x:'), 'Close  ',
                          ('top_hk', 'q:'), 'Quit '],
                     align='right')]), 'header'),
-           urwid.AttrMap(urwid.Text(''), 'crumbs')])
+            urwid.AttrMap(
+                urwid.Text(crumbtrail, align='center'), 'crumbs')])
+        if update:
+            self.contents['header'] = (self.topbar, None)
+
+    def show(self, ref, widget):
+        pos = self.all_columns.index(ref)
+        if pos >= 0:
+            self.all_columns[(pos+1):] = [widget]
+            self.update_columns()
+
+    def replace(self, ref, widget):
+        pos = self.all_columns.index(ref)
+        if pos > 0:
+            self.all_columns[pos:] = [widget]
+            self.update_columns()
+
+    def remove(self, ref):
+        pos = self.all_columns.index(ref)
+        if pos > 0:
+            self.all_columns[pos:] = []
+            self.update_columns()
 
     def update_columns(self, update=True):
         cols, rows = self.screen.get_cols_rows()
@@ -294,34 +359,47 @@ class TuiFrame(urwid.Frame):
                 return w
             return urwid.BoxAdapter(w, rows-2)
 
-        columns = []
-        if cols > sum(self.column_needs[:2])+1:
-          columns.append(
-            ('fixed', self.column_needs[0], _w(_b(self.left), 'sidebar')))
-        if cols >= sum(self.column_needs)+2:
-          columns.append(
-            ('weight', self.column_needs[1], _w(_b(self.middle), 'content')))
-          columns.append(
-            ('weight', self.column_needs[2], _w(_b(self.right), 'sidebar')))
-        else:
-          if self.swap_visible:
-            columns.append(
-              ('weight', self.column_needs[2], _w(_b(self.right), 'content')))
-          else:
-            columns.append(
-              ('weight', self.column_needs[1], _w(_b(self.middle), 'content')))
+        self.hidden = 0
+        widgets = []
+        widgets.extend(self.all_columns)
+        while sum(col.COLUMN_NEEDS for col in widgets) > cols:
+            widgets = widgets[1:]
+            self.hidden += 1
 
-        self.visible_columns = len(columns)
+        # Add our cute fillers, if we have screen real-estate to burn.
+        used = sum(col.COLUMN_NEEDS for col in widgets)
+        if used + self.filler1.COLUMN_NEEDS < cols and (len(widgets) < 2):
+            widgets.append(self.filler1)
+            used += self.filler1.COLUMN_NEEDS
+        if used + self.filler2.COLUMN_NEEDS < cols and (len(widgets) < 3):
+            widgets.append(self.filler2)
+            used += self.filler2.COLUMN_NEEDS
+
+        self.crumbs = []
+        for widget in self.all_columns:
+            if hasattr(widget, 'crumb'):
+                self.crumbs.append(widget.crumb)
+
+        columns = [
+            (c.COLUMN_FIT, c.COLUMN_NEEDS, _w(_b(c), c.COLUMN_STYLE))
+            for c in widgets]
+
         self.columns = urwid.Columns(columns, dividechars=1)
+        self.update_topbar(update=update)
         if update:
             self.contents['body'] = (self.columns, None)
 
     def unhandled_input(self, key):
         if key == 'q':
             raise urwid.ExitMainLoop()
-        if key == 'right':
-            self.swap_visible = not self.swap_visible
-        self.update_columns()
+        elif key == 'x':
+            if len(self.all_columns) > 1:
+                self.remove(self.all_columns[-1])
+        elif key == 'left':
+            if len(self.all_columns) > 1 and self.hidden:
+                self.remove(self.all_columns[-1])
+        else:
+            return key
 
 
 def Main(workdir, sys_args, tui_args, send_args):
