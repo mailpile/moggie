@@ -3,6 +3,7 @@ import datetime
 import json
 import re
 import random
+import sys
 import time
 import urwid
 import traceback
@@ -12,12 +13,17 @@ import websockets.exceptions
 
 from ...config import APPNAME, APPVER
 from ...email.metadata import Metadata
+from ...email.addresses import AddressInfo
 from ...jmap.core import JMAPSessionResource
 from ...jmap.requests import *
 from ...util.rpc import AsyncRPCBridge
 from ...workers.app import AppWorker
 from ..core import test_contexts, test_emails
 from .decorations import palette, ENVELOPES, HELLO, HELLO_CREDITS
+
+
+def dbg(txt):
+    sys.stderr.write(str(txt) + '\n')
 
 
 def _w(w, attr={}, valign='top'):
@@ -46,26 +52,36 @@ class Selectable(urwid.WidgetWrap):
 
 class SplashCat(urwid.Filler):
     COLUMN_NEEDS = 40
+    COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
     def __init__(self):
-        urwid.Filler.__init__(self, urwid.Text(
-            [HELLO, ('subtle', HELLO_CREDITS)], 'center'),
+        urwid.Filler.__init__(self,
+            urwid.Text([HELLO, ('subtle', HELLO_CREDITS)], 'center'),
             valign='middle')
 
 
-class SplashMore(urwid.Filler):
+class SplashMoreWide(urwid.Filler):
     COLUMN_NEEDS = 60
+    COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
+    CONTENT = ENVELOPES + '\n\n\n\n'
     def __init__(self):
-        urwid.Filler.__init__(self, urwid.Text(
-            [ENVELOPES], 'center'),
+        urwid.Filler.__init__(self,
+            urwid.Text([self.CONTENT], 'center'),
             valign='middle')
+
+
+class SplashMoreNarrow(SplashMoreWide):
+    COLUMN_NEEDS = 40
+    COLUMN_WANTS = 40
+    CONTENT = '\n\n\n\n' + ENVELOPES
 
 
 class ContextList(urwid.ListBox):
     COLUMN_NEEDS = 18
+    COLUMN_WANTS = 18
     COLUMN_FIT = 'fixed'
     COLUMN_STYLE = 'sidebar'
 
@@ -184,12 +200,13 @@ class EmailListWalker(urwid.ListWalker):
             return Selectable(cols,
                 on_select=lambda x: self.parent.show_email(self.emails[pos]))
         except:
-            traceback.print_exc()
+            dbg(traceback.format_exc())
         raise IndexError
 
 
 class EmailList(urwid.ListBox):
     COLUMN_NEEDS = 40
+    COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
@@ -239,11 +256,12 @@ class EmailList(urwid.ListBox):
             self.loading = 0
             self.load_more()
         except:
-            traceback.print_exc()
+            dbg(traceback.format_exc())
 
 
 class EmailDisplay(urwid.ListBox):
     COLUMN_NEEDS = 60
+    COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
@@ -255,15 +273,41 @@ class EmailDisplay(urwid.ListBox):
         self.uuid = self.metadata.uuid_asc
         self.crumb = self.parsed.get('subject', 'FIXME')
 
-        self.email_headers = urwid.Text(self.metadata.headers.rstrip() + '\n')
         self.email_body = urwid.Text('(loading...)')
         self.widgets = urwid.SimpleListWalker(
-            [self.email_headers, self.email_body])
+            list(self.headers()) + [self.email_body])
 
         self.search_obj = RequestEmail(self.metadata, text=True)
         self.tui_frame.app_bridge.send_json(self.search_obj)
 
         urwid.ListBox.__init__(self, self.widgets)
+
+    def headers(self):
+        for field in ('Date:', 'To:', 'Cc:', 'From:', 'Subject:'):
+            fkey = field[:-1].lower()
+            if fkey not in self.parsed:
+                continue
+
+            value = self.parsed[fkey]
+            if not isinstance(value, list):
+                value = [value]
+
+            for val in value:
+                if isinstance(val, AddressInfo):
+                    if val.fn:
+                        val = '%s <%s>' % (val.fn, val.address)
+                    else:
+                        val = '<%s>' % val.address
+                else:
+                    val = str(val).strip()
+                if not val:
+                    continue
+                yield urwid.Columns([
+                    ('fixed',  8, urwid.Text(('email_key_'+fkey, field), align='right')),
+                    ('weight', 4, urwid.Text(('email_val_'+fkey, val)))],
+                    dividechars=1)
+                field = ''
+        yield(urwid.Text(''))
 
     def cleanup(self):
         del self.tui_frame
@@ -276,9 +320,12 @@ class EmailDisplay(urwid.ListBox):
         self.email = message['email']
 
         email_text = ''
-        for part in self.email['_PARTS']:
-            if part['content-type'][0] == 'text/plain':
-                email_text += part.get('_TEXT', '')
+        for ctype in ('text/plain', 'text/html'):
+            for part in self.email['_PARTS']:
+                if part['content-type'][0] == ctype:
+                    email_text += part.get('_TEXT', '')
+            if email_text:
+                break
         email_text = re.sub(r'\n\s*\n', '\n\n', email_text, flags=re.DOTALL)
 
         self.email_body = urwid.Text(email_text)
@@ -292,14 +339,15 @@ class TuiFrame(urwid.Frame):
         self.app_bridge = None
 
         self.filler1 = SplashCat()
-        self.filler2 = SplashMore()
+        self.filler2 = SplashMoreWide()
+        self.filler3 = SplashMoreNarrow()
 
         self.hidden = 0
         self.crumbs = []
-        self.columns = self.filler1
+        self.columns = urwid.Columns([self.filler1], dividechars=1)
         self.all_columns = [ContextList(self, test_contexts)]
         self.update_topbar(update=False)
-        self.update_columns(update=False)
+        self.update_columns(update=False, focus=False)
 
         urwid.Frame.__init__(self, self.columns, header=self.topbar)
 
@@ -360,15 +408,20 @@ class TuiFrame(urwid.Frame):
         if update:
             self.contents['header'] = (self.topbar, None)
 
+    def focus_last_column(self):
+        self.columns.set_focus_path([len(self.all_columns) - self.hidden - 1])
+
     def show(self, ref, widget):
         self.remove(ref, ofs=1, update=False)
         self.all_columns.append(widget)
-        self.update_columns()
+        self.update_columns(focus=False)
+        self.focus_last_column()
 
     def replace(self, ref, widget):
         self.remove(ref, update=False)
         self.all_columns.append(widget)
-        self.update_columns()
+        self.update_columns(focus=False)
+        self.focus_last_column()
 
     def remove(self, ref, ofs=0, update=True):
         pos = self.all_columns.index(ref)
@@ -380,14 +433,10 @@ class TuiFrame(urwid.Frame):
             self.all_columns[pos:] = []
             if update:
                 self.update_columns()
+        self.focus_last_column()
 
-    def update_columns(self, update=True):
+    def update_columns(self, update=True, focus=True):
         cols, rows = self.screen.get_cols_rows()
-
-        def _b(w):
-            if hasattr(w, 'rows'):
-                return w
-            return urwid.BoxAdapter(w, rows-2)
 
         self.hidden = 0
         widgets = []
@@ -404,15 +453,22 @@ class TuiFrame(urwid.Frame):
         if used + self.filler2.COLUMN_NEEDS < cols and (len(widgets) < 3):
             widgets.append(self.filler2)
             used += self.filler2.COLUMN_NEEDS
+        if used + self.filler3.COLUMN_NEEDS < cols:
+            widgets.append(self.filler3)
+            used += self.filler3.COLUMN_NEEDS
 
         self.crumbs = []
         for widget in self.all_columns:
             if hasattr(widget, 'crumb'):
                 self.crumbs.append(widget.crumb)
 
-        columns = [
-            (c.COLUMN_FIT, c.COLUMN_NEEDS, _w(_b(c), c.COLUMN_STYLE))
-            for c in widgets]
+        def _b(w):
+            if hasattr(w, 'rows'):
+                widget = _w(w, w.COLUMN_STYLE)
+            else:
+                widget = _w(urwid.BoxAdapter(w, rows-2), w.COLUMN_STYLE)
+            return (w.COLUMN_FIT, w.COLUMN_WANTS, widget)
+        columns = [_b(c) for c in widgets]
 
         self.columns = urwid.Columns(columns, dividechars=1)
         self.update_topbar(update=update)
@@ -428,6 +484,8 @@ class TuiFrame(urwid.Frame):
         elif key == 'left':
             if len(self.all_columns) > 1 and self.hidden:
                 self.remove(self.all_columns[-1])
+        elif key == 'right':
+            self.columns.keypress((0,0), 'enter')
         else:
             return key
 
@@ -445,11 +503,11 @@ def Main(workdir, sys_args, tui_args, send_args):
         app_crypto_status = app_worker.call('rpc/crypto_status')
         app_is_locked = app_crypto_status.get('locked')
 
-        print('APP IS%s LOCKED' % ('' if app_is_locked else ' NOT'))
+        dbg('APP IS%s LOCKED' % ('' if app_is_locked else ' NOT'))
 
         if not app_is_locked:
             jsr = JMAPSessionResource(app_worker.call('rpc/jmap_session'))
-            print(jsr)
+            dbg(jsr)
             # Request list of available JMAP Sessions from the app.
             # Establish a websocket/JMAP connection to each Session.
             # Populate sidebar.

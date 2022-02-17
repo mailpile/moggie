@@ -33,7 +33,7 @@ class AddressInfo(dict):
         lambda s,v: s.__setitem__('keys', v))
 
     def normalized(self, **kwargs):
-        return AddressHeaderParser.normalized_addresses(self, **kwargs)[0]
+        return AddressHeaderParser.normalized_addresses([self], **kwargs)[0]
 
     def __str__(self):
         return self.normalized()
@@ -389,6 +389,10 @@ if __name__ == "__main__":
     import sys
     results = doctest.testmod(optionflags=doctest.ELLIPSIS,
                               extraglobs={})
+
+    ahp = AddressHeaderParser('Bjarni <bre@example.org>')
+    assert(str(ahp[0]) == '"Bjarni" <bre@example.org>')
+
     print('%s' % (results, ))
     if results.failed:
         sys.exit(1)

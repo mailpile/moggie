@@ -62,5 +62,15 @@ def palette(config):
             ('list_attrs',     'dark gray',   'black',     ''),
             ('list_subject',   'light gray',  'black',     ''),
             ('list_date',      'dark gray',   'black',     ''),
+            ('email_key_from', 'dark gray',   'black',     ''),
+            ('email_val_from', 'light blue',  'black',     ''),
+            ('email_key_to',   'dark gray',  'black',     ''),
+            ('email_val_to',   'dark gray',  'black',     ''),
+            ('email_key_cc',   'dark gray',  'black',     ''),
+            ('email_val_cc',   'dark gray',  'black',     ''),
+            ('email_key_date', 'dark gray',  'black',     ''),
+            ('email_val_date', 'dark gray',  'black',     ''),
+            ('email_key_subject', 'dark gray',  'black',     ''),
+            ('email_val_subject', 'light green',  'black',     ''),
             ('focus',          'white',       'dark blue', '')]
 
