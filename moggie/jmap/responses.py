@@ -13,6 +13,7 @@ class ResponseMailbox(dict):
     def __init__(self, request, emails):
         self.update({
             'prototype': 'mailbox',
+            'req_id': request['req_id'],
             'mailbox': request['mailbox'],
             'limit': request['limit'],
             'skip': request['skip'],
@@ -22,6 +23,7 @@ class ResponseMailbox(dict):
 class ResponseEmail(dict):
     def __init__(self, request, parsed_email):
         self.update({
-            'prototype': 'mailbox',
+            'prototype': 'email',
+            'req_id': request['req_id'],
             'metadata': request['metadata'],
             'email': parsed_email})

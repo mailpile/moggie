@@ -1,6 +1,7 @@
 import asyncio
 import datetime
 import json
+import re
 import random
 import time
 import urwid
@@ -30,7 +31,7 @@ class Selectable(urwid.WidgetWrap):
         self._focusable = urwid.AttrMap(self.contents, '', dict(
             ((a, 'focus') for a in [None,
                 'email', 'subtle', 'hotkey', 'active', 'act_hk',
-                'email_from', 'email_attrs', 'email_subject', 'email_date'])))
+                'list_from', 'list_attrs', 'list_subject', 'list_date'])))
         super(Selectable, self).__init__(self._focusable)
 
     def selectable(self):
@@ -175,10 +176,10 @@ class EmailListWalker(urwid.ListWalker):
             dt = datetime.datetime.fromtimestamp(md.get('ts', 0))
             dt = dt.strftime('%Y-%m-%d')
             cols = urwid.Columns([
-              ('weight', 15, urwid.Text(('email_from', frm), wrap='clip')),
-              (6,            urwid.Text(('email_attrs', attrs))),
-              ('weight', 27, urwid.Text(('email_subject', subj), wrap='clip')),
-              (10,           urwid.Text(('email_date', dt)))],
+              ('weight', 15, urwid.Text(('list_from', frm), wrap='clip')),
+              (6,            urwid.Text(('list_attrs', attrs))),
+              ('weight', 27, urwid.Text(('list_subject', subj), wrap='clip')),
+              (10,           urwid.Text(('list_date', dt)))],
               dividechars=1)
             return Selectable(cols,
                 on_select=lambda x: self.parent.show_email(self.emails[pos]))
@@ -206,21 +207,30 @@ class EmailList(urwid.ListBox):
         self.want_more = True
         self.load_more()
 
+    def cleanup(self):
+        del self.tui_frame
+        del self.app_bridge
+        del self.walker.emails
+        del self.walker
+        del self.emails
+        del self.search_obj
+
     def show_email(self, metadata):
-        self.tui_frame.show(self, EmailDisplay(self.tui_frame, metadata, None))
+        self.tui_frame.show(self, EmailDisplay(self.tui_frame, metadata))
 
     def load_more(self):
         now = time.time()
         if (self.loading > now - 5) or not self.want_more:
             return
         self.loading = time.time()
-        self.search_obj['skip'] = len(self.emails)
-        self.search_obj['limit'] = min(max(500, 2*len(self.emails)), 10000)
+        self.search_obj.update({
+            'skip': len(self.emails),
+            'limit': min(max(500, 2*len(self.emails)), 10000)})
         self.app_bridge.send_json(self.search_obj)
 
     def incoming_message(self, message):
         if (message.get('prototype') != self.search_obj['prototype'] or
-                message.get('mailbox') != self.search_obj.get('mailbox')):
+                message.get('req_id') != self.search_obj['req_id']):
             return
         try:
             self.walker.add_emails(message['skip'], message['emails'])
@@ -232,23 +242,47 @@ class EmailList(urwid.ListBox):
             traceback.print_exc()
 
 
-class EmailDisplay(urwid.Filler):
+class EmailDisplay(urwid.ListBox):
     COLUMN_NEEDS = 60
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
-    def __init__(self, tui_frame, metadata, parsed):
+    def __init__(self, tui_frame, metadata, parsed=None):
+        self.tui_frame = tui_frame
         self.metadata = Metadata(*metadata)
         self.parsed = self.metadata.parsed()
         self.email = parsed
+        self.uuid = self.metadata.uuid_asc
         self.crumb = self.parsed.get('subject', 'FIXME')
 
-        urwid.Filler.__init__(self, urwid.Text(
-            [self.parsed.get('subject', 'FIXME')], 'center'),
-            valign='middle')
+        self.email_headers = urwid.Text(self.metadata.headers.rstrip() + '\n')
+        self.email_body = urwid.Text('(loading...)')
+        self.widgets = urwid.SimpleListWalker(
+            [self.email_headers, self.email_body])
+
+        self.search_obj = RequestEmail(self.metadata, text=True)
+        self.tui_frame.app_bridge.send_json(self.search_obj)
+
+        urwid.ListBox.__init__(self, self.widgets)
+
+    def cleanup(self):
+        del self.tui_frame
+        del self.email
 
     def incoming_message(self, message):
-        pass
+        if (message.get('prototype') != self.search_obj['prototype'] or
+                message.get('req_id') != self.search_obj['req_id']):
+            return
+        self.email = message['email']
+
+        email_text = ''
+        for part in self.email['_PARTS']:
+            if part['content-type'][0] == 'text/plain':
+                email_text += part.get('_TEXT', '')
+        email_text = re.sub(r'\n\s*\n', '\n\n', email_text, flags=re.DOTALL)
+
+        self.email_body = urwid.Text(email_text)
+        self.widgets[-1] = self.email_body
 
 
 class TuiFrame(urwid.Frame):
@@ -292,13 +326,6 @@ class TuiFrame(urwid.Frame):
     def show_search_result(self, which):
         self.show(self.all_columns[0], EmailList(self, RequestSearch(which)))
 
-    def show_email(self, metadata):
-        edw = EmailDisplay(self, metadata, None)
-        self.history.append((time.time(), 'right', self.right, edw))
-        self.app_bridge.send_json(RequestEmail(metadata, text=True))
-        self.right = edw
-        self.update_columns()
-
     def max_child_rows(self):
         return self.screen.get_cols_rows()[1] - 2
 
@@ -334,22 +361,25 @@ class TuiFrame(urwid.Frame):
             self.contents['header'] = (self.topbar, None)
 
     def show(self, ref, widget):
-        pos = self.all_columns.index(ref)
-        if pos >= 0:
-            self.all_columns[(pos+1):] = [widget]
-            self.update_columns()
+        self.remove(ref, ofs=1, update=False)
+        self.all_columns.append(widget)
+        self.update_columns()
 
     def replace(self, ref, widget):
-        pos = self.all_columns.index(ref)
-        if pos > 0:
-            self.all_columns[pos:] = [widget]
-            self.update_columns()
+        self.remove(ref, update=False)
+        self.all_columns.append(widget)
+        self.update_columns()
 
-    def remove(self, ref):
+    def remove(self, ref, ofs=0, update=True):
         pos = self.all_columns.index(ref)
         if pos > 0:
+            pos += ofs
+            for widget in self.all_columns[pos:]:
+                if hasattr(widget, 'cleanup'):
+                    widget.cleanup()
             self.all_columns[pos:] = []
-            self.update_columns()
+            if update:
+                self.update_columns()
 
     def update_columns(self, update=True):
         cols, rows = self.screen.get_cols_rows()

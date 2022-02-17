@@ -58,9 +58,9 @@ def palette(config):
             ('header',         'light gray',  'black',     ''),
             ('top_hk',         'brown',       'black',     ''),
             ('subtle',         'dark gray',   'black',     ''),
-            ('email_from',     'light gray',  'black',     ''),
-            ('email_attrs',    'dark gray',   'black',     ''),
-            ('email_subject',  'light gray',  'black',     ''),
-            ('email_date',     'dark gray',   'black',     ''),
+            ('list_from',      'light gray',  'black',     ''),
+            ('list_attrs',     'dark gray',   'black',     ''),
+            ('list_subject',   'light gray',  'black',     ''),
+            ('list_date',      'dark gray',   'black',     ''),
             ('focus',          'white',       'dark blue', '')]
 
