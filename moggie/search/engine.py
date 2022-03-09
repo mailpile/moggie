@@ -213,16 +213,19 @@ class SearchEngine:
         kw_hash_int = struct.unpack('I', kw_hash[:4])[0] % self.config['l2_buckets']
         return kw_hash_int + self.l2_begin
 
-    def _prep_results(self, results, prefer_l1):
+    def _prep_results(self, results, prefer_l1, tag_ns):
         keywords = {}
         hits = []
+        extra_kws = ['in:'] if tag_ns else []
         for (r_id, kw_list) in results:
             if not isinstance(r_id, int):
                 raise ValueError('Results must be integers')
             if r_id > self.maxint:
                 self.maxint = r_id
-            for kw in kw_list:
+            for kw in kw_list + extra_kws:
                 kw = kw.replace('*', '')  # Otherwise partial search breaks..
+                if tag_ns and kw[:3] == 'in:':
+                    kw = '%s@%s' % (kw, tag_ns)
                 keywords[kw] = keywords.get(kw, []) + [r_id]
             if kw_list:
                 hits.append(r_id)
@@ -233,29 +236,37 @@ class SearchEngine:
 
         return kw_idx_list, keywords, hits
 
-    def rename_l1(self, kw, new_kw):
+    def _ns(self, k, ns):
+        if ns and k[:3] == 'in:':
+            return '%s@%s' % (k, ns)
+        return k
+
+    def rename_l1(self, kw, new_kw, tag_namespace=''):
+        kw = self._ns(kw, tag_namespace)
+        new_kw = self._ns(new_kw, tag_namespace)
         kw_pos_idx = self.records.keys[self.records.hash_key(kw)]
         self.records.set_key(new_kw, kw_pos_idx[1])
         self.records.del_key(kw)
 
-    def mutate(self, mset, op_kw_list):
+    def mutate(self, mset, op_kw_list, tag_namespace=''):
         op_idx_kw_list = [
-            (op, self.keyword_index(kw), kw)
+            (op, self.keyword_index(self._ns(kw, tag_namespace)))
             for op, kw in op_kw_list]
 
-        for op, idx, kw in op_idx_kw_list:
+        for op, idx in op_idx_kw_list:
             if idx >= self.l2_begin:
                 raise KeyError('Mutations not supported in l2')
 
         with self.lock:
-            for op, idx, kw in op_idx_kw_list:
+            for op, idx in op_idx_kw_list:
                 iset = self.records[idx]
                 self.records[idx] = op(iset, mset)
 
         return {'mutations': len(op_idx_kw_list)}
 
-    def del_results(self, results):
-        kw_idx_list, keywords, hits = self._prep_results(results, False)
+    def del_results(self, results, tag_namespace=''):
+        (kw_idx_list, keywords, hits
+            ) = self._prep_results(results, False, tag_namespace)
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 if idx < self.l2_begin:
@@ -275,8 +286,9 @@ class SearchEngine:
         # FIXME: Update our wordblob
         return {'keywords': len(keywords), 'hits': hits}
 
-    def add_results(self, results, prefer_l1=False):
-        kw_idx_list, keywords, hits = self._prep_results(results, prefer_l1)
+    def add_results(self, results, prefer_l1=False, tag_namespace=''):
+        (kw_idx_list, keywords, hits
+            ) = self._prep_results(results, prefer_l1, tag_namespace)
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 if idx < self.l2_begin:
@@ -303,18 +315,25 @@ class SearchEngine:
             plb = PostingListBucket(self.records.get(idx) or b'')
             return plb.get(keyword) or IntSet()
 
-    def _search(self, term):
+    def _search(self, term, tag_ns):
         if isinstance(term, tuple):
             op = term[0]
-            return op(*[self._search(t) for t in term[1:]], clone=True)
+            return op(*[self._search(t, tag_ns) for t in term[1:]], clone=True)
 
         if isinstance(term, str):
-            return self[term]
+            if tag_ns and (term[:3] == 'in:'):
+               return self['%s@%s' % (term, tag_ns)]
+            elif term in ('in:', 'all:mail'):
+               term = IntSet.All
+            else:
+               return self[term]
 
         if isinstance(term, list):
-            return IntSet.And(*[self._search(t) for t in term])
+            return IntSet.And(*[self._search(t, tag_ns) for t in term])
 
         if term == IntSet.All:
+            if tag_ns:
+                return self['in:@%s' % tag_ns]
             return IntSet.All(self.maxint + 1)
 
         raise ValueError('Unknown supported search type: %s' % type(term))
@@ -322,7 +341,7 @@ class SearchEngine:
     def explain(self, terms):
         return explain_ops(self.parse_terms(terms, self.magic_map))
 
-    def search(self, terms, mask_deleted=True, explain=False):
+    def search(self, terms, tag_namespace='', mask_deleted=True, explain=False):
         """
         Search for terms in the index, returning an IntSet.
 
@@ -338,13 +357,17 @@ class SearchEngine:
             ops = self.parse_terms(terms, self.magic_map)
         else:
             ops = terms
+        if tag_namespace:
+            # Explicitly search for "all:mail", to avoid returning results
+            # from outside the namespace (which would otherwise happen when
+            # searching without any tags at all).
+            ops = (IntSet.And, IntSet.All, ops)
         with self.lock:
+            rv = self._search(ops, tag_namespace)
             if mask_deleted:
-                rv = IntSet.Sub(self._search(ops), self.deleted)
-            else:
-                rv = self._search(ops)
+                rv = IntSet.Sub(rv, self.deleted)
         if explain:
-            rv = (ops, rv)
+            rv = (tag_namespace, ops, rv)
         return rv
 
     def magic_terms(self, term):
@@ -369,6 +392,7 @@ class SearchEngine:
 
 
 if __name__ == '__main__':
+  try:
     pl = PostingListBucket(b'', compress=128)
     pl.add('hello', 1, 2, 3, 4)
     assert(isinstance(pl.get('hello'), IntSet))
@@ -398,22 +422,33 @@ if __name__ == '__main__':
     se.add_results([
         (4, ['in:inbox', 'in:testing', 'in:bjarni'])],
         prefer_l1=True)
+    se.add_results([
+        (5, ['in:inbox', 'please'])],
+        tag_namespace='work')
 
     se.deleted |= 0
-    assert(list(se.search(IntSet.All)) == [1, 2, 3, 4])
+    assert(list(se.search(IntSet.All)) == [1, 2, 3, 4, 5])
 
     assert(3 in se.search('please'))
+    assert(5 in se.search('please'))
+    assert(5 in se.search('please', tag_namespace='work'))
+    assert(3 not in se.search('please', tag_namespace='work'))
+
     assert(3 in se.search('remove'))
     se.del_results([(3, ['please'])])
     assert(3 not in se.search('please'))
     assert(3 in se.search('remove'))
 
+    assert(5 in se.search('in:inbox', tag_namespace='work'))
+    assert(5 in se.search('all:mail', tag_namespace='work'))
+    assert(4 not in se.search('all:mail', tag_namespace='work'))
     assert(3 not in se.search('in:inbox'))
     assert(4 in se.search('in:testing'))
     se.mutate(IntSet([4, 3]), [(IntSet.Sub, 'in:testing'), (IntSet.Or, 'in:inbox')])
     assert(4 not in se.search('in:testing'))
     assert(3 in se.search('in:inbox'))
     assert(4 in se.search('in:inbox'))
+    assert(4 not in se.search('in:inbox', tag_namespace='work'))
     se.rename_l1('in:inbox', 'in:outbox')
     assert(4 in se.search('in:outbox'))
     assert(4 not in se.search('in:inbox'))
@@ -463,6 +498,7 @@ if __name__ == '__main__':
         se.records.compact()
         print('Tests pass OK (%d/2)' % (round+1,))
 
-    import time
-    time.sleep(10)
+    #import time
+    #time.sleep(10)
+  finally:
     se.delete_everything(True, False, True)
