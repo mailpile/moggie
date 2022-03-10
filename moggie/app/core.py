@@ -15,46 +15,6 @@ from ..jmap.requests import *
 from ..jmap.responses import *
 
 
-from ..email.metadata import Metadata
-std_tags = [[
-        {'sc':'i', 'name': 'INBOX',    'count': 10},
-        {'sc':'c', 'name': 'Calendar', 'count': 1},
-        {'sc':'p', 'name': 'People',   'count': 2},
-    ],[
-        {'sc':'a', 'name': 'All Mail', 'count': 2},
-        {'sc':'d', 'name': 'Drafts',   'count': 1},
-        {'sc':'o', 'name': 'Outbox',   'count': 1},
-        {'sc':'s', 'name': 'Sent',     'count': 3},
-        {'sc':'j', 'name': 'Spam',     'count': 2},
-        {'sc':'t', 'name': 'Trash',    'count': 1}]]
-test_contexts = [{
-        'name': 'Local mail',
-        'emails': [],
-        'tags': std_tags}]
-unused = [{
-        'name': 'Personal',
-        'emails': ['bre@klaki.net', 'bjarni.runar@gmail.com'],
-        'tags': std_tags
-    },{
-        'name': 'PageKite',
-        'emails': ['bre@pagekite.net', 'ehf@beanstalks-project.net'],
-        'tags': std_tags
-    },{
-        'name': 'PageKite Support',
-        'emails': ['info@pagekite.net', 'help@pagekite.net'],
-        'tags': std_tags
-    },{
-        'name': 'Mailpile',
-        'emails': ['bre@mailpile.is'],
-        'tags': std_tags}]
-raw_msg = b'''\
-Date: Wed, 1 Sep 2021 00:03:01 GMT
-From: Bjarni <bre@example.org>
-To: "Some One" <someone@example.org>
-Subject: Hello world'''
-test_emails = [[0, [[0, b'/tmp/foo.mbx', 0]], 0, 0, raw_msg]] * 10
-
-
 async def async_run_in_thread(method, *m_args, **m_kwargs):
     def runner(l, q):
         l.call_soon_threadsafe(q.put_nowait, method(*m_args, **m_kwargs))
@@ -76,8 +36,8 @@ class AppSessionResource(JMAPSessionResource):
         if access.username:
             self.username = access.username
         accounts = {}
-        for profile, role in access.roles.items():
-            accounts[profile] = {}  #FIXME: Present profile as JMAP
+        for context, role in access.roles.items():
+            accounts[context] = {}  #FIXME: Present context as JMAP
         self.accounts = accounts
 
 
@@ -143,6 +103,40 @@ class AppCore:
 
     # Public API
 
+    async def api_jmap_mailbox(self, access, jmap_request):
+        info = await async_run_in_thread(self.storage.mailbox,
+            jmap_request['mailbox'],
+            limit=jmap_request['limit'],
+            skip=jmap_request['skip'])
+        watched = False
+        return ResponseMailbox(jmap_request, info, watched)
+
+    async def api_jmap_search(self, access, jmap_request):
+        # FIXME: Actually search! Async, in a thread, gathering the
+        #        metadata may take time.
+        return ResponseSearch(jmap_request, [])
+
+    async def api_jmap_counts(self, access, jmap_request):
+        # FIXME: Actually search/count! Async, in a thread, gathering the
+        #        results may take time.
+        return ResponseCounts(jmap_request, {})
+
+    async def api_jmap_email(self, access, jmap_request):
+        # FIXME: Does this user have access to this email?
+        #        How will that be determined? Probably a token that
+        #        comes from viewing a search result or mailbox?
+        #        Seems we should decide that before making any efforts
+        info = await async_run_in_thread(self.storage.email,
+            jmap_request['metadata'],
+            text=jmap_request.get('text', False),
+            data=jmap_request.get('data', False))
+        return ResponseEmail(jmap_request, info)
+
+    async def api_jmap_contexts(self, access, jmap_request):
+        all_contexts = self.config.contexts
+        contexts = [all_contexts[k].as_dict() for k in sorted(access.roles)]
+        return ResponseContexts(jmap_request, contexts)
+
     async def api_jmap(self, access, client_request):
         # The JMAP API sends multiple requests in a blob, and wants some magic
         # interpolation as well. Where do we implement that? Is there a lib we
@@ -160,29 +154,30 @@ class AppCore:
             return {'code': 500}
 
         # FIXME: This is a hack
-
+        result = None
         if type(jmap_request) == RequestMailbox:
-            info = await async_run_in_thread(self.storage.mailbox,
-                jmap_request['mailbox'],
-                limit=jmap_request['limit'],
-                skip=jmap_request['skip'])
-            result = json.dumps(ResponseMailbox(jmap_request, info), indent=2)
-
+            result = await self.api_jmap_mailbox(access, jmap_request)
+        elif type(jmap_request) == RequestSearch:
+            result = await self.api_jmap_search(access, jmap_request)
+        elif type(jmap_request) == RequestCounts:
+            result = await self.api_jmap_counts(access, jmap_request)
         elif type(jmap_request) == RequestEmail:
-            info = await async_run_in_thread(self.storage.email,
-                jmap_request['metadata'],
-                text=jmap_request.get('text', False),
-                data=jmap_request.get('data', False))
-            result = json.dumps(ResponseEmail(jmap_request, info), indent=2)
-
+            result = await self.api_jmap_email(access, jmap_request)
+        elif type(jmap_request) == RequestContexts:
+            result = await self.api_jmap_contexts(access, jmap_request)
         elif type(jmap_request) == RequestPing:
-            result = json.dumps(ResponsePing(jmap_request))
+            result = ResponsePing(jmap_request)
 
+        if result is not None:
+            code, result = 200, json.dumps(result, indent=2)
+            if type(jmap_request) != RequestPing:
+                print('<< %s' % result[:1024])
         else:
+            code = 400
             result = json.dumps({'error': 'Unknown %s' % type(jmap_request)})
 
         return {
-            'code': 200,
+            'code': code,
             'mimetype': 'application/json',
             'body': bytes(result, 'utf-8')}
 

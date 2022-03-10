@@ -27,17 +27,28 @@ class RequestPing(RequestBase):
 
 
 class RequestSearch(RequestBase):
-    def __init__(self, terms='', req_id=None):
+    def __init__(self, context='', terms='', req_id=None):
         self.update({
             'prototype': 'search',
+            'context': context,
             'terms': terms
         }, req_id=req_id)
 
 
+class RequestCounts(RequestBase):
+    def __init__(self, context='', terms='', req_id=None):
+        self.update({
+            'prototype': 'counts',
+            'context': context,
+            'terms_list': terms_list
+        }, req_id=req_id)
+
+
 class RequestMailbox(RequestBase):
-    def __init__(self, mailbox='', limit=50, skip=0, req_id=None):
+    def __init__(self, context='', mailbox='', limit=50, skip=0, req_id=None):
         self.update({
             'prototype': 'mailbox',
+            'context': context,
             'mailbox': mailbox,
             'limit': limit,
             'skip': skip
@@ -54,20 +65,22 @@ class RequestEmail(RequestBase):
         }, req_id=req_id)
 
 
-class RequestTag(RequestBase):
-    def __init__(self, tagname='', req_id=None):
+class RequestContexts(RequestBase):
+    def __init__(self, req_id=None):
         self.update({
-            'prototype': 'search',
-            'terms': 'in:%s' % tagname
+            'prototype': 'contexts',
+            # FIXME
         }, req_id=req_id)
- 
+
 
 def to_jmap_request(_input):
     cls = {
          'ping': RequestPing,
          'email': RequestEmail,
+         'counts': RequestCounts,
          'search': RequestSearch,
          'mailbox': RequestMailbox,
+         'contexts': RequestContexts,
          }.get(_input.get('prototype', ''))
     if cls:
         obj = cls()

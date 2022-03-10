@@ -10,14 +10,37 @@ class ResponsePing(dict):
 
 
 class ResponseMailbox(dict):
-    def __init__(self, request, emails):
+    def __init__(self, request, emails, watched):
         self.update({
             'prototype': 'mailbox',
             'req_id': request['req_id'],
+            'context': request['context'],
             'mailbox': request['mailbox'],
             'limit': request['limit'],
             'skip': request['skip'],
+            'watched': watched,
             'emails': emails})
+
+
+class ResponseSearch(dict):
+    def __init__(self, request, emails):
+        self.update({
+            'prototype': 'search',
+            'req_id': request['req_id'],
+            'context': request['context'],
+            'terms': request['terms'],
+            'limit': request['limit'],
+            'skip': request['skip'],
+            'emails': emails})
+
+
+class ResponseCounts(dict):
+    def __init__(self, request, counts):
+        self.update({
+            'prototype': 'counts',
+            'req_id': request['req_id'],
+            'context': request['context'],
+            'counts':counts})
 
 
 class ResponseEmail(dict):
@@ -27,3 +50,12 @@ class ResponseEmail(dict):
             'req_id': request['req_id'],
             'metadata': request['metadata'],
             'email': parsed_email})
+
+
+class ResponseContexts(dict):
+    def __init__(self, request, contexts):
+        self.update({
+            'prototype': 'contexts',
+            'req_id': request['req_id'],
+            'contexts': contexts})
+
