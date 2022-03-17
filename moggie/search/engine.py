@@ -115,10 +115,11 @@ class SearchEngine:
     IDX_MAX_RESERVED = 100
 
     def __init__(self, workdir,
-            name='search', encryption_key=None, defaults=None, maxint=0):
+            name='search', encryption_keys=None, defaults=None, maxint=0):
 
         self.records = RecordStore(os.path.join(workdir, name), name,
-            aes_key=encryption_key or b'',
+            salt=None, # FIXME: This must be set, OR ELSE
+            aes_keys=encryption_keys or None,
             compress=64,
             sparse=True,
             est_rec_size=128,
@@ -409,11 +410,12 @@ if __name__ == '__main__':
     # Create a mini search engine...
     def mk_se():
         k = b'1234123412349999'
-        return SearchEngine('/tmp', name='se-test', encryption_key=k, defaults={
-            'partial_list_len': 20,
-            'partial_shortest': 4,
-            'partial_longest': 8,  # Will exclude hellscape from partial set
-            'l2_buckets': 10240})
+        return SearchEngine('/tmp',
+            name='se-test', encryption_keys=[k], defaults={
+                'partial_list_len': 20,
+                'partial_shortest': 4,
+                'partial_longest': 8,  # excludes hellscape from partial set
+                'l2_buckets': 10240})
     se = mk_se()
     se.add_results([
         (1, ['hello', 'hell', 'hellscape', 'hellyeah', 'world', 'hooray']),

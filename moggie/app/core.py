@@ -6,7 +6,6 @@ import time
 
 from ..config import AppConfig
 from ..storage.files import FileStorage
-from ..storage.metadata import MetadataStore
 from ..workers.importer import ImportWorker
 from ..workers.storage import StorageWorker
 from ..workers.search import SearchWorker
@@ -48,13 +47,11 @@ class AppCore:
 
         self.worker = app_worker
         self.config = AppConfig(self.work_dir)
-        self.metadata = None
 
         self.rpc_functions = {
             b'rpc/jmap_session':      (True, self.rpc_session_resource),
             b'rpc/crypto_status':     (True, self.rpc_crypto_status),
-            b'rpc/get_access_token':  (True, self.rpc_get_access_token),
-            b'rpc/register_metadata': (True, self.rpc_register_metadata)}
+            b'rpc/get_access_token':  (True, self.rpc_get_access_token)}
 
         self.jmap = {
             'session': self.api_jmap_session}
@@ -62,13 +59,15 @@ class AppCore:
     # Lifecycle
 
     def start_workers(self):
-        self.email_accounts = {}
         self.storage = StorageWorker(self.worker.worker_dir,
             FileStorage(relative_to=os.path.expanduser('~')),
             name='fs').connect()
+
         self.search = SearchWorker(self.worker.worker_dir,
-            '/tmp', b'FIXME', len(self.metadata),
+            self.worker.profile_dir,
+            self.config.get_aes_keys(),
             name='search').connect()
+
         self.importer = ImportWorker(self.worker.worker_dir,
             name='importer').connect()
 
@@ -88,13 +87,7 @@ class AppCore:
                     pass
             time.sleep(0.1)
 
-    def load_metadata(self):
-        self.metadata = MetadataStore(
-            os.path.join(self.worker.profile_dir, 'metadata'), 'metadata',
-            aes_key=b'bogus AES key')  # FIXME
-
     def startup_tasks(self):
-        self.load_metadata()
         self.start_workers()
 
     def shutdown_tasks(self):

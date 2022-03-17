@@ -5,6 +5,7 @@ import time
 import os
 import re
 import struct
+import traceback
 
 from mmap import mmap, ACCESS_READ, ACCESS_WRITE
 
@@ -33,17 +34,14 @@ class RecordFile:
     def __init__(self, path, file_id, chunk_records,
             compress=False,
             padding=16,
-            aes_key=None,
+            aes_keys=None,
             create=False):
 
-        # FIXME: Make it possible to supply multiple AES keys, and use the
-        #        prefix check to figure out which one works. This will make
-        #        key rotation easier.
-
+        first_aes_key = aes_keys[0] if aes_keys else None
         self.file_id = file_id
         fid = (file_id.encode('utf-8') if isinstance(file_id, str) else file_id)
         self.prefix = b'RecordFile: %s, cr=%d, encrypted=%s\r\n\r\n' % (
-            fid, chunk_records, encryption_id(fid, aes_key))
+            fid, chunk_records, encryption_id(fid, first_aes_key))
 
         self.chunk_records = chunk_records
         self.int_size = len(struct.pack('I', 0))
@@ -53,13 +51,15 @@ class RecordFile:
         self.compress = compress
         self.padding = b' ' * padding
 
-        # We derive our AES key from the key provided, instead of using
-        # it directly. This reduces the odds of collisions (IV reuse etc.)
+        # We derive our AES key(s) from those provided, instead of using
+        # directly. This reduces the odds of collisions (IV reuse etc.)
         # between different storage files using the same master key.
-        self.aes_key = aes_key
-        if aes_key is not None:
-            self.aes_key = make_aes_key(self.prefix, aes_key)
+        self.aes_keys = None
+        self.aes_key = None
         self.aes_ctr = 0
+        if aes_keys and aes_keys[0] is not None:
+            self.aes_keys = [make_aes_key(self.prefix, k) for k in aes_keys]
+            self.aes_key = self.aes_keys[-1]
 
         self.path = path
         if not os.path.exists(path):
@@ -130,13 +130,23 @@ class RecordFile:
         # FIXME: Overwrite actual data with zeros? Probably yes.
 
     def make_aes_iv(self):
-        # Note: The counter is mostly there to protect us from clock jumps.
+        # Notes:
+        #  - The counter is mostly there to protect us from clock jumps.
+        #  - Recording the length of self.aes_keys gives a hint about which
+        #    key to later use for decrypting this record.
         self.aes_ctr += 1
         self.aes_ctr %= 0x100000000
         t0 = time.time()
         t1 = int(t0 * 0x000000001) % 0x100000000
         t2 = int(t0 * 0x100000000) % 0x100000000
-        return struct.pack('IIII', self.aes_ctr, t1, t2, self.aes_ctr)
+        return struct.pack('IIII', self.aes_ctr, t1, t2, len(self.aes_keys))
+
+    def iv_to_key(self, iv):
+        try:
+            ints = struct.unpack('IIII', iv)
+            return self.aes_keys[ints[-1] - 1]
+        except IndexError:
+            return self.aes_key
 
     def length(self, idx):
         if not (0 <= idx < self.chunk_records):
@@ -156,7 +166,9 @@ class RecordFile:
         end = beg + self.length(idx)
         if decode:
             aes_key = aes_key if (aes_key is not None) else self.aes_key
-            return dumb_decode(self.safe_mmap(end)[beg:end], aes_key=aes_key)
+            return dumb_decode(
+                self.safe_mmap(end)[beg:end],
+                iv_to_aes_key=self.iv_to_key)
         else:
             return bytes(self.safe_mmap(end)[beg:end])
 
@@ -262,7 +274,7 @@ class RecordFile:
         compacted = RecordFile(tempfile, self.file_id, self.chunk_records,
             compress=self.compress,
             padding=len(self.padding) if (padding is None) else padding,
-            aes_key=new_aes_key,
+            aes_keys=[new_aes_key],
             create=True)
         for i in range(0, self.chunk_records):
             if i in self:
@@ -281,36 +293,38 @@ class RecordFile:
 
 class RecordStoreReadOnly:
     def __init__(self, workdir, store_id,
-            salt=b'',
+            salt=None,
             compress=None,
             hashfunc=salted_encoding_sha256,
             sparse=False,
-            aes_key=None,
+            aes_keys=None,
             est_rec_size=1024,
             target_file_size=50*1024*1024):
 
-        self.salt = salt or b'Symbolic Showmanship'
-        if (aes_key and (salt == aes_key)):
-            print(
-                'WARNING: %s: salt and AES key are the same, cannot rekey!'
-                % self)
+        first_aes_key = aes_keys[0] if aes_keys else None
 
         self.store_id = store_id
+        self.salt = salt or first_aes_key or b'Symbolic Showmanship'
+
         sid = (store_id.encode('utf-8') if isinstance(store_id, str) else store_id)
         self.prefix = (b'RecordStore: %s, encrypted=%s, ers=%d, tfs=%d\r\n\r\n'
-            % (sid, encryption_id(sid + self.salt, aes_key),
+            % (sid, encryption_id(sid + self.salt, first_aes_key),
                est_rec_size, target_file_size))
 
         self.workdir = workdir
         if not os.path.exists(workdir):
             os.mkdir(workdir, 0o700)
 
-        # Derive a new key, so we don't keep the master key sitting around.
-        self.aes_key = make_aes_key(self.prefix, aes_key) if aes_key else None
+        # Derive new keys, so we don't keep the masters sitting around.
+        self.aes_keys = []
+        self.aes_key = None
+        if aes_keys and aes_keys[0]:
+            self.aes_keys = [make_aes_key(self.prefix, k) for k in aes_keys]
+            self.aes_key = self.aes_keys[-1]
         self.hashfunc = hashfunc
 
         self.int_size = len(struct.pack('I', 0))
-        self.hash_size = len(self.hashfunc(salt, 'testing'))
+        self.hash_size = len(self.hashfunc(self.salt, 'testing'))
         self.hash_zero = b'\0' * self.hash_size
         self.chunk_records = 1000 * (target_file_size // (1000*est_rec_size))
         self.chunks = {}
@@ -406,7 +420,7 @@ class RecordStoreReadOnly:
                 ('RecordStore(%s), chunk %d' % (self.store_id, chunk)),
                 self.chunk_records,
                 compress=self.compress,
-                aes_key=self.aes_key,
+                aes_keys=self.aes_keys,
                 create=create)
 
         idx %= self.chunk_records
@@ -430,7 +444,8 @@ class RecordStoreReadOnly:
     def get(self, key, decode=True, default=None, aes_key=None):
         try:
             (idx, chunk) = self.get_chunk(self.key_to_index(key))
-            return chunk.get(idx, default=default, decode=decode, aes_key=aes_key)
+            return chunk.get(idx,
+                default=default, decode=decode, aes_key=aes_key)
         except KeyError:
             return default
 
@@ -544,18 +559,19 @@ class RecordStore(RecordStoreReadOnly):
 
 if __name__ == "__main__":
     test_key = b'1234123412341234'
+    test_key2 = b'4321123443211234'
 
     cleaner = RecordStore('/tmp/rs-test', 'testing')
     cleaner.delete_everything(True, False, True)
     del cleaner
 
     rs = RecordStore('/tmp/rs-test', 'testing',
-        aes_key=test_key, target_file_size=10240000)
+        aes_keys=[test_key], target_file_size=10240000)
     if os.path.exists('/tmp/rs-test/testing'):
         os.remove('/tmp/rs-test/testing')
     assert(len(rs) == 0)
 
-    rf = RecordFile('/tmp/rs-test/testing.tmp', 'test', 128, create=True)
+    rf = RecordFile('/tmp/rs-test/testing', 'test', 128, create=True)
     assert(rf.int_size == 4)
     assert(len(rf) == 0)
     rf[0] = 'hello1'
@@ -603,7 +619,7 @@ if __name__ == "__main__":
     assert(rs[2] == 'ohai')
 
     import random
-    load = 25000
+    load = 10000
     t0 = time.time()
     for i in range(0, load):
         rs.append(i, keys=('%d' % i))
@@ -625,7 +641,7 @@ if __name__ == "__main__":
     t4 = time.time()
 
     rs2 = RecordStoreReadOnly('/tmp/rs-test', 'testing',
-        aes_key=test_key, target_file_size=10240000)
+        aes_keys=[test_key, test_key2], target_file_size=10240000)
     assert(rs2['hello'] == 'world')
     rs['synctest'] = 'out of sync'
     assert('synctest' not in rs2)
@@ -638,12 +654,17 @@ if __name__ == "__main__":
         # Make sure that if we get the parameters wrong, we don't
         # just go reading/writing corrupt data.
         rs3 = RecordStoreReadOnly('/tmp/rs-test', 'testing',
-            aes_key=test_key, target_file_size=10240001)
+            aes_keys=[test_key, test_key2], target_file_size=10240001)
         assert(not 'reached')
     except ConfigMismatch:
         pass
 
-    rs.delete_everything(True, False, True)
+    if True:
+        rs.delete_everything(True, False, True)
+        for fn in ('/tmp/rs-test/testing', '/tmp/rs-test/testing.old'):
+            if os.path.exists(fn):
+                os.remove(fn)
+        os.rmdir('/tmp/rs-test')
 
     print(('OK, '
           '%d appends/upd/key-reads/reads in %.2f/%.2f/%.2f/%.2f secs'

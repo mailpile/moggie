@@ -90,25 +90,21 @@ class MetadataStore(RecordStore):
     # Dividing by 30 lets us not care about 32-bit timestamp rollover
     TS_RESOLUTION = 30
 
-    def __init__(self, workdir, store_id, aes_key):
+    def __init__(self, workdir, store_id, aes_keys):
         super().__init__(workdir, store_id,
             sparse=True,
             compress=400,
-            aes_key=aes_key,
+            aes_keys=aes_keys,
             est_rec_size=400,
             target_file_size=64*1024*1024)
 
         self.thread_cache = {}
 
         if 0 not in self:
-            self[0] = self.ghost('<internal-ghost-zero@moggie>')
+            self[0] = Metadata.ghost('<internal-ghost-zero@moggie>')
         self.rank_by_date = IntColumn(os.path.join(workdir, 'timestamps'))
         self.thread_ids = IntColumn(os.path.join(workdir, 'threads'))
         self.mtimes = IntColumn(os.path.join(workdir, 'mtimes'))
-
-    def ghost(self, msgid, more=None):
-        msgid = msgid if isinstance(msgid, bytes) else bytes(msgid, 'latin-1')
-        return Metadata(0, '', 0, 0, 0, b'Message-Id: %s' % msgid, more=more)
 
     def delete_everything(self, *args):
         super().delete_everything(*args)
@@ -135,7 +131,8 @@ class MetadataStore(RecordStore):
                 pidx = self.key_to_index(in_reply_to)
                 return self.thread_ids[pidx]
             except KeyError:
-                pidx = self.append(self.ghost(in_reply_to, {'missing': True}),
+                pidx = self.append(
+                    Metadata.ghost(in_reply_to, {'missing': True}),
                     keys=[in_reply_to])
                 return self.thread_ids[pidx]
 #
@@ -174,10 +171,21 @@ class MetadataStore(RecordStore):
         return idx
 
     def update_or_add(self, metadata):
+        """
+        This will add metadata to the index, or if metadata is already
+        present, update it with new values. Old key/value pairs and old
+        pointers are preserved on update, other values get overwritten.
+        """
         msgid = metadata.get_raw_header('Message-Id')
         if msgid is None:
             return self.append(metadata, keys=[])
         else:
+            if msgid in self:
+                om = self[msgid]
+                metadata.add_pointers(om.pointers)
+                for k, v in om.more.items():
+                    if k not in metadata.more:
+                        metadata.more[k] = v
             return self.set(msgid, metadata)
 
     def add_if_new(self, metadata):
@@ -201,7 +209,7 @@ class MetadataStore(RecordStore):
         idx = self.key_to_index(key)
         m = Metadata(*(super().get(idx, **kwargs)))
         if m is not None:
-            m.idx = idx
+            m[m.OFS_IDX] = idx
             m.thread_id = self.thread_ids[idx]
             m.mtime = self.TS_RESOLUTION * self.mtimes[idx]
         return m
@@ -209,7 +217,7 @@ class MetadataStore(RecordStore):
     def __getitem__(self, key, **kwargs):
         idx = self.key_to_index(key)
         m = Metadata(*(super().__getitem__(idx, **kwargs)))
-        m.idx = idx
+        m[m.OFS_IDX] = idx
         m.thread_id = self.thread_ids[idx]
         m.mtime = self.TS_RESOLUTION * self.mtimes[idx]
         return m
@@ -241,31 +249,31 @@ class MetadataStore(RecordStore):
 
 
 if __name__ == '__main__':
-    import random
+    import random, sys
 
-    ms = MetadataStore('/home/bre/tmp/metadata-test', 'metadata-test', b'123456789abcdef0')
+    ms = MetadataStore('/home/bre/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
     ms.delete_everything(True, False, True)
 
     from .files import FileStorage
     fs = FileStorage(relative_to=b'/home/bre')
-    ms = MetadataStore('/home/bre/tmp/metadata-test', 'metadata-test', b'123456789abcdef0')
+    ms = MetadataStore('/home/bre/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
     t0 = time.time()
     tcount = count = 0
-    stop = 400000
+    stop = 400000 if len(sys.argv) < 2 else int(sys.argv[1])
     for dn in fs.info(b'b/home/bre/Mail', details=True)['contents']:
       if tcount > stop:
         break
       for fn in fs.info(dn, details=True).get('contents', []):
         count = 0
-        for msg in fs.info(fn, parse=True, details=True).get('emails', []):
+        for msg in fs.parse_mailbox(fn):
           ms.update_or_add(msg)
           count += 1
         if count:
           tcount += count
-          count = 0
           t1 = time.time()
-          print(' * Added %d messages to index in %.2fs (%d/s), %s'
-              % (tcount, t1-t0, tcount / (t1-t0), fn))
+          print(' * Added %d / %d messages to index in %.2fs (%d/s), %s'
+              % (count, tcount, t1-t0, tcount / (t1-t0), fn))
+          count = 0
           if tcount > stop:
             break
 
@@ -280,9 +288,9 @@ if __name__ == '__main__':
     t2 = time.time()
     print(' * Navigated thread in %.4fs (%.4f, %.4f)' % (t2-t0, t1-t0, t2-t1))
 
-    ms = MetadataStore('/tmp/metadata-test', 'metadata-test', b'123456789abcdef0')
+    ms = MetadataStore('/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
     ms.delete_everything(True, False, True)
-    ms = MetadataStore('/tmp/metadata-test', 'metadata-test', b'123456789abcdef0')
+    ms = MetadataStore('/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
     assert(os.path.exists('/tmp/metadata-test/timestamps'))
     try:
         ms['hello'] = 'world'
@@ -297,15 +305,19 @@ From: root@example.org (Cron Daemon)
 To: bre@example.org
 Subject: Sure, sure
 """
-    i1 = ms.update_or_add(Metadata(int(time.time()), '/tmp/foo', 0, 0, 0, headers))
-    ms.append(Metadata(int(time.time()), '/tmp/foo', 0, 0, 0, b'From: bre@klai.net'))
-    ms.append(Metadata(int(time.time()), '/tmp/foo', 0, 0, 0, b'From: bre@klai.net'))
-    ms[100000] = Metadata(int(time.time()), '/tmp/foo', 0, 0, 0, b'From: bre@klai.net')
+    foo_ptr = Metadata.PTR(0, b'/tmp/foo', 0)
+    i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, 0, 0, headers, {'thing': 'stuff', 'a': 'b'}))
+    i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, 0, 0, headers, {'wink': 123, 'a': 'c'}))
+    ms.append(Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net'))
+    ms.append(Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net'))
+    ms[100000] = Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net')
     t1M = int(time.time() + 100)
-    ms[1000000] = Metadata(t1M, '/tmp/foo', 0, 0, 0, b'From: bre@klai.net')
+    ms[1000000] = Metadata(t1M, 0, foo_ptr, 0, 0, b'From: bre@klai.net')
 
-    time.sleep(30)
-
+    assert(i1 == i2)
+    assert(ms[i1].more['thing'] == 'stuff')
+    assert(ms[i1].more['wink'] == 123)
+    assert(ms[i1].more['a'] == 'c')
     assert('<202109010003.181031O6020234@example.org>' in ms)
     assert('<202109010003.181031O6020234@example.com>' not in ms)
     assert(ms.rank_by_date[1000000] == (t1M // 30))

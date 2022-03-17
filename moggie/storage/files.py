@@ -173,7 +173,7 @@ class FileStorage(BaseStorage):
         # Extract basic metadata. If we fail to find a plausible timestamp,
         # try harder and then make one up that seems plausible, based on the
         # assumption that messages are in chronological order in the mailbox.
-        md = Metadata(0, *args)
+        md = Metadata(0, 0, *args)
         if md.timestamp and (md.timestamp > lts/2) and (md.timestamp < now):
             return (max(lts, md.timestamp), md)
 
@@ -230,7 +230,7 @@ class FileStorage(BaseStorage):
                 yield(md)
 
             beg = end+1
-        except ValueError:
+        except (ValueError, TypeError):
             return
 
     def parse_maildir(self, key, skip=0):
@@ -262,7 +262,7 @@ class FileStorage(BaseStorage):
                                           self.relpath(fn), 0)],
                             hend, end, hdrs)
                         yield(md)
-                    except ValueError:
+                    except (ValueError, TypeError):
                         pass
 
     def message(self, metadata, with_ptr=False):

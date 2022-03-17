@@ -4,8 +4,8 @@ from configparser import ConfigParser, NoOptionError, _UNSET
 class ListItemProxy(list):
     def __init__(self, ac, section, item):
         super().__init__()
-        self._ac = ac
-        self._section = section
+        self._config = ac
+        self._key = section
         self._item = item
         try:
             items = ac.get(section, item).split(',')
@@ -13,12 +13,13 @@ class ListItemProxy(list):
         except (TypeError, AttributeError, KeyError, NoOptionError):
             pass
 
-    config_section = property(lambda s: s._section)
+    config = property(lambda s: s._config)
+    config_key = property(lambda s: s._key)
 
     def _write_back(self):
-        if self._ac is not None:
+        if self._config is not None:
             list_str = ', '.join(str(i) for i in self)
-            self._ac.set(self._section, self._item, list_str)
+            self._config.set(self._key, self._item, list_str)
 
     def _validate(self, val):
         val = str(val)
@@ -50,8 +51,8 @@ class ListItemProxy(list):
 class DictItemProxy(dict):
     def __init__(self, ac, section, item):
         super().__init__()
-        self._ac = ac
-        self._section = section
+        self._config = ac
+        self._key = section
         self._item = item
         try:
             pairs = ac.get(section, item).split(',')
@@ -59,12 +60,12 @@ class DictItemProxy(dict):
         except (TypeError, AttributeError, KeyError, ValueError, NoOptionError):
             pass
 
-    config_section = property(lambda s: s._section)
+    config_key = property(lambda s: s._key)
 
     def _write_back(self):
-        if self._ac is not None:
+        if self._config is not None:
             dict_str = ', '.join('%s:%s' % (k, v) for k, v in self.items())
-            self._ac.set(self._section, self._item, dict_str)
+            self._config.set(self._key, self._item, dict_str)
 
     def _validate(self, key, val):
         val = str(val)
@@ -91,20 +92,21 @@ class ConfigSectionProxy:
     _KEYS = {}
 
     def __init__(self, ac, section):
-        self._ac = ac
-        self._section = section
+        self._config = ac
+        self._key = section
 
-    config_section = property(lambda s: s._section)
+    config = property(lambda s: s._config)
+    config_key = property(lambda s: s._key)
 
     def __contains__(self, attr):
-        return (attr in self._ac[self._section])
+        return (attr in self._config[self._key])
 
     def __getattr__(self, attr):
         if attr[:1] == '_':
             return object.__getattribute__(self, attr)
         if attr in self._KEYS:
             try:
-                return self._KEYS[attr](self._ac.get(self._section, attr))
+                return self._KEYS[attr](self._config.get(self._key, attr))
             except NoOptionError:
                 return None
         else:
@@ -116,8 +118,13 @@ class ConfigSectionProxy:
         if attr in self._KEYS:
             if val is not None:
                 val = str(val)
-            return self._ac.set(self._section, attr, val)
+            return self._config.set(self._key, attr, val)
         raise KeyError(attr)
 
     def magic_test(self):
         return 'magic'
+
+    def as_dict(self):
+        return dict(
+            (key, self.__getattr__(key))
+            for key in self._KEYS if key in self)

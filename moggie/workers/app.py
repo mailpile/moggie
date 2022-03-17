@@ -137,8 +137,8 @@ class AppWorker(PublicWorker):
         self.sessions = {}
         self.auth_token = None
 
-    def connect(self):
-        conn = super().connect()
+    def connect(self, *args, **kwargs):
+        conn = super().connect(*args, **kwargs)
         self.auth_token = self.call('rpc/get_access_token')['token']
         self.set_rpc_authorization('Bearer %s' % self.auth_token)
         return conn
@@ -164,7 +164,7 @@ class AppWorker(PublicWorker):
             print('FIXME: BASIC AUTH')
         elif 'auth_bearer' in req_info:
             acl = self.app.config.access_from_token(req_info['auth_bearer'])
-            print('Access: %s = %s' % (acl.config_section, acl))
+            print('Access: %s = %s' % (acl.config_key, acl))
             return acl
         raise PermissionError('Please login')
 

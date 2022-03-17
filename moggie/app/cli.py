@@ -2,6 +2,9 @@ import os
 import sys
 
 
+# TODO: add a status command, to check what is live?
+
+
 def CommandHelp(wd, args):
     from . import helps
     return helps.HelpCLI(wd, args)
@@ -57,11 +60,16 @@ def CommandConfig(wd, args):
         print('%s' % cfg.filepath)
 
     elif args[0] == 'get':
-        try:
-            section, option = args[1:3]
-            print('[%s]\n%s = %s' % (section, option, cfg[section][option]))
-        except KeyError:
-            print('# Not set: %s / %s' % (section, option))
+        section = args[1]
+        options = args[2:]
+        if not options:
+            options = cfg[section].keys()
+        print('[%s]' % (section,))
+        for opt in options:
+            try:
+                print('%s = %s' % (opt, cfg[section][opt]))
+            except KeyError:
+                print('# %s = (unset)' % (opt,))
 
     elif args[0] == 'set':
         try:

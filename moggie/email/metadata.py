@@ -11,12 +11,13 @@ from .headers import parse_header
 
 class Metadata(list):
     OFS_TIMESTAMP = 0
-    OFS_POINTERS = 1
-    OFS_HEADER_LENGTH = 2
-    OFS_MESSAGE_LENGTH = 3
-    OFS_HEADERS = 4
-    OFS_MORE = 5
-    _FIELDS = 6
+    OFS_IDX = 1
+    OFS_POINTERS = 2
+    OFS_HEADER_LENGTH = 3
+    OFS_MESSAGE_LENGTH = 4
+    OFS_HEADERS = 5
+    OFS_MORE = 6
+    _FIELDS = 7
 
     # These are the headers we want extracted and stored in metadata.
     # Note the Received headers are omitted, too big and too much noise.
@@ -38,6 +39,14 @@ class Metadata(list):
     FOLDING_QUOTED_RE = re.compile('=\\?\\s+=\\?', flags=re.DOTALL)
     FOLDING_RE = re.compile('\r?\n\\s+', flags=re.DOTALL)
 
+    @classmethod
+    def ghost(self, msgid, more=None):
+        msgid = msgid if isinstance(msgid, bytes) else bytes(msgid, 'latin-1')
+        return Metadata(0, 0,
+            Metadata.PTR(0, b'/dev/null', 0), 0, 0,
+            b'Message-Id: %s' % msgid,
+            more=more)
+
     class PTR(list):
         IS_MBOX = 0
         IS_MAILDIR = 1
@@ -57,7 +66,7 @@ class Metadata(list):
         mailbox = property(lambda s: s[s.OFS_MAILBOX])
         offset =  property(lambda s: s[s.OFS_OFFSET])
 
-    def __init__(self, ts, ptrs, hlen, mlen, hdrs, more=None):
+    def __init__(self, ts, idx, ptrs, hlen, mlen, hdrs, more=None):
         # The encodings here are to make sure we are JSON serializable.
         if isinstance(hdrs, bytes):
             hdrs = str(hdrs, 'latin-1')
@@ -70,12 +79,11 @@ class Metadata(list):
                 raise ValueError('Invalid PTR: %s' % ptr)
 
         list.__init__(self, [
-            ts or 0, ptrs, hlen, mlen, hdrs.replace('\r', ''),
+            ts or 0, idx or 0, ptrs, hlen, mlen, hdrs.replace('\r', ''),
             more or {}])
 
         self._raw_headers = {}
         self._parsed = None
-        self.idx = None
         self.thread_id = None
         self.mtime = 0
 
@@ -88,6 +96,7 @@ class Metadata(list):
                     pass
 
     timestamp      = property(lambda s: s[s.OFS_TIMESTAMP])
+    idx            = property(lambda s: s[s.OFS_IDX])
     pointers       = property(lambda s: [Metadata.PTR(*p) for p in sorted(s[s.OFS_POINTERS])])
     header_length  = property(lambda s: s[s.OFS_HEADER_LENGTH])
     message_length = property(lambda s: s[s.OFS_MESSAGE_LENGTH])
@@ -99,7 +108,8 @@ class Metadata(list):
         ).digest())
 
     def __str__(self):
-        return ('%s:%d/%d@%s %d %s\n%s\n' % (
+        return ('%d=%s:%d/%d@%s %d %s\n%s\n' % (
+            self.idx,
             self.uuid_asc,
             self.header_length,
             self.message_length,
@@ -114,6 +124,13 @@ class Metadata(list):
 
     def get(self, key, default=None):
         self.more.get(key, default)
+
+    def add_pointers(self, pointers):
+        combined = self.pointers
+        for mp in (Metadata.PTR(*p) for p in pointers):
+            if mp not in combined:
+                combined.append(mp)
+        self[self.OFS_POINTERS] = combined
 
     def get_raw_header(self, header):
         try:
@@ -139,11 +156,11 @@ class Metadata(list):
 if __name__ == "__main__":
     import json
 
-    md1 = Metadata(0, Metadata.PTR(0, b'/tmp/test.mbx', 0), 100, 200, """\
+    md1 = Metadata(0, 0, Metadata.PTR(0, b'/tmp/test.mbx', 0), 100, 200, """\
 From: Bjarni <bre@example.org>\r
 To: bre@example.org\r
 Subject: This is Great\r\n""")
-    md2 = Metadata(0, [[0, b'/tmp/test.mbx', 0]], 100, 200, """\
+    md2 = Metadata(0, 0, [[0, b'/tmp/test.mbx', 0]], 100, 200, """\
 To: bre@example.org
 From: Bjarni <bre@example.org>
 Subject: This is Great""")
@@ -153,6 +170,11 @@ Subject: This is Great""")
 
     assert(md1.uuid == md2.uuid)
     assert(str(md1)[:70] == str(md2)[:70])
-    # FIXME: Write more tests...
+
+    # Make sure that adding pointers works sanely
+    md1.add_pointers([Metadata.PTR(0, b'/dev/null', 0)])
+    assert(len(md1.pointers) == 2)
+    md1.add_pointers([(0, b'/dev/null', 0)])
+    assert(len(md1.pointers) == 2)
 
     print("Tests passed OK")

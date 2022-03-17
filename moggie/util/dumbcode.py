@@ -90,7 +90,7 @@ def dumb_encode_asc(v, compress=False, aes_key_iv=None):
     raise ValueError('Unsupported type: <%s> = %s' % (type(v), v))
 
 
-def dumb_decode(v, aes_key=None):
+def dumb_decode(v, aes_key=None, iv_to_aes_key=None):
     if isinstance(v, bytes):
         if v[:1] == b' ': v = v.lstrip(b' ')
         if v[:1] == b'b': return v[1:]
@@ -130,10 +130,12 @@ def dumb_decode(v, aes_key=None):
     if v[:1] in ('E', b'E'):
         v = b'e' + binascii.a2b_base64(v[1:])
     if v[:1] in ('e', b'e'):
+        iv, data = v[1:17], v[17:]
+        if iv_to_aes_key is not None:
+            aes_key = iv_to_aes_key(iv)
         if aes_key is None:
-            return v[1:17], v[17:]
-        iv = v[1:17]
-        return dumb_decode(aes_ctr_decrypt(aes_key, iv, v[17:]))
+            return iv, data
+        return dumb_decode(aes_ctr_decrypt(aes_key, iv, data))
 
     return (v if isinstance(v, str) else str(v, 'utf-8'))
 
