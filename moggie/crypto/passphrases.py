@@ -24,6 +24,24 @@ KDF_PARAMS = {
 }
 
 
+def generate_passcode(groups=7, length=6):
+    """
+    An algorithm for generating unbiased random groups of decimal
+    numbers. Simplistic for clarity!
+
+    Generates codes with about 139 bits of entropy by default. Not
+    at all human friendly, but these ARE keys to the kingdom.
+    """
+    assert(0 < length < 8)
+    g = [''] * groups
+    for i in range(0, groups):
+        rand_int = struct.unpack('I', os.urandom(4))[0]
+        for d in range(0, length):
+            g[i] += '%d' % (rand_int % 10,)
+            rand_int //= 10
+    return '-'.join(g)
+
+
 def stretch_with_pbkdf2(password, salt, params=KDF_PARAMS['pbkdf2']):
     """
     Stretch a passphrase using a salt and the pbkdf2 algorithm.

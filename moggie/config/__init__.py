@@ -10,8 +10,7 @@ import struct
 from configparser import ConfigParser, NoOptionError, _UNSET
 
 from ..crypto.aes_utils import make_aes_key
-from ..crypto.passphrases import stretch_with_scrypt
-from ..crypto.recovery import RecoverableData, RecoverySvc, generate_recovery_code
+from ..crypto.passphrases import stretch_with_scrypt, generate_passcode
 from ..util.dumbcode import dumb_decode, dumb_encode_asc
 from .helpers import ListItemProxy, DictItemProxy, ConfigSectionProxy
 
@@ -20,16 +19,6 @@ APPNAME    = 'moggie'  #'mailpile'
 APPNAME_UC = 'Moggie'  #'Mailpile'
 APPVER     = '2.0.0'
 APPURL     = 'https://github.com/BjarniRunar/moggie'
-
-RECOVERY_SERVICE_URL = 'https://recovery.mailpile.is/recovery_svc'
-
-
-class RecoverySvcConfig(ConfigSectionProxy):
-    _KEYS = {
-         'host': str,
-         'port': int,
-         'kite_name': str,
-         'kite_secret': str}
 
 
 class AccessConfig(ConfigSectionProxy):
@@ -164,7 +153,6 @@ class AppConfig(ConfigParser):
     GENERAL = 'App'
     SECRETS = 'Secrets'
     RECOVERY = 'Recovery Data'
-    RECOVERY_SVC = 'Recovery Service'
     SMTP_BRIDGE_SVC = 'SMTP Bridge Service'
     ACCESS_PREFIX = 'Access '
     ACCOUNT_PREFIX = 'Account '
@@ -173,7 +161,6 @@ class AppConfig(ConfigParser):
     CONTEXT_ZERO = 'Context 0'
 
     INITIAL_SETTINGS = [
-       (GENERAL, 'recovery_svc_url', RECOVERY_SERVICE_URL),
        (GENERAL, 'config_backups', '10')]
 
     PREAMBLE = """\
@@ -191,7 +178,7 @@ class AppConfig(ConfigParser):
 
     DIGIT_RE = re.compile('\d')
 
-    ALLOWED_SECTIONS = [GENERAL, SECRETS, RECOVERY, RECOVERY_SVC]
+    ALLOWED_SECTIONS = [GENERAL, SECRETS, RECOVERY]
     ALLOWED_SECTION_PREFIXES = [
         ACCESS_PREFIX,
         ACCOUNT_PREFIX,
@@ -244,8 +231,6 @@ class AppConfig(ConfigParser):
                     pass
             self.context_zero()
             self.access_zero()
-
-    recovery_svc = property(lambda s: RecoverySvcConfig(s, s.RECOVERY_SVC))
 
     all_access = property(lambda self:
         dict((a, AccessConfig(self, a))
@@ -388,7 +373,7 @@ class AppConfig(ConfigParser):
         config_key = None
         with self.temp_aes_key(pass_key):
             if 'config_key' not in self[self.SECRETS]:
-                config_key = 'CONF_KEY:%s' % generate_recovery_code()
+                config_key = 'CONF_KEY:%s' % generate_passcode()
                 self.set_private(self.SECRETS, 'config_key', config_key)
                 is_new = True
             try:
@@ -412,7 +397,7 @@ class AppConfig(ConfigParser):
         mk_key = 'master_key' + suffix
         if mk_key in self[self.SECRETS]:
             raise PermissionError('Cravenly refusing to overwrite master key')
-        self.set_private(self.SECRETS, mk_key, generate_recovery_code())
+        self.set_private(self.SECRETS, mk_key, generate_passcode())
         # Record this, in case we want to auto-rotate keys now and then?
         self[self.SECRETS]['last_key_rotation'] = '%d' % int(time.time())
 
@@ -577,19 +562,6 @@ if __name__ == '__main__':
         assert(not 'reached')
     except PermissionError:
         pass
-
-    ac.recovery_svc.host = 'localhost'
-    ac.recovery_svc.port = '80'
-    assert(ac[ac.RECOVERY_SVC]['host'] == 'localhost')
-    assert(ac.recovery_svc.kite_name is None)
-    assert(ac.recovery_svc.port == 80)
-    ac.recovery_svc.kite_name = 'fake.example.org'
-    assert('kite_name' in ac.recovery_svc)
-    assert(ac.recovery_svc.magic_test() == 'magic')
-    ac.recovery_svc.kite_name = None
-    ac.recovery_svc.host = None
-    ac.recovery_svc.port = None
-    ac.save()
 
     assert(len(ac.get_aes_keys()) == 1)
     ac.change_master_key()

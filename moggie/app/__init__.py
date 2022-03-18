@@ -11,12 +11,8 @@ def CommandStart(wd, args):
     if wait:
         args.remove('wait')
 
-    if args and args[0] == 'recovery_svc':
-        from ..workers.recovery_svc import RecoverySvcWorker
-        worker = RecoverySvcWorker.FromArgs(wd, args[1:])
-    else:
-        from ..workers.app import AppWorker
-        worker = AppWorker.FromArgs(wd, args[0:])
+    from ..workers.app import AppWorker
+    worker = AppWorker.FromArgs(wd, args[0:])
 
     if worker.connect():
         if wait:
@@ -29,12 +25,8 @@ def CommandStart(wd, args):
 
 
 def CommandStop(wd, args):
-    if args and args[0] == 'recovery_svc':
-        from ..workers.recovery_svc import RecoverySvcWorker
-        worker = RecoverySvcWorker.FromArgs(wd, args[1:])
-    else:
-        from ..workers.app import AppWorker
-        worker = AppWorker.FromArgs(wd, args[0:])
+    from ..workers.app import AppWorker
+    worker = AppWorker.FromArgs(wd, args[0:])
 
     if worker.connect(autostart=False):
         result = worker.quit()

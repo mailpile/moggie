@@ -110,16 +110,6 @@ async def web_jmap(req_env):
         return {'code': code, 'msg': msg, 'body': 'Sorry\n'}
 
 
-@async_url('/recovery_svc/*')
-@process_post(max_bytes=2048, _async=True)
-async def proxy_recovery_svc(req_env):
-    with RequestTimer('web_recovery_svc', req_env) as timer:
-        require(req_env, post=True, secure=True)
-        posted = req_env.post_data
-        print('FIXME: Proxy to recovery_svc worker' % posted)
-        return {'code': 500, 'body': 'Proxy Not Ready\n'}
-
-
 class AppWorker(PublicWorker):
     """
     This is the main "public facing" app worker, it implements the main
@@ -129,7 +119,7 @@ class AppWorker(PublicWorker):
 
     KIND = 'app'
     PUBLIC_PATHS = ['/']
-    PUBLIC_PREFIXES = ['/recovery_svc']
+    PUBLIC_PREFIXES = []
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
