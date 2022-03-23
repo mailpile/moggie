@@ -19,6 +19,7 @@ class RequestBase(dict):
     def update(self, other, req_id=None):
         self['req_id'] = _req_id(req_id)
         dict.update(self, other)
+        return self
 
 
 class RequestPing(RequestBase):
@@ -36,11 +37,21 @@ class RequestSearch(RequestBase):
 
 
 class RequestCounts(RequestBase):
-    def __init__(self, context='', terms='', req_id=None):
+    def __init__(self, context='', terms_list=[], req_id=None):
         self.update({
             'prototype': 'counts',
             'context': context,
             'terms_list': terms_list
+        }, req_id=req_id)
+
+
+class RequestAddToIndex(RequestBase):
+    def __init__(self, context='', search='', initial_tags=[], req_id=None):
+        self.update({
+            'prototype': 'add_to_index',
+            'context': context,
+            'search': search,
+            'tags': initial_tags
         }, req_id=req_id)
 
 
@@ -81,6 +92,7 @@ def to_jmap_request(_input):
          'search': RequestSearch,
          'mailbox': RequestMailbox,
          'contexts': RequestContexts,
+         'add_to_index': RequestAddToIndex,
          }.get(_input.get('prototype', ''))
     if cls:
         obj = cls()

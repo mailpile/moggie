@@ -6,7 +6,7 @@ import time
 import threading
 
 from upagekite import uPageKite, LocalHTTPKite
-from upagekite.httpd import HTTPD, url
+from upagekite.httpd import HTTPD, url, async_url
 from upagekite.proto import uPageKiteDefaults
 from upagekite.web import process_post
 
@@ -102,11 +102,11 @@ def web_status(req_env):
         'body': json.dumps(req_env['worker'].status, indent=1)}
 
 
-@url('/rpc/*')
-@process_post(max_bytes=WorkerPageKiteSettings.MAX_POST_BYTES)
-def web_rpc(req_env):
+@async_url('/rpc/*')
+@process_post(max_bytes=WorkerPageKiteSettings.MAX_POST_BYTES, _async=True)
+async def web_rpc(req_env):
     require(req_env, post=True, local=True)
-    return req_env['worker'].handle_web_rpc(req_env)
+    return await req_env['worker'].handle_web_rpc(req_env)
 
 
 class WorkerHTTPD(HTTPD):
@@ -248,11 +248,11 @@ class PublicWorker(BaseWorker):
             'mimetype': 'application/json',
             'body': json.dumps(data, indent=1) + '\n'}
 
-    def handle_web_rpc(self, req_env):
+    async def handle_web_rpc(self, req_env):
         args = bytes(req_env.request_path, 'latin-1').split(b'/')[3:]
         func = b'rpc/' + args.pop(0)
         with self._rpc_lock:
-            self.common_rpc_handler(
+            await self.async_rpc_handler(
                 func,
                 req_env.http_method,
                 args,

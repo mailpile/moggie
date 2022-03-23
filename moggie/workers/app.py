@@ -55,7 +55,6 @@ async def web_websocket(opcode, msg, conn, ws,
         code = 500
         web_auth = conn.env['auth']
         try:
-            print('%s' % msg)
             result = await conn.env['app'].api_jmap(web_auth, json.loads(msg))
             code = result.get('code', 500)
             if code == 200 and 'body' in result:
@@ -132,6 +131,9 @@ class AppWorker(PublicWorker):
         self.auth_token = self.call('rpc/get_access_token')['token']
         self.set_rpc_authorization('Bearer %s' % self.auth_token)
         return conn
+
+    def jmap(self, request_obj):
+        return self.call('rpc/jmap', request_obj)
 
     def get_app(self):
         return AppCore(self)

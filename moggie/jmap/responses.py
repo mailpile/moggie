@@ -9,6 +9,17 @@ class ResponsePing(dict):
         self.update({'prototype': 'pong', 'ts': request['ts']})
 
 
+class ResponseAddToIndex(dict):
+    def __init__(self, request, done, total):
+        self.update({
+            'prototype': 'add_to_index',
+            'context': request['context'],
+            'req_id': request['req_id'],
+            'total': total,
+            'done': done
+        }, req_id=req_id)
+
+
 class ResponseMailbox(dict):
     def __init__(self, request, emails, watched):
         self.update({

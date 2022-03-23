@@ -27,6 +27,17 @@ async def async_run_in_thread(method, *m_args, **m_kwargs):
     return await queue.get()
 
 
+def run_async_in_thread(method, *m_args, **m_kwargs):
+    result = []
+    def runner():
+        result.append(asyncio.run(method(*m_args, **m_kwargs)))
+    thr = threading.Thread(target=runner)
+    thr.daemon = True
+    thr.start()
+    thr.join()
+    return result[0]
+
+
 class AppSessionResource(JMAPSessionResource):
     def __init__(self, app, access):
         super().__init__(self)
@@ -49,6 +60,7 @@ class AppCore:
         self.config = AppConfig(self.work_dir)
 
         self.rpc_functions = {
+            b'rpc/jmap':              (True, self.rpc_jmap),
             b'rpc/jmap_session':      (True, self.rpc_session_resource),
             b'rpc/crypto_status':     (True, self.rpc_crypto_status),
             b'rpc/get_access_token':  (True, self.rpc_get_access_token)}
@@ -69,6 +81,8 @@ class AppCore:
             name='search').connect()
 
         self.importer = ImportWorker(self.worker.worker_dir,
+            app_worker=self.worker,
+            search_worker=self.search,
             name='importer').connect()
 
     def stop_workers(self):
@@ -105,9 +119,18 @@ class AppCore:
         return ResponseMailbox(jmap_request, info, watched)
 
     async def api_jmap_search(self, access, jmap_request):
-        # FIXME: Actually search! Async, in a thread, gathering the
-        #        metadata may take time.
-        return ResponseSearch(jmap_request, [])
+        def perform_search():
+            return self.search.metadata(
+                self.search.search(
+                        jmap_request['terms'],
+                        tag_namespace=jmap_request.get('tag_namespace', None),
+                        mask_deleted=jmap_request.get('mask_deleted', True)
+                    )['hits'],
+                sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
+                skip=jmap_request.get('skip', 0),
+                limit=jmap_request.get('limit', None))
+        results = await async_run_in_thread(perform_search)
+        return ResponseSearch(jmap_request, results)
 
     async def api_jmap_counts(self, access, jmap_request):
         # FIXME: Actually search/count! Async, in a thread, gathering the
@@ -129,6 +152,17 @@ class AppCore:
         all_contexts = self.config.contexts
         contexts = [all_contexts[k].as_dict() for k in sorted(access.roles)]
         return ResponseContexts(jmap_request, contexts)
+
+    async def api_jmap_add_to_index(self, access, jmap_request):
+        # FIXME: Does this user have access to this email?
+        #        How will that be determined? Probably a token that
+        #        comes from viewing a search result or mailbox?
+        #        Seems we should decide that before making any efforts
+        result = await async_run_in_thread(self.importer.import_search,
+            jmap_request['search'],
+            jmap_request.get('initial_tags', []))
+        print('AddToIndex Result: %s' % result)
+        return ResponsePing(jmap_request)  # FIXME
 
     async def api_jmap(self, access, client_request):
         # The JMAP API sends multiple requests in a blob, and wants some magic
@@ -158,21 +192,25 @@ class AppCore:
             result = await self.api_jmap_email(access, jmap_request)
         elif type(jmap_request) == RequestContexts:
             result = await self.api_jmap_contexts(access, jmap_request)
+        elif type(jmap_request) == RequestAddToIndex:
+            result = await self.api_jmap_add_to_index(access, jmap_request)
         elif type(jmap_request) == RequestPing:
             result = ResponsePing(jmap_request)
 
         if result is not None:
-            code, result = 200, json.dumps(result, indent=2)
+            code, json_result = 200, json.dumps(result, indent=2)
             if type(jmap_request) != RequestPing:
-                print('<< %s' % result[:1024])
+                print('<< %s' % json_result[:256])
         else:
             code = 400
-            result = json.dumps({'error': 'Unknown %s' % type(jmap_request)})
+            result = {'error': 'Unknown %s' % type(jmap_request)}
+            json_result = json.dumps(result)
 
         return {
             'code': code,
+            '_result': result,
             'mimetype': 'application/json',
-            'body': bytes(result, 'utf-8')}
+            'body': bytes(json_result, 'utf-8')}
 
     def api_jmap_session(self, access):
         # FIXME: What does this user have access to?
@@ -184,6 +222,10 @@ class AppCore:
 
 
     # Internal API
+
+    async def rpc_jmap(self, request, **kwargs):
+        rv = await self.api_jmap(self.config.access_zero(), request)
+        self.worker.reply_json(rv['_result'])
 
     def rpc_session_resource(self, **kwargs):
         jsr = AppSessionResource(self, self.config.access_zero())
@@ -201,16 +243,4 @@ class AppCore:
         self.worker.reply_json({
             'token': token,
             'expires': expiration})
-
-    def rpc_register_metadata(self, emails, *args, **kwargs):
-        added = []
-        for m in (Metadata(*e) for e in emails):
-             idx = self.metadata.add_if_new(m)
-             if idx is not None:
-                 added.append(idx)
-
-        # FIXME: Tag these new messages as INCOMING.
-        #        Other tags as well? Which context is this?
-
-        self.worker.reply_json(added)
 

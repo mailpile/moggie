@@ -180,8 +180,8 @@ class MetadataStore(RecordStore):
         if msgid is None:
             return self.append(metadata, keys=[])
         else:
-            if msgid in self:
-                om = self[msgid]
+            om = self.get(msgid)
+            if om is not None:
                 metadata.add_pointers(om.pointers)
                 for k, v in om.more.items():
                     if k not in metadata.more:
@@ -206,20 +206,29 @@ class MetadataStore(RecordStore):
         return idx
 
     def get(self, key, **kwargs):
-        idx = self.key_to_index(key)
-        m = Metadata(*(super().get(idx, **kwargs)))
-        if m is not None:
-            m[m.OFS_IDX] = idx
-            m.thread_id = self.thread_ids[idx]
-            m.mtime = self.TS_RESOLUTION * self.mtimes[idx]
-        return m
+        try:
+            idx = self.key_to_index(key)
+            m = Metadata(*(super().get(idx, **kwargs)))
+            if m is not None:
+                m[m.OFS_IDX] = idx
+                try:
+                    m.mtime = self.TS_RESOLUTION * self.mtimes[idx]
+                    m.thread_id = self.thread_ids[idx]
+                except KeyError:
+                    m.thread_id = idx
+            return m
+        except (KeyError, TypeError):
+            return kwargs.get('default', None)
 
     def __getitem__(self, key, **kwargs):
         idx = self.key_to_index(key)
         m = Metadata(*(super().__getitem__(idx, **kwargs)))
         m[m.OFS_IDX] = idx
-        m.thread_id = self.thread_ids[idx]
-        m.mtime = self.TS_RESOLUTION * self.mtimes[idx]
+        try:
+            m.mtime = self.TS_RESOLUTION * self.mtimes[idx]
+            m.thread_id = self.thread_ids[idx]
+        except KeyError:
+            m.thread_id = idx
         return m
 
     def __delitem__(self, key):

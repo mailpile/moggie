@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import datetime
 import json
 import re
@@ -11,14 +12,14 @@ import traceback
 import websockets
 import websockets.exceptions
 
-from ...config import APPNAME, APPVER
+from ...config import AppConfig, APPNAME, APPVER
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
 from ...jmap.core import JMAPSessionResource
 from ...jmap.requests import *
 from ...util.rpc import AsyncRPCBridge
 from ...workers.app import AppWorker
-from ..core import test_contexts, test_emails
+from ..suggestions import *
 from .decorations import palette, ENVELOPES, HELLO, HELLO_CREDITS
 
 
@@ -33,21 +34,100 @@ def _w(w, attr={}, valign='top'):
 class Selectable(urwid.WidgetWrap):
     def __init__(self, contents, on_select=None):
         self.contents = contents
-        self.on_select = on_select
+        self.on_select = on_select or {}
         self._focusable = urwid.AttrMap(self.contents, '', dict(
             ((a, 'focus') for a in [None,
                 'email', 'subtle', 'hotkey', 'active', 'act_hk',
-                'list_from', 'list_attrs', 'list_subject', 'list_date'])))
+                'list_from', 'list_attrs', 'list_subject', 'list_date',
+                'check_from', 'check_attrs', 'check_subject', 'check_date'])))
         super(Selectable, self).__init__(self._focusable)
 
     def selectable(self):
         return True
 
     def keypress(self, size, key):
-        if self.on_select and key in ('enter',):
-            self.on_select(self)
+        if key in self.on_select:
+            self.on_select[key](self)
         else:
             return key
+
+
+class CloseButton(Selectable):
+    PLACEHOLDER = urwid.Text('   ')
+    def __init__(self, on_select=None):
+        Selectable.__init__(self, urwid.Text(('subtle', '[x]')),
+            on_select={'enter': on_select})
+
+
+class SuggestionBox(urwid.Pile):
+    DISMISSED = set()
+
+    def __init__(self, fallbacks=None, suggestions=None):
+        self.widgets = []
+        urwid.Pile.__init__(self, self.widgets)
+
+        self.fallbacks = fallbacks or []
+        self.suggestions = suggestions or []
+        self.update_suggestions(self.get_suggestions())
+
+    def get_suggestions(self):
+        # FIXME: Queue a request for a list of suggestions from
+        #        the backend.
+        # FIXME: This should be context dependent.
+        suggest = copy.copy(self.suggestions)
+        for _id in sorted(SUGGESTIONS.keys()):
+            if _id in SuggestionBox.DISMISSED:
+                continue
+            sg_obj = SUGGESTIONS[_id].If_Wanted(None, None)
+            if sg_obj is not None:
+                suggest.append(sg_obj)
+                if len(suggest) >= 3:
+                    break
+        if not len(suggest):
+            suggest.extend(self.fallbacks)
+        return suggest
+
+    def set_suggestions(self, suggestions):
+        # FIXME: this is dumb
+        self.suggestions = suggestions
+        self.update_suggestions(self.get_suggestions())
+
+    def _on_activate(self, suggestion):
+        def activate(i):
+            act = suggestion.action()  # FIXME
+            if isinstance(act, RequestBase):
+                pass  # FIXME: Send this request to the backend
+        return activate
+
+    def _on_dismiss(self, suggestion):
+        def dismiss(i):
+            SuggestionBox.DISMISSED.add(suggestion.ID)
+            self.update_suggestions(self.get_suggestions())
+        return dismiss
+
+    def update_suggestions(self, suggest):
+        widgets = []
+        for sgn in suggest:
+            columns = [
+                ('fixed',  4, urwid.Text(('subtle', '*'), 'right')),
+                ('weight', 1, Selectable(urwid.Text(sgn.message()),
+                    on_select={'enter': self._on_activate(sgn)}))]
+            if sgn.ID is not None:
+                columns.append(
+                    ('fixed',  3, CloseButton(
+                        on_select=self._on_dismiss(sgn))))
+            else:
+                columns.append(('fixed',  3, CloseButton.PLACEHOLDER))
+            widgets.append(urwid.Columns(columns, dividechars=1))
+
+        self.widgets = widgets
+        self.contents = [(w, ('pack', None)) for w in self.widgets]
+
+    def __len__(self):
+        return len(self.widgets)
+
+    def incoming_message(self, message):
+        pass  # FIXME: Listen for suggestions
 
 
 class SplashCat(urwid.Filler):
@@ -55,10 +135,18 @@ class SplashCat(urwid.Filler):
     COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
-    def __init__(self):
-        urwid.Filler.__init__(self,
-            urwid.Text([HELLO, ('subtle', HELLO_CREDITS)], 'center'),
-            valign='middle')
+    def __init__(self, message=''):
+        self.suggestions = SuggestionBox(fallbacks=[SuggestionWelcome])
+        widgets = [
+            ('weight', 3, urwid.Text(
+                [message, '\n', HELLO, ('subtle', HELLO_CREDITS), '\n'],
+                'center'))]
+        if len(self.suggestions):
+            widgets.append(('pack',  self.suggestions))
+        urwid.Filler.__init__(self, urwid.Pile(widgets), valign='middle')
+
+    def incoming_message(self, message):
+        self.suggestions.incoming_message(message)
 
 
 class SplashMoreWide(urwid.Filler):
@@ -85,71 +173,160 @@ class ContextList(urwid.ListBox):
     COLUMN_FIT = 'fixed'
     COLUMN_STYLE = 'sidebar'
 
+    TAG_ITEMS = [
+        ('inbox',  (('i', 'INBOX',    'in:inbox'),
+                    ('c', 'Calendar', ''),
+                    ('p', 'People',   ''),
+                    ('a', 'All Mail', 'all:mail'))),
+        ('outbox', (('9', 'OUTBOX',   'in:outbox'),)),
+        ('sent',   (('0', 'Sent',     'in:sent'),)),
+        ('spam',   (('s', 'Spam',     'in:spam'),)),
+        ('trash',  (('d', 'Trash',    'in:trash'),))]
+    TAG_KEYS = 'wertyu'
+
     def __init__(self, tui_frame, contexts, expanded=0):
-        self.contexts = contexts
         self.expanded = expanded
         self.tui_frame = tui_frame
         self.crumb = 'ohai'
+        self.active = None
+        self.walker = urwid.SimpleListWalker([])
+        urwid.ListBox.__init__(self, self.walker)
 
+        self.waiting = True
+        self.search_obj = RequestContexts()
+        self.counts_obj = RequestCounts()
+
+        self.contexts = contexts
+        self.tag_counts = {}
+        self.update_content()
+
+    def update_content(self):
         def _sel_ctx(which):
             return lambda x: self.tui_frame.set_context(self.contexts, which)
         def _sel_email(which):
-            return lambda x: self.tui_frame.show_account(which)
-        def _sel_tag(which):
-            return lambda x: self.tui_frame.show_tag(which)
+            return lambda x: self.tui_frame.show_account(self.active, which)
+        def _sel_search(terms):
+            return lambda x: self.tui_frame.show_search_result(
+                self.active, terms)
 
         widgets = []
-        for i, ctx in enumerate(contexts):
+        last_ctx_name = '-:-!-:-'
+        self.contexts.sort(
+            key=lambda c: (0 if c['key'] == 'Context 0' else 1, c['name']))
+        for i, ctx in enumerate(self.contexts):
 
-            sc = ('g%d:' % (i+1)) if (i < 8) else '   '
+            name = ctx['name']
+            if name.startswith(last_ctx_name+' '):
+                name = ' - ' + name[len(last_ctx_name)+1:]
+            else:
+                last_ctx_name = name
+
+#           sc = ('g%d:' % (i+1)) if (i < 8) else '   '
             ctx_name = urwid.Text([
-                ('hotkey', sc),
-                ('subtle', ctx['name'])], 'left', 'clip')
+#               ('hotkey', sc),
+                ('subtle', name)], 'left', 'clip')
 
-            if i == expanded:
+            if i == self.expanded:
+                last_ctx_name = name
+                #last_ctx_name = '-:-!-:-'
+                self.active = ctx['key']
                 self.crumb = ctx['name']
                 widgets.append(Selectable(urwid.AttrMap(ctx_name,
                     {None: 'active', 'subtle': 'active', 'hotkey': 'act_hk'}),
-                    on_select=_sel_ctx(-1)))
-                widgets.append(urwid.Text([
-                    ('subtle', 'live:1')], 'right', 'clip'))
+                    on_select={'enter': self.show_overview}))
+                widgets.append(Selectable(urwid.Text(
+                    [('subtle', 'live:1')], 'right', 'clip'),
+                    on_select={'enter': self.show_connections}))
             else:
-                widgets.append(Selectable(ctx_name, on_select=_sel_ctx(i)))
+                widgets.append(Selectable(ctx_name,
+                    on_select={'enter': _sel_ctx(i)}))
 
-            if i == expanded:
-                for email in ctx['emails']:
+            if i == self.expanded:
+                acount = 0
+                for akey, acct in sorted(ctx.get('accounts', {}).items()):
                     widgets.append(Selectable(urwid.Padding(
-                        urwid.Text(('email', email), 'left', 'clip'),
-                        left=1, right=1)))
-                widgets.append(urwid.Divider())
-                for tg in ctx.get('tags', []):
-                    for tag in tg:
-                        if tag.get('count'):
-                            sc = tag.get('sc', None)
-                            sc = (' g%s:' % sc) if sc else '    '
-                            widgets.append(Selectable(
-                                urwid.Text([('hotkey', sc), tag['name']]),
-                                on_select=_sel_tag(tag)))
+                            urwid.Text(('email', acct['name']), 'left', 'clip'),
+                            left=1, right=1),
+                        on_select={}))  # FIXME
+                    acount += 1
+                    if acount > 3:
+                        pass  # FIXME: Add a "more" link, break loop
+                if acount:
                     widgets.append(urwid.Divider())
 
+                shown = []
+                for tag, items in self.TAG_ITEMS:
+                    if tag in ctx.get('tags', []):
+                        for sc, name, search in items:
+                            sc = (' %s:' % sc) if sc else '   '
+                            os = search and {'enter': _sel_search(search)}
+                            widgets.append(Selectable(
+                                urwid.Text([('hotkey', sc), name]),
+                                on_select=os))
+                        shown.append(tag)
+                count = 1
+                unshown = [t for t in ctx.get('tags', []) if t not in shown]
+                if unshown:
+                    widgets.append(urwid.Divider())
+                    for tag in unshown:
+                        sc = ''
+                        if count <= len(self.TAG_KEYS):
+                            sc = (' %s:' % self.TAG_KEYS[count-1])
+                        count += 1
+                        name = tag[:1].upper() + tag[1:]
+                        widgets.append(Selectable(
+                            urwid.Text([('hotkey', sc), name]),
+                            on_select={'enter': _sel_search('in:%s' % tag)}))
+                    if count > 5:
+                        pass  # FIXME: Add a "more" link, break loop
+                widgets.append(urwid.Divider())
+
         if len(widgets) == 0:
-            widgets.append(urwid.Text('\n\n(unconfigured) \n', 'center'))
+            widgets.append(urwid.Text('\n(unconfigured) \n', 'center'))
 
         widgets.append(urwid.Text([('subtle', '_'*20)], 'left', 'clip'))
         widgets.append(Selectable(urwid.Text(
                 [('hotkey', 'C:'), ('subtle', 'add context')], 'right'),
-            on_select=lambda x: None))
+            on_select={'enter': lambda x: None}))
 
-        urwid.ListBox.__init__(self, urwid.SimpleListWalker(widgets))
+        self.walker[0:] = widgets
+
+    def show_overview(self, i=None):
+        pass  # FIXME
+
+    def show_connections(self, i=None):
+        pass  # FIXME
+
+    def request_counts(self):
+        self.counts_obj['terms_list'] = count_terms = []
+        for i, ctx in enumerate(self.contexts):
+            if i == self.expanded:
+                for tag in ctx.get('tags', []):
+                    count_terms.append('in:%s' % tag)
+                    count_terms.append('in:%s is:unread' % tag)
+        # FIXME: What about contexts?
+        self.tui_frame.app_bridge.send_json(self.counts_obj)
 
     def incoming_message(self, message):
-        pass
+        if self.waiting:
+            self.tui_frame.app_bridge.send_json(self.search_obj)
+            self.waiting = False
+        if (message.get('prototype') == self.search_obj['prototype']):
+            self.contexts = message['contexts']
+            self.update_content()
+            self.request_counts()
+        elif (message.get('prototype') == self.counts_obj['prototype']):
+            self.update_content()
+
+        # FIXME: The backend should broadcast updates...
 
 
 class EmailListWalker(urwid.ListWalker):
     def __init__(self, parent):
         self.focus = 0
         self.emails = []
+        self.selected = set()
+        self.selected_all = False
         self.parent = parent
 
     def __len__(self):
@@ -184,27 +361,81 @@ class EmailListWalker(urwid.ListWalker):
 
     def __getitem__(self, pos):
         try:
-            md = Metadata(*self.emails[pos]).parsed()
+            md = Metadata(*self.emails[pos])
+            uuid = md.uuid
+            md = md.parsed()
+            dt = datetime.datetime.fromtimestamp(md.get('ts', 0))
+            if self.selected_all or uuid in self.selected:
+                prefix = 'check'
+                attrs = '>    <'
+                dt = dt.strftime('%Y-%m  ✓')
+            else:
+                attrs = '(    )'
+                prefix = 'list'
+                dt = dt.strftime('%Y-%m-%d')
             frm = md.get('from', {})
             frm = frm.get('fn') or frm.get('address') or '(none)'
-            attrs = '(    )'
             subj = md.get('subject', '(no subject)')
-            dt = datetime.datetime.fromtimestamp(md.get('ts', 0))
-            dt = dt.strftime('%Y-%m-%d')
             cols = urwid.Columns([
-              ('weight', 15, urwid.Text(('list_from', frm), wrap='clip')),
-              (6,            urwid.Text(('list_attrs', attrs))),
-              ('weight', 27, urwid.Text(('list_subject', subj), wrap='clip')),
-              (10,           urwid.Text(('list_date', dt)))],
+              ('weight', 15, urwid.Text((prefix+'_from', frm), wrap='clip')),
+              (6,            urwid.Text((prefix+'_attrs', attrs))),
+              ('weight', 27, urwid.Text((prefix+'_subject', subj), wrap='clip')),
+              (10,           urwid.Text((prefix+'_date', dt), align='left'))],
               dividechars=1)
-            return Selectable(cols,
-                on_select=lambda x: self.parent.show_email(self.emails[pos]))
+            return Selectable(cols, on_select={
+                'enter': lambda x: self.parent.show_email(self.emails[pos]),
+                'x': lambda x: self.check(uuid),
+                ' ': lambda x: self.check(uuid, display=self.emails[pos])})
+        except IndexError:
+            pass
         except:
             dbg(traceback.format_exc())
         raise IndexError
 
+    def check(self, uuid, display=None):
+        had_any = (len(self.selected) > 0)
+        if uuid in self.selected and not display:
+            self.selected.remove(uuid)
+        else:
+            self.selected.add(uuid)
+        have_any = (len(self.selected) > 0)
 
-class EmailList(urwid.ListBox):
+        # Warn the container that our selection state has changed.
+        if had_any != have_any:
+            self.parent.update_content()
+
+        self._modified()
+        # FIXME: There must be a better way to do this...
+        self.parent.keypress((100,), 'down')
+        if display is not None:
+            self.parent.show_email(display)
+
+
+class SuggestAddToIndex(Suggestion):
+    MESSAGE = 'Add these messages to the search index'
+
+    def __init__(self, app_bridge, context, search_obj):
+        Suggestion.__init__(self, context, None)  # FIXME: Config?
+        self.app_bridge = app_bridge
+        self.request_add = RequestAddToIndex(
+            context=context,
+            search=search_obj)
+        self._message = self.MESSAGE
+        self.adding = False
+
+    def action(self):
+        self.app_bridge.send_json(self.request_add)
+        self.adding = True
+
+    def message(self):
+        # FIXME: If updates are happening, turn into a progress
+        #        reporting message?
+        if self.adding:
+            return 'ADDING, WOOO'
+        return self._message
+
+
+class EmailList(urwid.Pile):
     COLUMN_NEEDS = 40
     COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
@@ -214,15 +445,63 @@ class EmailList(urwid.ListBox):
         self.search_obj = search_obj
         self.tui_frame = tui_frame
         self.app_bridge = tui_frame.app_bridge
+
         self.crumb = search_obj.get('mailbox', 'FIXME')
+        self.global_hks = {
+            'J': [lambda *a: None, ('top_hk', 'J:'), 'Read Next '],
+            'K': [lambda *a: None, ('top_hk', 'K:'), 'Previous  ']}
+
+        self.column_hks = [('top_hk', 'A:'), 'Add To Index']
 
         self.walker = EmailListWalker(self)
         self.emails = self.walker.emails
-        urwid.ListBox.__init__(self, self.walker)
+        self.listbox = urwid.ListBox(self.walker)
+        self.suggestions = SuggestionBox()
+        self.widgets = []
 
         self.loading = 0
         self.want_more = True
         self.load_more()
+
+        urwid.Pile.__init__(self, [])
+        self.update_content()
+
+    def update_content(self):
+        self.widgets[0:] = []
+        rows = self.tui_frame.max_child_rows()
+
+        if not self.emails:
+            message = 'Loading ...' if self.loading else 'No mail here!'
+            cat = urwid.BoxAdapter(SplashCat(message), rows)
+            self.contents = [(cat, ('pack', None))]
+            return
+        elif self.search_obj['prototype'] != 'search':
+            self.suggestions.set_suggestions([
+                SuggestAddToIndex(
+                    self.app_bridge,
+                    self.tui_frame.current_context,
+                    self.search_obj)])
+
+        # Inject suggestions above the list of messages, if any are
+        # present. This can change dynamically as the backend sends us
+        # hints.
+        if self.walker.selected:
+            self.widgets.append(urwid.Columns([
+                ('weight', 1, urwid.Text(
+                    'NOTE: You are operating directly on a mailbox!\n'
+                    '      Tagging will add emails to the search index.\n'
+                    '      Deletion cannot be undone.')),
+                ('fixed', 3, CloseButton(None))]))
+        elif len(self.suggestions):
+            self.widgets.append(self.suggestions)
+
+        rows -= sum(w.rows((60,)) for w in self.widgets)
+        if self.widgets:
+            self.widgets.append(urwid.Divider())
+            rows -= 1
+        self.widgets.append(urwid.BoxAdapter(self.listbox, rows))
+
+        self.contents = [(w, ('pack', None)) for w in self.widgets]
 
     def cleanup(self):
         del self.tui_frame
@@ -231,9 +510,15 @@ class EmailList(urwid.ListBox):
         del self.walker
         del self.emails
         del self.search_obj
+        del self.listbox
+        del self.widgets
 
     def show_email(self, metadata):
-        self.tui_frame.show(self, EmailDisplay(self.tui_frame, metadata))
+        self.tui_frame.col_show(self, EmailDisplay(self.tui_frame, metadata))
+        try:
+            self.tui_frame.columns.set_focus_path([1])
+        except IndexError:
+            pass
 
     def load_more(self):
         now = time.time()
@@ -246,6 +531,7 @@ class EmailList(urwid.ListBox):
         self.app_bridge.send_json(self.search_obj)
 
     def incoming_message(self, message):
+        self.suggestions.incoming_message(message)
         if (message.get('prototype') != self.search_obj['prototype'] or
                 message.get('req_id') != self.search_obj['req_id']):
             return
@@ -257,6 +543,7 @@ class EmailList(urwid.ListBox):
             self.load_more()
         except:
             dbg(traceback.format_exc())
+        self.update_content()
 
 
 class EmailDisplay(urwid.ListBox):
@@ -283,7 +570,7 @@ class EmailDisplay(urwid.ListBox):
         urwid.ListBox.__init__(self, self.widgets)
 
     def headers(self):
-        for field in ('Date:', 'To:', 'Cc:', 'From:', 'Subject:'):
+        for field in ('Date:', 'To:', 'Cc:', 'From:', 'Reply-To:', 'Subject:'):
             fkey = field[:-1].lower()
             if fkey not in self.parsed:
                 continue
@@ -307,7 +594,7 @@ class EmailDisplay(urwid.ListBox):
                     ('weight', 4, urwid.Text(('email_val_'+fkey, val)))],
                     dividechars=1)
                 field = ''
-        yield(urwid.Text(''))
+        yield(urwid.Divider())
 
     def cleanup(self):
         del self.tui_frame
@@ -338,41 +625,52 @@ class TuiFrame(urwid.Frame):
         self.render_cols_rows = self.screen.get_cols_rows()
         self.app_bridge = None
 
-        self.filler1 = SplashCat()
+        self.filler1 = SplashCat('Welcome to Moggie!')
         self.filler2 = SplashMoreWide()
         self.filler3 = SplashMoreNarrow()
 
         self.hidden = 0
         self.crumbs = []
         self.columns = urwid.Columns([self.filler1], dividechars=1)
-        self.all_columns = [ContextList(self, test_contexts)]
+        self.context_list = ContextList(self, [])
+        self.all_columns = [self.context_list]
         self.update_topbar(update=False)
         self.update_columns(update=False, focus=False)
 
         urwid.Frame.__init__(self, self.columns, header=self.topbar)
 
+    current_context = property(lambda s: s.context_list.active)
+
     def incoming_message(self, message):
         message = json.loads(message)
         for widget in self.all_columns:
             if hasattr(widget, 'incoming_message'):
-                widget.incoming_message(message)
+                try:
+                    widget.incoming_message(message)
+                except:
+                    dbg(traceback.format_exc())
 
     def link_bridge(self, app_bridge):
         self.app_bridge = app_bridge
         return self.incoming_message
 
     def set_context(self, contexts, i):
-        self.all_columns[0] = ContextList(self, contexts, expanded=i)
+        # FIXME: Do we really need to recreate the context list?
+        self.context_list = ContextList(self, contexts, expanded=i)
+        self.all_columns[0] = self.context_list
         self.update_columns()
 
-    def show_tag(self, which):
-        self.show(self.all_columns[0], EmailList(self, RequestTag(which)))
+    def show_tag(self, context, which):
+        self.col_show(self.all_columns[0],
+            EmailList(self, RequestTag(context, which)))
 
-    def show_mailbox(self, which):
-        self.show(self.all_columns[0], EmailList(self, RequestMailbox(which)))
+    def show_mailbox(self, context, which):
+        self.col_show(self.all_columns[0],
+            EmailList(self, RequestMailbox(context, which)))
 
-    def show_search_result(self, which):
-        self.show(self.all_columns[0], EmailList(self, RequestSearch(which)))
+    def show_search_result(self, context, which):
+        self.col_show(self.all_columns[0],
+            EmailList(self, RequestSearch(context, which)))
 
     def max_child_rows(self):
         return self.screen.get_cols_rows()[1] - 2
@@ -383,6 +681,9 @@ class TuiFrame(urwid.Frame):
         cols_rows = self.screen.get_cols_rows()
         if self.render_cols_rows != cols_rows:
             self.render_cols_rows = cols_rows
+            for wdgt in self.all_columns:
+                if hasattr(wdgt, 'update_content'):
+                    wdgt.update_content()
             self.update_columns()
         return urwid.Frame.render(self, *args, **kwargs)
 
@@ -394,46 +695,66 @@ class TuiFrame(urwid.Frame):
         if len(crumbtrail) > maxwidth:
             crumbtrail = '...' + crumbtrail[-(maxwidth-3):]
 
+        global_hks = []
+        column_hks = []
+        selection_hks = []
+        for col in self.all_columns:
+            if hasattr(col, 'global_hks'):
+                for hk in col.global_hks.values():
+                    global_hks.extend(hk[1:])  # hk[0] is the callback
+        for wdgt in self.columns.get_focus_widgets():
+            if hasattr(wdgt, 'column_hks'):
+                column_hks.extend(wdgt.column_hks)
+            if hasattr(wdgt, 'selection_hks'):
+                selection_hks.extend(wdgt.selection_hks)
+
+        mv = ' %s v%s ' % (APPNAME, APPVER)
         self.topbar = urwid.Pile([
             urwid.AttrMap(urwid.Columns([
-                urwid.Text(' %s v%s ' % (APPNAME, APPVER), align='left'),
-                urwid.Text([
-                         ('top_hk', '/:'), 'Search  ',
-                         ('top_hk', '?:'), 'Help  ',
-                         ('top_hk', 'x:'), 'Close  ',
-                         ('top_hk', 'q:'), 'Quit '],
-                    align='right')]), 'header'),
-            urwid.AttrMap(
-                urwid.Text(crumbtrail, align='center'), 'crumbs')])
+                ('fixed', len(mv), urwid.Text(mv, align='left')),
+                ('weight', 1, urwid.Text(
+                    global_hks + [
+                        ('top_hk', '/:'), 'Search ',
+                        ('top_hk', '?:'), 'Help ',
+                        ('top_hk', 'q:'), 'Quit '],
+                    align='right', wrap='clip'))]), 'header'),
+            urwid.AttrMap(urwid.Columns([
+                urwid.Text(crumbtrail, align='left'),
+                ]), 'crumbs')])
         if update:
             self.contents['header'] = (self.topbar, None)
 
     def focus_last_column(self):
-        self.columns.set_focus_path([len(self.all_columns) - self.hidden - 1])
+        try:
+            self.columns.set_focus_path(
+                [len(self.all_columns) - self.hidden - 1])
+        except IndexError:
+            pass
 
-    def show(self, ref, widget):
-        self.remove(ref, ofs=1, update=False)
+    def col_show(self, ref, widget):
+        self.col_remove(ref, ofs=1, update=False)
         self.all_columns.append(widget)
         self.update_columns(focus=False)
         self.focus_last_column()
 
-    def replace(self, ref, widget):
-        self.remove(ref, update=False)
+    def col_replace(self, ref, widget):
+        self.col_remove(ref, update=False)
         self.all_columns.append(widget)
         self.update_columns(focus=False)
         self.focus_last_column()
 
-    def remove(self, ref, ofs=0, update=True):
+    def col_remove(self, ref, ofs=0, update=True):
         pos = self.all_columns.index(ref)
-        if pos > 0:
+        if pos >= 0:
             pos += ofs
-            for widget in self.all_columns[pos:]:
-                if hasattr(widget, 'cleanup'):
-                    widget.cleanup()
-            self.all_columns[pos:] = []
+            if pos > 0:
+                for widget in self.all_columns[pos:]:
+                    if hasattr(widget, 'cleanup'):
+                        widget.cleanup()
+                self.all_columns[pos:] = []
             if update:
                 self.update_columns()
-        self.focus_last_column()
+                self.focus_last_column()
 
     def update_columns(self, update=True, focus=True):
         cols, rows = self.screen.get_cols_rows()
@@ -476,17 +797,42 @@ class TuiFrame(urwid.Frame):
             self.contents['body'] = (self.columns, None)
 
     def unhandled_input(self, key):
-        if key == 'q':
-            raise urwid.ExitMainLoop()
-        elif key == 'x':
-            if len(self.all_columns) > 1:
-                self.remove(self.all_columns[-1])
-        elif key == 'left':
-            if len(self.all_columns) > 1 and self.hidden:
-                self.remove(self.all_columns[-1])
-        elif key == 'right':
-            self.columns.keypress((0,0), 'enter')
-        else:
+        try:
+            cols_rows = self.screen.get_cols_rows()
+            if key == 'q':
+                raise urwid.ExitMainLoop()
+            elif key == 'esc':
+                if len(self.all_columns) > 1:
+                    self.col_remove(self.all_columns[-1])
+            elif key == 'left':
+                if len(self.all_columns) > 1 and self.hidden:
+                    self.col_remove(self.all_columns[-1])
+            elif key == 'right':
+                self.columns.keypress(cols_rows, 'enter')
+
+            # FIXME: I am sure there must be a better way to do this.
+            elif key == 'h':
+                if len(self.all_columns) > 1 and self.hidden:
+                    self.col_remove(self.all_columns[-1])
+                else:
+                    self.columns.keypress(cols_rows, 'left')
+            elif key == 'j':
+                self.columns.keypress(cols_rows, 'down')
+            elif key == 'k':
+                self.columns.keypress(cols_rows, 'up')
+            elif key == 'l':
+                self.columns.keypress(cols_rows, 'right')
+            elif key == 'J':
+                self.all_columns[1].listbox.keypress(cols_rows, 'down')
+                self.all_columns[1].listbox.keypress(cols_rows, 'enter')
+            elif key == 'K':
+                self.all_columns[1].listbox.keypress(cols_rows, 'up')
+                self.all_columns[1].listbox.keypress(cols_rows, 'enter')
+            elif key in (' ',):
+                self.all_columns[1].listbox.keypress(cols_rows, key)
+            else:
+                return key
+        except IndexError:
             return key
 
 
@@ -521,11 +867,21 @@ def Main(workdir, sys_args, tui_args, send_args):
         elif '-f' in tui_args:
             # Display the contents of a mailbox; this should always be
             # possible whether app is locked or not.
-            tui_frame.show_mailbox(tui_args['-f'])
+            #
+            # FIXME: incomplete, we need to also ensure that Context Zero
+            # is selected. Is setting expanded=0 reliably that?
+            tui_frame.show_mailbox(AppConfig.CONTEXT_ZERO, tui_args['-f'])
+            tui_frame.context_list.expanded = 0
 
         elif not app_is_locked:
-            # Display default Session/INBOX
-            tui_frame.show_tag('inbox')  # FIXME
+            # At this stage, we know the app is unlocked, but we don't
+            # know what Contexts are available; so we should just set a
+            # flag to "show defaults" which gets acted upon when we have
+            # a bit more context available.
+            #
+            # This would probably default to Context 0/INBOX, but the user
+            # should be able to override that somehow (explicitly or not)
+            pass
 
         else:
             # Display locked screen

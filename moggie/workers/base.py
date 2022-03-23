@@ -1,3 +1,4 @@
+import inspect
 import json
 import os
 import socket
@@ -69,6 +70,7 @@ class BaseWorker(Process):
             'requests_failed': 0}
         self.functions = {
             b'quit':   (True,  self.api_quit),
+            b'noop':   (True,  self.api_noop),
             b'status': (False, self.api_status)}
 
         self._secret = b64encode(os.urandom(18), b'-_').strip()
@@ -81,8 +83,9 @@ class BaseWorker(Process):
         self._client_addrinfo = None
         self._client_peeked = None
         self._client_headers = None
-        self._background_jobs = []
-        self._background_thread = None
+        self._background_jobs = {'default': []}
+        self._background_threads = {}
+        self._background_job_lock = threading.Lock()
 
     def run(self):
         if self.NICE and hasattr(os, 'nice'):
@@ -161,7 +164,11 @@ class BaseWorker(Process):
 
     def api_quit(self, **kwargs):
         self.keep_running = False
+        # FIXME: Wait for background jobs or abort them? Abort?
         self.reply_json({'quitting': True})
+
+    def api_noop(self, *args, **kwargs):
+        self.reply_json({'noop': True})
 
     def api_status(self, *args, **kwargs):
         if args and args[0] == 'as.text':
@@ -241,29 +248,51 @@ class BaseWorker(Process):
         for tries in range(0, tries):
             try:
                 self.call(callback_url, rv, callback_chain or None)
+                return
             except PermissionError:
                 traceback.print_exc()
             except OSError:
                 traceback.print_exc()
                 time.sleep(2**tries)
 
-    def _background_worker(self):
-        while self._background_jobs:
+    def _background_worker(self, which, queue):
+        while True:
             try:
-                job = self._background_jobs.pop(0)
+                with self._background_job_lock:
+                    job = queue.pop(0)
                 job()
             except:
                 traceback.print_exc()
-            time.sleep(1)
-        self._background_thread = None
+            time.sleep(0.1)
+            with self._background_job_lock:
+                if not queue:
+                    del self._background_threads[which]
+                    print('Goodbye, cruel world')
+                    return
 
-    def add_background_job(self, job):
-        self._background_jobs.append(job)
-        bgw = self._background_thread
-        if not (bgw and bgw.is_alive()):
-            bgw = threading.Thread(target=self._background_worker)
-            self._background_thread = bgw
-            bgw.start()
+    def _start_background_workers(self):
+        with self._background_job_lock:
+            for which, queue in self._background_jobs.items():
+                bgw = self._background_threads.get(which)
+                if queue and not (bgw and bgw.is_alive()):
+                    bgw = threading.Thread(
+                        target=self._background_worker,
+                        args=(which, queue))
+                    self._background_threads[which] = bgw
+                    bgw.daemon = True  # FIXME: Is this sane?
+                    bgw.start()
+
+    def add_background_job(self, job, first=False, which='default'):
+        with self._background_job_lock:
+            queue = self._background_jobs.get(which)
+            if queue is None:
+                queue = self._background_jobs[which] = []
+
+            if first:
+                queue[:0] = [job]
+            else:
+                queue.append(job)
+        self._start_background_workers()
 
     def set_rpc_authorization(self, auth_header=None):
         if auth_header:
@@ -412,7 +441,10 @@ class BaseWorker(Process):
              prep,
              self.get_uploaded_data)
 
-    def common_rpc_handler(self, fn, method, args, qs_pairs, prep, uploaded):
+    # FIXME: This duplicates the code below almost completely, it would
+    #        be nice to refactor and avoid that...
+    async def async_rpc_handler(self,
+            fn, method, args, qs_pairs, prep, uploaded):
         t0 = time.time()
         argdecode_and_func = self.functions.get(fn)
         fn = str(fn, 'latin-1')
@@ -433,12 +465,58 @@ class BaseWorker(Process):
                     (str(p[0], 'latin-1'), dumb_decode(p[1]))
                     for p in qs_pairs))
 
-                #print('%s(%s, %s)' % (fn, args, kwargs))
+                if argdecode:
+                    args = [dumb_decode(a) for a in args]
+                rv = func(*args, **kwargs)
+                if inspect.isawaitable(rv):
+                    rv = await rv
+
+                t = 1000 * (time.time() - t0)
+                stats = self.status
+                stats[fn+'_ok'] = stats.get(fn+'_ok', 0) + 1
+                stats[fn+'_ms'] = 0.95*stats.get(fn+'_ms', t) + 0.05*t
+                stats['requests_ok'] += 1
+                return rv
+            except TypeError:
+                traceback.print_exc()
+                if kwargs:
+                    self.status['requests_ignored'] += 1
+                    return self.reply(self.HTTP_400)  # This is a guess :-(
+            except KeyboardInterrupt:
+                pass
+            except:
+                traceback.print_exc()
+            self.status['requests_failed'] += 1
+            self.reply(self.HTTP_500)
+        else:
+            self.status['requests_ignored'] += 1
+            self.reply(self.HTTP_404)
+
+    def common_rpc_handler(self,
+            fn, method, args, qs_pairs, prep, uploaded):
+        t0 = time.time()
+        argdecode_and_func = self.functions.get(fn)
+        fn = str(fn, 'latin-1')
+        if argdecode_and_func is not None:
+            try:
+                argdecode, func = argdecode_and_func
+                kwargs = prep(method)
+
+                # Support arbitrarily large arguments, via POST
+                if method == 'POST' and (len(args) == 1) and (args[0] == b'*'):
+                    posted = uploaded()
+                    a_and_q = posted.split(b'?', 1)
+                    args = a_and_q[0][len(fn):].split(b'/')[1:]
+                    qs_pairs = _qsp(a_and_q[1]) if (len(a_and_q) > 1) else []
+                    del kwargs['method']
+
+                kwargs.update(dict(
+                    (str(p[0], 'latin-1'), dumb_decode(p[1]))
+                    for p in qs_pairs))
 
                 if argdecode:
-                    rv = func(*[dumb_decode(a) for a in args], **kwargs)
-                else:
-                    rv = func(*args, **kwargs)
+                    args = [dumb_decode(a) for a in args]
+                rv = func(*args, **kwargs)
 
                 t = 1000 * (time.time() - t0)
                 stats = self.status

@@ -17,8 +17,8 @@ ENVELOPES = ("""\
 HELLO = ("""\
   _                        x
   \`*-.                    x
-   )  _`-.                 x
-  .  : `. .                x
+   )  _`-.         %-8.8s
+  .  : `. .        v%-7.7s
   : _   '  \               x
   ; *` _.   `*-._          x
   `-.-'          `-.       x
@@ -30,13 +30,10 @@ HELLO = ("""\
     ; '   : :`-:     _.`* ;x
 .*' /  .*' ; .*`- +'  `*'  x
  `*-*   `*-*  `*-*'        x
-
-%s v%s                     x
 """).replace('x', '') % (APPNAME, APPVER)
 
-HELLO_CREDITS = """
-   (cat by Blazej Kozlowski)
-"""
+HELLO_CREDITS = """\
+           cat by Blazej Kozlowski"""
 
 
 # FIXME: generate different palettes based on the contents of our
@@ -62,15 +59,19 @@ def palette(config):
             ('list_attrs',     'dark gray',   'black',     ''),
             ('list_subject',   'light gray',  'black',     ''),
             ('list_date',      'dark gray',   'black',     ''),
+            ('check_from',     'light green', 'black', ''),
+            ('check_attrs',    'dark green',  'black',     ''),
+            ('check_subject',  'light green', 'black',     ''),
+            ('check_date',     'dark green',  'black',     ''),
             ('email_key_from', 'dark gray',   'black',     ''),
             ('email_val_from', 'light blue',  'black',     ''),
-            ('email_key_to',   'dark gray',  'black',     ''),
-            ('email_val_to',   'dark gray',  'black',     ''),
-            ('email_key_cc',   'dark gray',  'black',     ''),
-            ('email_val_cc',   'dark gray',  'black',     ''),
-            ('email_key_date', 'dark gray',  'black',     ''),
-            ('email_val_date', 'dark gray',  'black',     ''),
-            ('email_key_subject', 'dark gray',  'black',     ''),
-            ('email_val_subject', 'light green',  'black',     ''),
+            ('email_key_to',   'dark gray',   'black',     ''),
+            ('email_val_to',   'dark gray',   'black',     ''),
+            ('email_key_cc',   'dark gray',   'black',     ''),
+            ('email_val_cc',   'dark gray',   'black',     ''),
+            ('email_key_date', 'dark gray',   'black',     ''),
+            ('email_val_date', 'dark gray',   'black',     ''),
+            ('email_key_subject', 'dark gray',   'black',  ''),
+            ('email_val_subject', 'light green', 'black',  ''),
             ('focus',          'white',       'dark blue', '')]
 
