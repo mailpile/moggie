@@ -18,7 +18,7 @@ from .metadata import Metadata
 # message which is a snapshot of settings and state.
 #
 # We should probably have a default Template for any given account. With a
-# way to create and use others. Others could be per-profile?
+# way to create and use others. Others could be per-context?
 #
 
 DEFAULT_TEMPLATE = """\
@@ -48,7 +48,7 @@ class MessageDraft(Metadata):
     ALL_CLI_ARGS = ('-a', '-b', '-c', '-H', '-i', '-s')
 
     def __init__(self, headers=None, more=None):
-        # FIXME: We always want to know which profile a draft is associated with.
+        # FIXME: We always want to know which context a draft is associated with.
         super().__init__(0, 'DRAFT', 0, 0, 0,
             headers or DEFAULT_TEMPLATE,
             more=more)

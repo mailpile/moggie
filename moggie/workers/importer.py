@@ -16,22 +16,26 @@ class ImportWorker(BaseWorker):
     KIND = 'import'
     NICE = 20
 
-    BATCH_SIZE = 100
+    BATCH_SIZE = 500
 
     def __init__(self, status_dir,
-            app_worker=None, search_worker=None, name=KIND, defaults=None):
+            app_worker=None,
+            search_worker=None,
+            metadata_worker=None,
+            name=KIND):
 
         BaseWorker.__init__(self, status_dir, name=name)
         self.functions.update({
             b'import_search': (True, self.api_import_search)})
         self.app = app_worker
         self.search = search_worker
+        self.metadata = metadata_worker
         assert(self.app and self.search)
 
-    def import_search(self, request_obj, initial_tags,
-            callback_chain=[], force=False):
+    def import_search(self, request_obj, initial_tags, force=False,
+            callback_chain=[]):
         return self.call('import_search',
-            request_obj, initial_tags, force, callback_chain)
+            request_obj, initial_tags, bool(force), callback_chain)
 
     def api_import_search(self,
             request, initial_tags, force, callback_chain, **kwargs):
@@ -46,7 +50,7 @@ class ImportWorker(BaseWorker):
                         callback_chain=callback_chain)
             self.add_background_job(background_import_search)
 
-    def _index_full_messages(self, emails, callback_chain):
+    def _index_full_messages(self, email_idxs, callback_chain):
         # Full indexing, per message in "in:incoming":
         #
         #   1. Submit a request to the main app to fetch the e-mail's
@@ -56,16 +60,17 @@ class ImportWorker(BaseWorker):
         #   3. Run the filtering logic to mutate keywords/tags
         #   4. Add/remove results from the search engine
         #...
-        print('FIXME: Should index: %s' % emails)
+        email_idxs = self.search.intersect('in:incoming', email_idxs)
+        print('FIXME: Should index emails %s' % list(email_idxs))
         # NOTE: Should abort if we see self.keep_running go false, and
         #       trust messages will be picked up again later.
 
     def _import_search(self, request_obj, initial_tags, force,
             callback_chain=None):
 
-        def _full_indexer(emails):
+        def _full_indexer(email_idxs):
             def _full_index():
-                self._index_full_messages(emails, callback_chain)
+                self._index_full_messages(email_idxs, callback_chain)
             return _full_index
 
         tags = ['in:incoming'] + initial_tags
@@ -83,14 +88,19 @@ class ImportWorker(BaseWorker):
             progress += len(emails)
             done = (len(emails) < self.BATCH_SIZE)
 
-            # 2. Forward received messages to search engine for initial
-            #    import (add as new, assign in:incoming and namespace tags).
-            added = self.search.add_results([[md, tags] for md in emails])
-            print('added = %s' % added)
+            # 2. Add messages to metadata index, forward any new ones to the
+            #    search engine for initial tagging (in:incoming, namespaces).
+            idx_ids = self.metadata.add_metadata(emails, update=True)
+            new_msgs = idx_ids['added']
+            if force:
+                new_msgs.extend(idx_ids['updated'])
+            if new_msgs:
+                added = self.search.add_results([[new_msgs, tags]])
 
-            # 3. When search engine reports success, schedule full indexing
-            #    and filtering of that batch of messages.
-            self.add_background_job(_full_indexer(emails), which='full')
+                # 3. When search engine reports success, schedule full indexing
+                #    and filtering of that batch of messages. We could do all
+                #    at once, but this way we can report progress.
+                self.add_background_job(_full_indexer(new_msgs), which='full')
 
             # 4. Repeat until all mail is processed, report progress
             if callback_chain:

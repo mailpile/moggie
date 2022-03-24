@@ -7,6 +7,7 @@ import time
 from ..config import AppConfig
 from ..storage.files import FileStorage
 from ..workers.importer import ImportWorker
+from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorker
 from ..workers.search import SearchWorker
 from ..jmap.core import JMAPSessionResource
@@ -75,19 +76,26 @@ class AppCore:
             FileStorage(relative_to=os.path.expanduser('~')),
             name='fs').connect()
 
+        self.metadata = MetadataWorker(self.worker.worker_dir,
+            self.worker.profile_dir,
+            self.config.get_aes_keys(),
+            name='metadata').connect()
+
         self.search = SearchWorker(self.worker.worker_dir,
             self.worker.profile_dir,
+            self.metadata.info()['maxint'],
             self.config.get_aes_keys(),
             name='search').connect()
 
         self.importer = ImportWorker(self.worker.worker_dir,
             app_worker=self.worker,
             search_worker=self.search,
+            metadata_worker=self.metadata,
             name='importer').connect()
 
     def stop_workers(self):
         # The order here may matter
-        all_workers = (self.importer, self.search, self.storage)
+        all_workers = (self.importer, self.search, self.storage, self.metadata)
         for p in (1, 2, 3):
             for worker in all_workers:
                 try:
@@ -111,6 +119,7 @@ class AppCore:
     # Public API
 
     async def api_jmap_mailbox(self, access, jmap_request):
+        # FIXME: Make sure access grants right to read mailboxes directly
         info = await async_run_in_thread(self.storage.mailbox,
             jmap_request['mailbox'],
             limit=jmap_request['limit'],
@@ -119,8 +128,10 @@ class AppCore:
         return ResponseMailbox(jmap_request, info, watched)
 
     async def api_jmap_search(self, access, jmap_request):
+        # FIXME: Make sure access allows requested contexts
+        #        Make sure we set tag_namespace based on the context
         def perform_search():
-            return self.search.metadata(
+            return self.metadata.metadata(
                 self.search.search(
                         jmap_request['terms'],
                         tag_namespace=jmap_request.get('tag_namespace', None),
@@ -133,6 +144,8 @@ class AppCore:
         return ResponseSearch(jmap_request, results)
 
     async def api_jmap_counts(self, access, jmap_request):
+        # FIXME: Make sure access allows requested contexts
+        #        Make sure we set tag_namespace based on the context
         # FIXME: Actually search/count! Async, in a thread, gathering the
         #        results may take time.
         return ResponseCounts(jmap_request, {})
@@ -149,19 +162,16 @@ class AppCore:
         return ResponseEmail(jmap_request, info)
 
     async def api_jmap_contexts(self, access, jmap_request):
+        # FIXME: Only return contexts this access level grants use of
         all_contexts = self.config.contexts
         contexts = [all_contexts[k].as_dict() for k in sorted(access.roles)]
         return ResponseContexts(jmap_request, contexts)
 
     async def api_jmap_add_to_index(self, access, jmap_request):
-        # FIXME: Does this user have access to this email?
-        #        How will that be determined? Probably a token that
-        #        comes from viewing a search result or mailbox?
-        #        Seems we should decide that before making any efforts
+        # FIXME: Access questions, context settings...
         result = await async_run_in_thread(self.importer.import_search,
             jmap_request['search'],
             jmap_request.get('initial_tags', []))
-        print('AddToIndex Result: %s' % result)
         return ResponsePing(jmap_request)  # FIXME
 
     async def api_jmap(self, access, client_request):
@@ -199,8 +209,8 @@ class AppCore:
 
         if result is not None:
             code, json_result = 200, json.dumps(result, indent=2)
-            if type(jmap_request) != RequestPing:
-                print('<< %s' % json_result[:256])
+#           if type(jmap_request) != RequestPing:
+#               print('<< %s' % json_result[:256])
         else:
             code = 400
             result = {'error': 'Unknown %s' % type(jmap_request)}

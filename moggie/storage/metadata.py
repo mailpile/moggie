@@ -175,10 +175,12 @@ class MetadataStore(RecordStore):
         This will add metadata to the index, or if metadata is already
         present, update it with new values. Old key/value pairs and old
         pointers are preserved on update, other values get overwritten.
+
+        Returns a tuple of (new, metadata_index).
         """
         msgid = metadata.get_raw_header('Message-Id')
         if msgid is None:
-            return self.append(metadata, keys=[])
+            return (True, self.append(metadata, keys=[]))
         else:
             om = self.get(msgid)
             if om is not None:
@@ -186,7 +188,7 @@ class MetadataStore(RecordStore):
                 for k, v in om.more.items():
                     if k not in metadata.more:
                         metadata.more[k] = v
-            return self.set(msgid, metadata)
+            return (om is None, self.set(msgid, metadata))
 
     def add_if_new(self, metadata):
         msgid = metadata.get_raw_header('Message-Id')
@@ -315,8 +317,8 @@ To: bre@example.org
 Subject: Sure, sure
 """
     foo_ptr = Metadata.PTR(0, b'/tmp/foo', 0)
-    i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, 0, 0, headers, {'thing': 'stuff', 'a': 'b'}))
-    i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, 0, 0, headers, {'wink': 123, 'a': 'c'}))
+    n,i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, 0, 0, headers, {'thing': 'stuff', 'a': 'b'}))
+    n,i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, 0, 0, headers, {'wink': 123, 'a': 'c'}))
     ms.append(Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net'))
     ms.append(Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net'))
     ms[100000] = Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net')

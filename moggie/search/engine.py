@@ -218,18 +218,23 @@ class SearchEngine:
         keywords = {}
         hits = []
         extra_kws = ['in:'] if tag_ns else []
-        for (r_id, kw_list) in results:
-            if not isinstance(r_id, int):
-                raise ValueError('Results must be integers')
-            if r_id > self.maxint:
-                self.maxint = r_id
-            for kw in kw_list + extra_kws:
-                kw = kw.replace('*', '')  # Otherwise partial search breaks..
-                if tag_ns and kw[:3] == 'in:':
-                    kw = '%s@%s' % (kw, tag_ns)
-                keywords[kw] = keywords.get(kw, []) + [r_id]
-            if kw_list:
-                hits.append(r_id)
+        for (r_ids, kw_list) in results:
+            if isinstance(r_ids, int):
+                r_ids = [r_ids]
+            if not isinstance(r_ids, list):
+                raise ValueError('Results must be (lists of) integers')
+            for r_id in r_ids:
+                if not isinstance(r_id, int):
+                    raise ValueError('Results must be integers')
+                if r_id > self.maxint:
+                    self.maxint = r_id
+                for kw in kw_list + extra_kws:
+                    kw = kw.replace('*', '')  # Otherwise partial search breaks..
+                    if tag_ns and kw[:3] == 'in:':
+                        kw = '%s@%s' % (kw, tag_ns)
+                    keywords[kw] = keywords.get(kw, []) + [r_id]
+                if kw_list:
+                    hits.append(r_id)
 
         kw_idx_list = [
             (self.keyword_index(kw, prefer_l1=prefer_l1), kw)
