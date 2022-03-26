@@ -15,8 +15,12 @@ SINGLETONS = (
     'date',
     'errors-to',
     'from',
+    'resent-from',
+    'x-original-from',
+    'message-id',
     'mime-version',
     'reply-to',
+    'return-path',
     'subject',
     'user-agent',
     'x-mailer')
@@ -34,6 +38,7 @@ ADDRESS_HEADERS = (
     'resent-bcc',
     'resent-cc',
     'resent-from',
+    'x-original-from',
     'resent-reply-to',
     'resent-sender',
     'resent-to',
@@ -102,25 +107,30 @@ def parse_header(raw_header):
     if isinstance(raw_header, bytes):
         raw_header = str(raw_header, 'latin-1')
 
-    unfolded = re.sub(FOLDING_RE, '', raw_header)
+    # FIXME: This was '' - which is correct?
+    unfolded = re.sub(FOLDING_RE, ' ', raw_header)
+
     headers = {}
     order = []
+    first = True
     for ln in unfolded.splitlines():
         try:
-            if ln[:1] == '_':
-                raise ValueError('Illegal char in header name')
-            hdr, val = ln.split(':', 1)
-            hdr = hdr.lower()
-            val = val.strip()
+            if first and ln[:5] == 'From ':
+                hdr = '_mbox_separator'
+                val = ln.strip()
+            else:
+                if ln[:1] == '_':
+                    raise ValueError('Illegal char in header name')
+                hdr, val = ln.split(':', 1)
+                hdr = hdr.lower()
+                val = val.strip()
         except ValueError:
             val = ln.strip()
             if not val:
                 continue
-            if val[:5] == 'From ':
-                hdr = '_mbox_separator'
-            else:
-                hdr = '_invalid'
-                headers['_has_errors'] = True
+            hdr = '_invalid'
+            headers['_has_errors'] = True
+        first = False
 
         if hdr in SINGLETONS and hdr in headers:
             hdr = '_duplicate-' + hdr
@@ -165,12 +175,14 @@ From: Bjarni R. Einarsson <bre@example.org>
 To: spamfun@example.org
 To: duplicate@example.org
 X-Junk: 123
-Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is =?utf-8?b?SGVsbG8gd29ybGQ=?=
+Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
+ =?utf-8?b?SGVsbG8gd29ybGQ=?=
 
 """)
     #print('%s' % json.dumps(parse, indent=1))
 
     assert(json.dumps(parse))
+    assert(parse['_mbox_separator'] == 'From something at somedate')
     assert(parse['to'][0].fn == '')
     assert(parse['to'][0].address == 'spamfun@example.org')
     assert(parse['from'].fn == 'Bjarni R. Einarsson')

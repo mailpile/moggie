@@ -1,3 +1,4 @@
+import binascii
 import base64
 import re
 
@@ -19,12 +20,18 @@ class MessagePart(dict):
     def __init__(self, msg_bin, fix_mbox_from=False):
         self.msg_bin = msg_bin
         self.fix_mbox_from = fix_mbox_from
-        try:
-            self.eol = b'\r\n'
-            self.hend = msg_bin.index(self.eol+self.eol)
-        except ValueError:
-            self.eol = b'\n'
-            self.hend = msg_bin.index(self.eol+self.eol)
+        self.hend = len(msg_bin)
+        self.eol = b'\n'
+        for eol, hend in (
+                (b'\r\n', b'\r\n\r\n'),
+                (b'\n',   b'\n\n'),
+                (b'\r\n', b'\n\r\n')):  # This one is weird!
+            try:
+                self.hend = msg_bin.index(hend)
+                self.eol = eol
+                break
+            except ValueError:
+                pass
 
         self.update(parse_header(msg_bin[:self.hend]))
 
@@ -180,7 +187,7 @@ class MessagePart(dict):
         for cs in charsets:
             try:
                 return str(self._bytes(part), cs)
-            except (UnicodeDecodeError, LookupError) as e:
+            except (UnicodeDecodeError, LookupError, binascii.Error) as e:
                 pass
         return None
 

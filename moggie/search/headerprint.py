@@ -13,7 +13,10 @@ import hashlib
 # not listed here, but in the code below.
 MTA_HP_HEADERS = ('return-path', 'errors-to', 'received-spf', 'list-owner',
                   'list-help', 'x-loop', 'x-no-archive', 'x-sequence',
-                  'x-originating-ip', 'x-github-sender')
+                  'x-originating-ip',
+                  'x-github-sender')
+
+MTA_HP_REMAILED = ('resent-from', 'x-original-from', 'x-original-sender')
 
 MUA_HP_HEADERS = ('date', 'from', 'to', 'reply-to',
                   # We omit the Subject, because for some reason it seems
@@ -60,8 +63,8 @@ def HeaderPrintMTADetails(parsed_message):
     # We prefer mailing list identifiers or DKIM headers, as they are
     # explicitly trying to tell us which org this is.
     done = set()
-    for h in parsed_message['_ORDER']:
-        if h in MTA_HP_HEADERS:
+    for h in MTA_HP_HEADERS:
+        if h in parsed_message:
             details.append(h)
             continue
 
@@ -69,29 +72,42 @@ def HeaderPrintMTADetails(parsed_message):
             continue
         done.add(h)
 
-        if h in ('list-id', 'list-unsubscribe', 'list-subscribe'):
-            val = parsed_message.get(h)[0].strip().split(' ')[0]
+    for h in ('list-id', 'list-unsubscribe', 'list-subscribe'):
+        if h in parsed_message:
+            val = parsed_message.get(h)[0].strip()
+            val = val.replace(', ', ' ').split(' ')[0].strip()
             if val[:1] == '<':
-                val = val[1:-2]
+                val = val[1:-1]
             val = '.'.join(val.split('?')[0].split('.')[-2:])
             details.extend([h, val])
-        elif h in (
-                'dkim-signature', 'domainkey-signature',
-                'x-google-dkim-signature'):
+
+    for h in (
+            'dkim-signature', 'domainkey-signature',
+            'x-google-dkim-signature'):
+        if h in parsed_message:
             for dkim in (parsed_message.get(h) or []):
-                attrs = [HP_MUA_ID_SPACE.sub('', a) for a in dkim.split(';')
+                attrs = [HP_MUA_ID_SPACE.sub('', HP_MUA_ID_IGNORE.sub('x', a))
+                         for a in dkim.split(';')
                          if a.strip() and a.strip()[:1] in 'vacd']
                 details.extend([h, '; '.join(sorted(attrs))])
 
-    # Is the org using its own mail servers? That's noteworthy.
-    if from_domain:
-        for rcvd in parsed_message.get('received') or []:
-            if from_domain in rcvd:
-                details.append('from-domain-in-received')
-                break
+    # Is this a remailing that replaces headers with X-Originals ?
+    # If so, we make a note and skip some other checks.
+    for h in MTA_HP_REMAILED:
+        if h in parsed_message:
+            details.append('remailed')
+            break
 
-    # How many servers touched this mail before it got to us?
-    details.append('hops:%d' % len(parsed_message.get('received', [])))
+    if 'remailed' not in details:
+        # Is the org using its own mail servers? That's noteworthy.
+        if from_domain:
+            for rcvd in parsed_message.get('received') or []:
+                if from_domain in rcvd.split(' for ')[0]:
+                    details.append('from-domain-in-received')
+                    break
+
+        # How many servers touched this mail before it got to us?
+        details.append('hops:%d' % len(parsed_message.get('received', [])))
 
     if ('list-id' in details) or ('dkim-signature' in details):
         return details
@@ -110,7 +126,7 @@ def HeaderPrintMTADetails(parsed_message):
             if parsed:
                 by = parsed.group(1) + parsed.group(2)
                 by = HP_MUA_ID_SPACE.sub(' ', HP_MUA_ID_IGNORE.sub('x', by))
-                details = ['Received ' + by]
+                details.append('Received ' + by)
                 break
 
     return details
@@ -149,7 +165,7 @@ def HeaderPrintMUADetails(message, mta=None):
             details.extend(['Guessed', 'Domain-Contact-Bot'])
         elif from_userpart in ('postmaster', 'mailer-daemon'):
             details.extend(['Guessed', 'Mailer-Daemon'])
-        elif mta and mta[0].startswith('Received by google.com'):
+        elif 'x-google-smtp-source' in message:
             details.extend(['Guessed', 'GMail'])
 
     return details
@@ -165,15 +181,26 @@ def HeaderPrints(parsed_message):
     m = HeaderPrintMTADetails(parsed_message)
     u = HeaderPrintMUADetails(parsed_message, mta=m)[:20]
     g = HeaderPrintGenericDetails(parsed_message)[:50]
+
+    sender = (
+            parsed_message.get('reply-to') or
+            parsed_message.get('x-original-from') or
+            parsed_message.get('resent-from') or
+            parsed_message.get('from', {})
+        ).get('address')
+
     mua = (u[1] if u else None)
     if mua and mua.startswith('Mozilla '):
         mua = mua.split()[-1]
+
     return {
         'org': _md5ish('\n'.join(m)),
         # The sender-ID headerprints includes MTA and sending org info
-        'sender': _md5ish('\n'.join(m+u+g)),
+        'sender': _md5ish('\n'.join([sender]+m+u+g)),
         # Tool-chain headerprints ignore the MTA/org details
         'tools': _md5ish('\n'.join(u+g)),
+        # The e-mail of the "most relevant" sender
+        'email': sender,
         # Our best guess about what the MUA actually is; may be None
         'mua': mua}
 
@@ -191,9 +218,9 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         dump = True
         if sys.argv[1] == '-':
-            test_msg = bytes(sys.stdin.read(10240), 'latin-1')
+            test_msg = bytes(sys.stdin.read(64000), 'latin-1')
         else:
-            test_msg = open(sys.argv[1], 'rb').read(10240)
+            test_msg = open(sys.argv[1], 'rb').read(64000)
     else:
         dump = False
         test_msg = b"""\
