@@ -59,10 +59,17 @@ def HeaderPrintMTADetails(parsed_message):
 
     # We prefer mailing list identifiers or DKIM headers, as they are
     # explicitly trying to tell us which org this is.
+    done = set()
     for h in parsed_message['_ORDER']:
         if h in MTA_HP_HEADERS:
             details.append(h)
-        elif h in ('list-id', 'list-unsubscribe', 'list-subscribe'):
+            continue
+
+        if h in done:
+            continue
+        done.add(h)
+
+        if h in ('list-id', 'list-unsubscribe', 'list-subscribe'):
             val = parsed_message.get(h)[0].strip().split(' ')[0]
             if val[:1] == '<':
                 val = val[1:-2]
@@ -235,7 +242,8 @@ This is a great test oh yes it is!
         print('Generics: %s' % g)
         print('Headerprints: %s' % json.dumps(HeaderPrints(test_msg), indent=2))
     else:
-        assert(len(m) == 5)
+        print('%s' % m)
+        assert(len(m) == 6)
         assert('example.org' in ' '.join(m))
         assert('from-domain-in-received' in m)
         assert('Guessed' in u)
