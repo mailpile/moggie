@@ -59,6 +59,73 @@ class CloseButton(Selectable):
             on_select={'enter': on_select})
 
 
+class QuestionDialog(urwid.WidgetWrap):
+    WANTED_HEIGHT = 4
+    WANTED_WIDTH = 40
+    signals = ['close']
+    def __init__(self):
+        close_button = urwid.Button(('subtle', '[x]'))
+        urwid.connect_signal(close_button, 'click', lambda b: self._emit('close'))
+        fill = urwid.Filler(urwid.Pile([
+            urwid.Text('WTF OMG LOL'),
+            close_button]))
+        super().__init__(urwid.AttrWrap(fill, 'popbg'))
+
+
+class SearchDialog(urwid.WidgetWrap):
+    HELP_TEXT = """\
+
+Examples:
+ - in:inbox is:unread
+ - from:joe has:attachment
+ - dates:2010-01..2010-04
+ - party +from:mom -to:dad
+ - h* *orld
+
+Note: Multiple terms will narrow the search, unless
+prefixed with a + to "add" or - to "remove" hits.
+Use an asterisk (*) to search for word fragments.
+"""
+    WANTED_HEIGHT = 6 + len(HELP_TEXT.splitlines())
+    WANTED_WIDTH = 60
+
+    signals = ['close']
+
+    def search(self, terms):
+        if '\n' in terms:
+            terms = terms.replace('\n', '').strip()
+            if not self.exact.get_state():
+                def _fuzz(term):
+                    if ':' in term or '*' in term or term[:1] in ('-', '+'):
+                        return term
+                    if term[-1:] == 's':
+                        term = term[:-1]
+                    return term + '*'
+                terms = ' '.join(_fuzz(w) for w in terms.split(' ') if w)
+            if terms:
+                self.tui_frame.show_search_result(terms)
+            self._emit('close')
+        elif '/' in terms:
+            self._emit('close')
+
+    def __init__(self, tui_frame):
+        self.tui_frame = tui_frame
+        close_button = CloseButton(on_select=lambda b: self._emit('close'))
+
+        self.exact = urwid.CheckBox('Exact matches only', False)
+        self.search_box = urwid.Edit('Search: ',
+            multiline=True, allow_tab=False, wrap='clip')
+        urwid.connect_signal(
+            self.search_box, 'change', lambda b,t: self.search(t))
+
+        fill = urwid.Filler(urwid.Pile([
+            self.search_box,
+            urwid.Divider(),
+            self.exact,
+            urwid.Text(('popsubtle', self.HELP_TEXT))]))
+        super().__init__(urwid.LineBox(urwid.AttrWrap(fill, 'popbg')))
+
+
 class SuggestionBox(urwid.Pile):
     DISMISSED = set()
 
@@ -206,8 +273,7 @@ class ContextList(urwid.ListBox):
         def _sel_email(which):
             return lambda x: self.tui_frame.show_account(self.active, which)
         def _sel_search(terms):
-            return lambda x: self.tui_frame.show_search_result(
-                self.active, terms)
+            return lambda x: self.tui_frame.show_search_result(terms)
 
         widgets = []
         last_ctx_name = '-:-!-:-'
@@ -619,6 +685,31 @@ class EmailDisplay(urwid.ListBox):
         self.widgets[-1] = self.email_body
 
 
+class PopUpManager(urwid.PopUpLauncher):
+    def __init__(self, tui_frame, content):
+        super().__init__(content)
+        self.tui_frame = tui_frame
+        self.target = SearchDialog
+        self.target_args = []
+
+    def create_pop_up(self):
+        if self.target:
+            pop_up = self.target(self.tui_frame, *self.target_args)
+            urwid.connect_signal(pop_up, 'close', lambda b: self.close_pop_up())
+            return pop_up
+        return None
+
+    def get_pop_up_parameters(self):
+        # FIXME: Make this dynamic somehow?
+        cols, rows = self.tui_frame.screen.get_cols_rows()
+        wwidth = min(cols, self.target.WANTED_WIDTH)
+        return {
+            'left': (cols//2)-(wwidth//2),
+            'top': 2,
+            'overlay_width': wwidth,
+            'overlay_height': self.target.WANTED_HEIGHT}
+
+
 class TuiFrame(urwid.Frame):
     def __init__(self, screen):
         self.screen = screen
@@ -660,17 +751,17 @@ class TuiFrame(urwid.Frame):
         self.all_columns[0] = self.context_list
         self.update_columns()
 
-    def show_tag(self, context, which):
-        self.col_show(self.all_columns[0],
-            EmailList(self, RequestTag(context, which)))
-
-    def show_mailbox(self, context, which):
+    def show_mailbox(self, which, context=None):
+        if context is None:
+            context = self.context_list.active
         self.col_show(self.all_columns[0],
             EmailList(self, RequestMailbox(context, which)))
 
-    def show_search_result(self, context, which):
+    def show_search_result(self, terms, context=None):
+        if context is None:
+            context = self.context_list.active
         self.col_show(self.all_columns[0],
-            EmailList(self, RequestSearch(context, which)))
+            EmailList(self, RequestSearch(context, terms)))
 
     def max_child_rows(self):
         return self.screen.get_cols_rows()[1] - 2
@@ -709,7 +800,7 @@ class TuiFrame(urwid.Frame):
                 selection_hks.extend(wdgt.selection_hks)
 
         mv = ' %s v%s ' % (APPNAME, APPVER)
-        self.topbar = urwid.Pile([
+        self.topbar = PopUpManager(self, urwid.Pile([
             urwid.AttrMap(urwid.Columns([
                 ('fixed', len(mv), urwid.Text(mv, align='left')),
                 ('weight', 1, urwid.Text(
@@ -720,7 +811,7 @@ class TuiFrame(urwid.Frame):
                     align='right', wrap='clip'))]), 'header'),
             urwid.AttrMap(urwid.Columns([
                 urwid.Text(crumbtrail, align='left'),
-                ]), 'crumbs')])
+                ]), 'crumbs')]))
         if update:
             self.contents['header'] = (self.topbar, None)
 
@@ -811,6 +902,8 @@ class TuiFrame(urwid.Frame):
                 self.columns.keypress(cols_rows, 'enter')
 
             # FIXME: I am sure there must be a better way to do this.
+            elif key == '/':
+                self.topbar.open_pop_up()
             elif key == 'h':
                 if len(self.all_columns) > 1 and self.hidden:
                     self.col_remove(self.all_columns[-1])
@@ -870,7 +963,7 @@ def Main(workdir, sys_args, tui_args, send_args):
             #
             # FIXME: incomplete, we need to also ensure that Context Zero
             # is selected. Is setting expanded=0 reliably that?
-            tui_frame.show_mailbox(AppConfig.CONTEXT_ZERO, tui_args['-f'])
+            tui_frame.show_mailbox(tui_args['-f'], AppConfig.CONTEXT_ZERO)
             tui_frame.context_list.expanded = 0
 
         elif not app_is_locked:

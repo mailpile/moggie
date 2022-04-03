@@ -84,21 +84,25 @@ def _prune_longest(keywords, longest, maxlen):
     return keywords
 
 
-def update_wordblob(iter_kws, blob,
+def update_wordblob(iter_kws, blob, blacklist=None,
         shortest=4, longest=40, maxlen=102400, lru=False):
     """
     Add to a blob of keywords, applying the given criteria, for use
     with the wordblob_search() function. The <iter_kws> should be a list
     or iterable of keywords encoded as bytes().
     """
+    blacklist = set(blacklist or [])
+
     keywords = set([])
     for kw in iter_kws:
         if (shortest <= len(kw) <= longest) and (b'*' not in kw):
             keywords.add(kw)
+    keywords -= blacklist
 
     # Merge old keywords with new...
     if blob and len(keywords) < maxlen:
-        old_kws = [kw for kw in blob.split(b'\n') if kw not in keywords]
+        ignore = (blacklist | keywords)
+        old_kws = [kw for kw in blob.split(b'\n') if kw not in ignore]
         keeping = maxlen - len(keywords)
         if not lru:
             old_kws = _prune_longest(old_kws, longest, keeping)
@@ -181,8 +185,8 @@ if __name__ == '__main__':
     b1 = update_wordblob([b'four'], b1, shortest=1, lru=True)
     b1 = update_wordblob([b'three'], b1, shortest=1, lru=True)
     b1 = update_wordblob([b'two'], b1, shortest=1, lru=True)
-    b1 = update_wordblob([b'one'], b1, shortest=1, lru=True)
-    assert(b1 == b'one\ntwo\nthree\nfour\nfive')
+    b1 = update_wordblob([b'one'], b1, blacklist=[b'three'], shortest=1, lru=True)
+    assert(b1 == b'one\ntwo\nfour\nfive')
     b1 = b'One\nTwo\nThree\nFour\nFive'
     assert(wordblob_search('f*', b1, 10, order=-1) == ['f', 'Five', 'Four'])
     assert(wordblob_search('f*', b1, 10, order=+1) == ['f', 'Four', 'Five'])

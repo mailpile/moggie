@@ -44,7 +44,8 @@ class MetadataWorker(BaseWorker):
         return self.call('add_metadata', update, metadata)
 
     def metadata(self, hits, sort=SORT_NONE, skip=0, limit=None):
-        return self.call('metadata', hits, sort, skip, limit)
+        return (Metadata(*m) for m in
+            self.call('metadata', hits, sort, skip, limit))
 
     def info(self):
         return self.call('info')
@@ -98,12 +99,12 @@ if __name__ == '__main__':
             assert(len(added['added']) == 1)
             md_id = added['added'][0]
 
-            m1 = mw.metadata([md_id], sort=mw.SORT_DATE_ASC)
-            assert(msgid == Metadata(*m1[0]).get_raw_header('Message-Id'))
+            m1 = list(mw.metadata([md_id], sort=mw.SORT_DATE_ASC))
+            assert(msgid == m1[0].get_raw_header('Message-Id'))
 
-            iset = IntSet([md_id])
-            m2 = mw.metadata(dumb_encode_asc(iset), sort=mw.SORT_DATE_ASC)
-            assert(msgid == Metadata(*m2[0]).get_raw_header('Message-Id'))
+            iset = dumb_encode_asc(IntSet([md_id]))
+            m2 = list(mw.metadata(iset, sort=mw.SORT_DATE_ASC))
+            assert(msgid == m2[0].get_raw_header('Message-Id'))
 
             if 'wait' not in sys.argv[1:]:
                 mw.quit()

@@ -187,7 +187,7 @@ def HeaderPrints(parsed_message):
             parsed_message.get('x-original-from') or
             parsed_message.get('resent-from') or
             parsed_message.get('from', {})
-        ).get('address')
+        ).get('address', '-')
 
     mua = (u[1] if u else None)
     if mua and mua.startswith('Mozilla '):

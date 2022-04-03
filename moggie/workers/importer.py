@@ -4,9 +4,10 @@ import time
 import traceback
 import threading
 
-from ..jmap.requests import to_jmap_request
+from ..jmap.requests import *
 from ..util.dumbcode import dumb_encode_asc
 from ..storage.files import FileStorage
+from ..search.extractor import KeywordExtractor
 from .base import BaseWorker
 
 
@@ -15,11 +16,12 @@ class ImportWorker(BaseWorker):
     """
     KIND = 'import'
     NICE = 20
-
-    BATCH_SIZE = 500
+    BACKGROUND_TASK_SLEEP = 0
+    BATCH_SIZE = 100
 
     def __init__(self, status_dir,
             app_worker=None,
+            fs_worker=None,
             search_worker=None,
             metadata_worker=None,
             name=KIND):
@@ -27,9 +29,14 @@ class ImportWorker(BaseWorker):
         BaseWorker.__init__(self, status_dir, name=name)
         self.functions.update({
             b'import_search': (True, self.api_import_search)})
+
+        self.fs = fs_worker
         self.app = app_worker
         self.search = search_worker
         self.metadata = metadata_worker
+
+        self.kwe = KeywordExtractor()  # FIXME: Configurable? Plugins?
+
         assert(self.app and self.search)
 
     def import_search(self, request_obj, initial_tags, force=False,
@@ -50,20 +57,49 @@ class ImportWorker(BaseWorker):
                         callback_chain=callback_chain)
             self.add_background_job(background_import_search)
 
+    def _get_email(self, metadata):
+        if metadata.pointers[0].is_local_file:
+            return self.fs.email(metadata, text=True, data=False)
+        else:
+            return self.app.jmap(RequestEmail(metadata=metadata, text=True)).get('email')
+
     def _index_full_messages(self, email_idxs, callback_chain):
         # Full indexing, per message in "in:incoming":
         #
-        #   1. Submit a request to the main app to fetch the e-mail's
-        #      text parts and structure (not full attachments). Again,
-        #      we don't know or care where the mail is coming from.
-        #   2. Generate keywords and tags
-        #   3. Run the filtering logic to mutate keywords/tags
-        #   4. Add/remove results from the search engine
         #...
-        email_idxs = self.search.intersect('in:incoming', email_idxs)
-        print('FIXME: Should index emails %s' % list(email_idxs))
-        # NOTE: Should abort if we see self.keep_running go false, and
-        #       trust messages will be picked up again later.
+        email_idxs = list(self.search.intersect('in:incoming', email_idxs))
+        print('FIXME: Should index emails %s' % email_idxs)
+        keywords = {}
+        for md in self.metadata.metadata(email_idxs):
+             # 1. Submit a request to the main app to fetch the e-mail's
+             #    text parts and structure (not full attachments). Again,
+             #    we don't know or care where the mail is coming from.
+             email = self._get_email(md)
+             if not email:
+                 continue
+
+             # 2. Generate keywords and tags
+             stat, kws = self.kwe.extract_email_keywords(md, email)
+             keywords[md.idx] = list(kws)
+             # FIXME: Check status: want more data? e.g. full attachments?
+
+             # 3. Run the filtering logic to mutate keywords/tags
+             pass  # FIXME
+
+             if not self.keep_running:
+                 return
+
+        # 4. Add/remove results from the search engine
+        self.search.add_results(list(keywords.items()), wait=False)
+
+        # 5. Remove messages from Incoming
+        # FIXME: Make this a callback action when add_results completes
+        self.search.del_results([[list(keywords.keys()), 'in:incoming']])
+
+        # 6. Report progress
+        if callback_chain:
+            self.results_to_callback_chain(
+                callback_chain, {'indexed': len(keywords)})
 
     def _import_search(self, request_obj, initial_tags, force,
             callback_chain=None):

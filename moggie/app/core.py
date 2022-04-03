@@ -88,14 +88,20 @@ class AppCore:
             name='search').connect()
 
         self.importer = ImportWorker(self.worker.worker_dir,
+            fs_worker=self.storage,
             app_worker=self.worker,
             search_worker=self.search,
             metadata_worker=self.metadata,
             name='importer').connect()
 
     def stop_workers(self):
-        # The order here may matter
-        all_workers = (self.importer, self.search, self.storage, self.metadata)
+        # The order here may matter, we ask the "higher level" workers
+        # to shut down first, before shutting down low level systems.
+        all_workers = [
+            self.importer,
+            self.search,
+            self.metadata,
+            self.storage]
         for p in (1, 2, 3):
             for worker in all_workers:
                 try:
@@ -131,7 +137,7 @@ class AppCore:
         # FIXME: Make sure access allows requested contexts
         #        Make sure we set tag_namespace based on the context
         def perform_search():
-            return self.metadata.metadata(
+            return list(self.metadata.metadata(
                 self.search.search(
                         jmap_request['terms'],
                         tag_namespace=jmap_request.get('tag_namespace', None),
@@ -139,7 +145,7 @@ class AppCore:
                     )['hits'],
                 sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
                 skip=jmap_request.get('skip', 0),
-                limit=jmap_request.get('limit', None))
+                limit=jmap_request.get('limit', None)))
         results = await async_run_in_thread(perform_search)
         return ResponseSearch(jmap_request, results)
 

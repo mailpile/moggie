@@ -15,6 +15,10 @@ class SearchWorker(BaseWorker):
 
     KIND = 'search'
 
+    SYS_DICTIONARY_PATHS = [
+        '/etc/dictionaries-common/words',
+        '/usr/share/dict/words']
+
     SORT_NONE = 0
     SORT_DATE_ASC = 1
     SORT_DATE_DEC = 2
@@ -36,6 +40,8 @@ class SearchWorker(BaseWorker):
             b'add_results':  (True, self.api_add_results),
             b'del_results':  (True, self.api_del_results),
             b'mutate':       (True, self.api_mutate),
+            b'compact':      (True, self.api_compact),
+            b'update_terms': (True, self.api_update_terms),
             b'term_search':  (True, self.api_term_search),
             b'explain':      (True, self.api_explain),
             b'search':       (True, self.api_search)})
@@ -54,18 +60,34 @@ class SearchWorker(BaseWorker):
             encryption_keys=self.encryption_keys,
             defaults=self.defaults,
             maxint=self.maxint)
+
+        for dpath in self.SYS_DICTIONARY_PATHS:
+            if os.path.exists(dpath):
+                try:
+                    self._engine.add_dictionary_terms(dpath)
+                    break
+                except:
+                    pass
+
         del self.encryption_keys
+
         return super()._main_httpd_loop()
 
     def add_results(self, results, callback_chain=None, wait=True):
         return self.call('add_results', results, callback_chain, wait)
 
-    def del_results(self, results, callback_chain=None):
-        return self.call('del_results', results, callback_chain)
+    def del_results(self, results, callback_chain=None, wait=True):
+        return self.call('del_results', results, callback_chain, wait)
 
     def mutate(self, mset, op_kw_list):
         strop_kw_list = [[self._OP_STR_MAP(op), kw] for op, kw in op_kw_list]
         return self.call('mutate', mset, storp_kw_list)
+
+    def compact(self):
+        return self.call('compact')
+
+    def update_terms(self, terms):
+        return self.call('update_terms', terms)
 
     def term_search(self, term, count=10):
         return self.call('term_search', term, count)
@@ -80,9 +102,18 @@ class SearchWorker(BaseWorker):
         srch = self.call('search', terms, mask_deleted, tag_namespace)
         return IntSet.And(dumb_decode(srch['hits']), hits)
 
-    def api_mutate(self, mset, strop_kw_list):
+    def api_mutate(self, mset, strop_kw_list, **kwargs):
         op_kw_list = [(self._STR_OP_MAP(op), kw) for op, kw in strop_kw_list]
         self.reply_json(self._engine.mutate(mset, op_kw_list))
+
+    def api_compact(self, **kwargs):
+        t0 = time.time()
+        self._engine.create_part_space()
+        t1 = time.time()
+        self._engine.records.compact()
+        self.reply_json({
+            'wordblobs': '%.2f seconds' % (t1 - t0),
+            'compacted': '%.2f seconds' % (time.time() - t1)})
 
     def api_add_results(self, results, callback_chain, wait, **kwargs):
         if wait and not callback_chain:
@@ -94,17 +125,18 @@ class SearchWorker(BaseWorker):
                 self.results_to_callback_chain(callback_chain, rv)
             self.add_background_job(background_add_results)
 
-    def api_del_results(self, results, callback_chain, **kwargs):
-        def _res_list():
-            return results
-        if kwargs.get('wait') and not callback_chain:
-            self.reply_json(self._engine.del_results(_res_list()))
+    def api_del_results(self, results, callback_chain, wait, **kwargs):
+        if wait and not callback_chain:
+            self.reply_json(self._engine.del_results(results))
         else:
             self.reply_json({'running': True})
             def background_add_results():
-                rv = self._engine.del_results(_res_list())
+                rv = self._engine.del_results(results)
                 self.results_to_callback_chain(callback_chain, rv)
             self.add_background_job(background_add_results)
+
+    def api_update_terms(self, terms, **kwargs):
+        self.reply_json({'FIXME': 1})
 
     def api_term_search(self, term, count, **kwargs):
         self.reply_json(self._engine.candidates(term, count))
@@ -137,7 +169,7 @@ if __name__ == '__main__':
             assert(sw.add_results([
                 [ghost, ["spooky", "action"]],
                 [ghost, ["spooky", "lives"]],
-                [ghost, ["spooky", "people"]],
+                [ghost, set(["spooky", "people"])],
                 [256, ["hello", "world"]],
                 [1024, ["hello"]]],
                 callback_chain=[sw.callback_url('noop')]

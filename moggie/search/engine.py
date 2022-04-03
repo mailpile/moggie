@@ -1,11 +1,12 @@
 import copy
 import os
 import struct
+import re
 import threading
 
 from ..util.dumbcode import dumb_decode, dumb_encode_bin
 from ..util.intset import IntSet
-from ..util.wordblob import wordblob_search, create_wordblob
+from ..util.wordblob import wordblob_search, create_wordblob, update_wordblob
 from ..storage.records import RecordFile, RecordStore
 
 
@@ -45,8 +46,8 @@ class PostingListBucket:
             beg = end
             yield kw
 
-    def _find_iset(self, keyword):
-        bkeyword = bytes(keyword, 'utf-8')
+    def _find_iset(self, kw):
+        bkeyword = kw if isinstance(kw, bytes) else bytes(kw, 'utf-8')
 
         beg = 0
         iset = None
@@ -103,16 +104,21 @@ class SearchEngine:
     cross that bridge when we come to it.
     """
     DEFAULTS = {
-        'partial_list_len': 128000,
-        'partial_shortest': 5,
+        'partial_list_len': 500000,  # Will expand to up ~5MB of storage
+        'partial_min_hits': 3,
+        'partial_shortest': 6,
         'partial_longest': 32,
-        'partial_matches': 10,
+        'partial_matches': 15,
         'l1_keywords': 512000,
         'l2_buckets': 4 * 1024 * 1024}
 
     IDX_CONFIG = 0
     IDX_PART_SPACE = 1
     IDX_MAX_RESERVED = 100
+
+    IGNORE_SPECIAL_KW_RE = re.compile('(^\d+|[:@%"\'<>?!\._-]+)')
+    IGNORE_NONLATIN_RE = re.compile('(^\d+|[:@%"\'<>?!\._-]+|'
+        + '[^\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u0180-\u024F])')
 
     def __init__(self, workdir,
             name='search', encryption_keys=None, defaults=None, maxint=0):
@@ -132,11 +138,12 @@ class SearchEngine:
             self.config.update(self.records[self.IDX_CONFIG])
         except (KeyError, IndexError):
             self.records[self.IDX_CONFIG] = self.config
+        print('engine config: %s' % (self.config,))
 
         try:
-            self.part_space = self.records[self.IDX_PART_SPACE]
+            self.part_spaces = [self.records[self.IDX_PART_SPACE]]
         except (KeyError, IndexError):
-            self.part_space = bytes()
+            self.part_spaces = [bytes()]
 
         self.l1_begin = self.IDX_MAX_RESERVED + 1
         self.l2_begin = self.l1_begin + self.config['l1_keywords']
@@ -170,25 +177,113 @@ class SearchEngine:
         with self.lock:
             return self.records.close()
 
-    def iter_byte_keywords(self):
+    def iter_byte_keywords(self, min_hits=1, ignore_re=None):
         for i in range(self.l2_begin, len(self.records)):
             try:
                 with self.lock:
-                    for kw in PostingListBucket(self.records[i]):
-                        yield kw
+                    plb = PostingListBucket(self.records[i])
+                    for kw in plb:
+                        if ignore_re:
+                            if ignore_re.search(str(kw, 'utf-8')):
+                                continue
+                        if min_hits < 2:
+                            yield kw
+                            continue
+                        count = 0
+                        for i in plb.get(kw):
+                            count += 1
+                            if count >= min_hits:
+                                yield kw
+                                break
             except (IndexError, KeyError):
                 pass
 
-    def create_part_space(self):
-        self.part_space = create_wordblob(self.iter_byte_keywords(),
+    def create_part_space(self, min_hits=0, ignore_re=IGNORE_NONLATIN_RE):
+        self.part_spaces[0] = create_wordblob(self.iter_byte_keywords(
+                min_hits=(min_hits or self.config['partial_min_hits']),
+                ignore_re=ignore_re),
             shortest=self.config['partial_shortest'],
             longest=self.config['partial_longest'],
-            maxlen=self.config['partial_list_len'])
-        self.records[self.IDX_PART_SPACE] = self.part_space
-        return self.part_space
+            maxlen=self.config['partial_list_len'],
+            lru=True)
+        self.records[self.IDX_PART_SPACE] = self.part_spaces[0]
+        return self.part_spaces[0]
+
+    def update_terms(self, terms, min_hits=0, ignore_re=IGNORE_NONLATIN_RE):
+        adding = set()
+        removing = set()
+        ignoring = set()
+        for kw in terms:
+            kwb = bytes(kw, 'utf-8')
+            if ignore_re:
+                if ignore_re.search(kw):
+                    ignoring.add(kwb)
+                    continue
+            if min_hits < 1:
+                adding.add(kwb)
+                continue
+            count = 0
+            for hit in self[term]:
+                if count >= min_hits:
+                    adding.add(kwb)
+                    break
+            if count < min_hits:
+                removing.add(kwb)
+
+        if adding or removing:
+            blacklist = (removing | ignoring)
+            for blob, wset in self.part_spaces[1:]:
+                blacklist |= wset
+                adding -= wset
+
+        if adding or removing:
+            self.part_spaces[0] = update_wordblob(adding, self.part_spaces[0],
+                blacklist=blacklist,
+                shortest=self.config['partial_shortest'],
+                longest=self.config['partial_longest'],
+                maxlen=self.config['partial_list_len'],
+                lru=True)
+            # FIXME: This becomes expensive if update batches are small!
+            self.records[self.IDX_PART_SPACE] = self.part_spaces[0]
+
+            with open('/tmp/part-space.txt', 'wb') as fd:
+                fd.write(self.part_spaces[0])
+
+        return self.part_spaces[0]
+
+    def add_static_terms(self, wordlist):
+        shortest = self.config['partial_shortest']
+        longest = self.config['partial_longest']
+        words = set([
+            (bytes(w, 'utf-8') if isinstance(w, str) else w)
+            for w in wordlist
+            if shortest <= len(w) <= longest])
+        self.part_spaces.append((create_wordblob(words,
+                shortest=shortest,
+                longest=longest,
+                maxlen=len(words)+1),
+            words))
+
+    def add_dictionary_terms(self, dict_path):
+        with open(dict_path, 'rb') as fd:
+            blob = str(fd.read(), 'utf-8').lower()
+            words = set([word.strip()
+                for word in blob.splitlines()
+                if not self.IGNORE_SPECIAL_KW_RE.search(word)])
+        if words:
+            self.add_static_terms(words)
+        assert(b'hello' in self.part_spaces[-1][0])
 
     def candidates(self, keyword, max_results):
-        return wordblob_search(keyword, self.part_space, max_results)
+        clist = wordblob_search(keyword, self.part_spaces[0], max_results)
+        spaces = copy.copy(self.part_spaces[1:])
+        while spaces and len(clist) < max_results:
+            blob, wset = spaces.pop(0)
+            more = [kw
+                for kw in wordblob_search(keyword, blob, max_results)
+                if kw not in clist]
+            clist.extend(more)
+        return clist[:max_results]
 
     def _empty_l1_idx(self):
         for idx in range(self.l1_begin, self.l2_begin):
@@ -221,6 +316,8 @@ class SearchEngine:
         for (r_ids, kw_list) in results:
             if isinstance(r_ids, int):
                 r_ids = [r_ids]
+            if isinstance(kw_list, str):
+                kw_list = [kw_list]
             if not isinstance(r_ids, list):
                 raise ValueError('Results must be (lists of) integers')
             for r_id in r_ids:
@@ -289,7 +386,7 @@ class SearchEngine:
                     plb.deleted |= keywords[kw]
                     plb.add(kw)
                     self.records[idx] = plb.blob
-        # FIXME: Update our wordblob
+        self.update_terms(keywords)
         return {'keywords': len(keywords), 'hits': hits}
 
     def add_results(self, results, prefer_l1=False, tag_namespace=''):
@@ -310,7 +407,7 @@ class SearchEngine:
                     plb.deleted = self.deleted
                     plb.add(kw, *keywords[kw])
                     self.records[idx] = plb.blob
-        # FIXME: Update our wordblob
+        self.update_terms(keywords)
         return {'keywords': len(keywords), 'hits': hits}
 
     def __getitem__(self, keyword):
@@ -324,7 +421,7 @@ class SearchEngine:
     def _search(self, term, tag_ns):
         if isinstance(term, tuple):
             op = term[0]
-            return op(*[self._search(t, tag_ns) for t in term[1:]], clone=True)
+            return op(*[self._search(t, tag_ns) for t in term[1:]])
 
         if isinstance(term, str):
             if tag_ns and (term[:3] == 'in:'):
@@ -390,8 +487,10 @@ class SearchEngine:
         return term  # FIXME: A no-op
 
     def magic_candidates(self, term):
-        matches = self.candidates(term, self.config.get('partial_matches', 10))
+        max_results = self.config.get('partial_matches', 10)
+        matches = self.candidates(term, max_results)
         if len(matches) > 1:
+            #print('Expanded %s(<%d) to %s' % (term, max_results, matches))
             return tuple([IntSet.Or] + matches)
         else:
             return matches[0]
@@ -419,11 +518,11 @@ if __name__ == '__main__':
             name='se-test', encryption_keys=[k], defaults={
                 'partial_list_len': 20,
                 'partial_shortest': 4,
-                'partial_longest': 8,  # excludes hellscape from partial set
+                'partial_longest': 14,  # excludes hellscapenation
                 'l2_buckets': 10240})
     se = mk_se()
     se.add_results([
-        (1, ['hello', 'hell', 'hellscape', 'hellyeah', 'world', 'hooray']),
+        (1, ['hello', 'hell', 'hellscapenation', 'hellyeah', 'world', 'hooray']),
         (3, ['please', 'remove', 'the', 'politeness']),
         (2, ['ell', 'hello', 'iceland', 'e*vil'])])
     se.add_results([
@@ -478,9 +577,9 @@ if __name__ == '__main__':
         assert(4 not in se.search('in:inbox'))
 
         # Enable and test partial word searches
-        se.create_part_space()
-        assert(b'*' not in se.part_space)
-        assert(b'evil' in se.part_space)  # Verify that * gets stripped
+        se.create_part_space(min_hits=1)
+        assert(b'*' not in se.part_spaces[0])
+        assert(b'evil' in se.part_spaces[0])  # Verify that * gets stripped
         #print('%s' % se.part_space)
         #print('%s' % se.candidates('*ell*', 10))
         assert(len(se.candidates('***', 10)) == 0)
@@ -501,6 +600,13 @@ if __name__ == '__main__':
         # Test the explainer and parse_terms with date range magic
         assert(se.explain('dates:2012..2013 OR date:2015')
             == '((year:2012 OR year:2013) OR year:2015)')
+
+        # Test static and dictionary term expansions
+        assert(se.candidates('orang*', 10) == ['orang'])
+        se.add_static_terms(['red', 'green', 'blue', 'orange'])
+        assert(se.candidates('orang*', 10) == ['orang', 'orange'])
+        se.add_dictionary_terms('/usr/share/dict/words')
+        assert('additional' in se.candidates('addit*', 20))
 
         se.records.compact()
         print('Tests pass OK (%d/2)' % (round+1,))

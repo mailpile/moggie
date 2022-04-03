@@ -46,6 +46,8 @@ class BaseWorker(Process):
     PEEK_BYTES = 4096
     REQUEST_OVERHEAD = 128  # A conservative estimate
 
+    BACKGROUND_TASK_SLEEP = 0.1
+
     HTTP_200 = b'HTTP/1.0 200 OK\r\n'
     HTTP_400 = b'HTTP/1.0 400 Invalid Request\r\nContent-Length: 16\r\n\r\nInvalid Request\n'
     HTTP_403 = b'HTTP/1.0 403 Access Denied\r\nX-MP: Sorry\r\nContent-Length: 14\r\n\r\nAccess Denied\n'
@@ -263,7 +265,8 @@ class BaseWorker(Process):
                 job()
             except:
                 traceback.print_exc()
-            time.sleep(0.1)
+            if self.BACKGROUND_TASK_SLEEP:
+                time.sleep(self.BACKGROUND_TASK_SLEEP)
             with self._background_job_lock:
                 if not queue:
                     del self._background_threads[which]

@@ -52,6 +52,8 @@ def palette(config):
             ('hotkey',         'brown',       'black',     ''),
             ('act_hk',         'black',       'brown',     ''),
             ('crumbs',         'white',       'dark blue', ''),
+            ('popbg',          'white',       'dark blue', ''),
+            ('popsubtle',      'light gray',  'dark blue', ''),
             ('header',         'light gray',  'black',     ''),
             ('top_hk',         'brown',       'black',     ''),
             ('subtle',         'dark gray',   'black',     ''),

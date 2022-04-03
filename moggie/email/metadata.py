@@ -62,6 +62,9 @@ class Metadata(list):
                 mailbox = dumb_encode_asc(mailbox)
             list.__init__(self, [int(ptr_type), mailbox, int(offset)])
 
+        is_local_file = property(
+            lambda s: s.ptr_type in (s.IS_MBOX, s.IS_MAILDIR))
+
         ptr_type = property(lambda s: s[s.OFS_PTR_TYPE])
         mailbox = property(lambda s: s[s.OFS_MAILBOX])
         offset =  property(lambda s: s[s.OFS_OFFSET])
