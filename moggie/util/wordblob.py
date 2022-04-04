@@ -22,7 +22,7 @@ import re
 import random
 
 
-def wordblob_search(term, blob, max_results, order=0):
+def wordblob_search(term, blobs, max_results, order=0):
     """
     Search for <term> in <blob>, returning up the <max_results> matches,
     ordered by how exact the match is. The term itself, stripped of
@@ -41,30 +41,32 @@ def wordblob_search(term, blob, max_results, order=0):
         keyword.strip(b'*').replace(b'*', b'[^\\n]*'),
         flags=re.IGNORECASE)
 
-    for m in re.finditer(search_re, blob):
-        beg, end = m.span()
+    blobs = blobs if isinstance(blobs, list) else [blobs]
+    for blob in blobs:
+        for m in re.finditer(search_re, blob):
+            beg, end = m.span()
 
-        # Note: Doing this here, rather than using complex regexp
-        #       magic is *much* faster when our blobs get large.
-        if bind_beg and (beg > 0) and (blob[beg-1:beg] != b'\n'):
-            continue
-        if bind_end and (end < len(blob)) and (blob[end:end+1] != b'\n'):
-            continue
+            # Note: Doing this here, rather than using complex regexp
+            #       magic is *much* faster when our blobs get large.
+            if bind_beg and (beg > 0) and (blob[beg-1:beg] != b'\n'):
+                continue
+            if bind_end and (end < len(blob)) and (blob[end:end+1] != b'\n'):
+                continue
 
-        # Expand our match to grab the full keyword from the blob.
-        offset = beg
-        while (beg > 0) and (blob[beg-1:beg] != b'\n'):
-            beg -= 1
-        while (end < len(blob)) and (blob[end:end+1] != b'\n'):
-            end += 1
+            # Expand our match to grab the full keyword from the blob.
+            offset = beg
+            while (beg > 0) and (blob[beg-1:beg] != b'\n'):
+                beg -= 1
+            while (end < len(blob)) and (blob[end:end+1] != b'\n'):
+                end += 1
 
-        # Append our match, calculating a rough weight based on how
-        # close it is to being an exact match.
-        kw = blob[beg:end]
-        if kw not in (matches[0][1], matches[-1][1]):
-            orank = 1000000000 + len(matches) * order
-            ratio = 10 * len(kw) // len(keyword)
-            matches.append((ratio + (offset-beg) + orank, kw))
+            # Append our match, calculating a rough weight based on how
+            # close it is to being an exact match.
+            kw = blob[beg:end]
+            if kw not in (matches[0][1], matches[-1][1]):
+                orank = 1000000000 + len(matches) * order
+                ratio = 10 * len(kw) // len(keyword)
+                matches.append((ratio + (offset-beg) + orank, kw))
 
     return [str(kw, 'utf-8') for s, kw in sorted(matches)[:max_results]]
 

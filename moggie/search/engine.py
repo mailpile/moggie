@@ -275,14 +275,9 @@ class SearchEngine:
         assert(b'hello' in self.part_spaces[-1][0])
 
     def candidates(self, keyword, max_results):
-        clist = wordblob_search(keyword, self.part_spaces[0], max_results)
-        spaces = copy.copy(self.part_spaces[1:])
-        while spaces and len(clist) < max_results:
-            blob, wset = spaces.pop(0)
-            more = [kw
-                for kw in wordblob_search(keyword, blob, max_results)
-                if kw not in clist]
-            clist.extend(more)
+        blobs = [self.part_spaces[0]]
+        blobs.extend(blob for blob, words in self.part_spaces[1:])
+        clist = wordblob_search(keyword, blobs, max_results)
         return clist[:max_results]
 
     def _empty_l1_idx(self):
