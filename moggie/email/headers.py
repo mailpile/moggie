@@ -51,7 +51,7 @@ HEADERS_WITH_PARAMS = (
 HWP_CONTENT_TYPE_RE = re.compile(r'^([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+)', flags=re.DOTALL)
 HWP_VALUE_RE = re.compile(r'^([^;]+)', flags=re.DOTALL)
 HWP_TOKEN_RE = re.compile(r'^([a-zA-Z0-9_-]+)', flags=re.DOTALL)
-HWP_PARAM_RE = re.compile(r'(;\s*([a-zA-Z0-9_-]+)=([a-zA-Z0-9_-]+|\"(?:\\"|[^"]+)+\"))', flags=re.DOTALL)
+HWP_PARAM_RE = re.compile(r'(;\s*([a-zA-Z0-9_-]+)=([a-zA-Z0-9_-]+|\"(?:\\.|[^"\\]+)+\"))', flags=re.DOTALL)
 HWP_COMMENT_RE = re.compile(r'^(;?\s*\(([^\(]*)\))', flags=re.DOTALL)
 
 
@@ -62,6 +62,7 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE):
     best-effort algorithm which puts comments and unparsable junk into
     parameters named _COMMENT and _JUNK respectively.
     """
+    ohdr = hdr
     m0 = value_re.match(hdr)
     if not m0:
         return [None, {'_JUNK': hdr}]
@@ -75,7 +76,11 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE):
             hdr = hdr[len(p.group(0)):]
             val = p.group(3)
             if val[:1] == '"':
-                val = bytes(val[1:-1], 'latin-1').decode('unicode-escape')
+                try:
+                    val = bytes(val[1:-1], 'latin-1').decode('unicode-escape')
+                except UnicodeDecodeError:
+                    print('UNDECODABLE: %s in %s' % (val, ohdr))
+                    raise
             params[p.group(2).lower()] = val
         else:
             c = HWP_COMMENT_RE.match(hdr)
@@ -222,5 +227,9 @@ Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
     p5v, p5p = parse_content_type('invalid data garbage')
     assert(p5v is None)
     assert(p5p['_JUNK'] == 'invalid data garbage')
+
+    p6v, p6p = parse_parameters('okay; filename="Encryption key for \\"nobody@example.org\\".html"')
+    assert(p6p['filename'] == 'Encryption key for "nobody@example.org".html')
+    assert('_JUNK' not in p6p)
 
     print('Tests passed OK')

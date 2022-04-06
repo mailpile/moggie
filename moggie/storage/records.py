@@ -4,6 +4,7 @@ import io
 import time
 import os
 import re
+import random
 import struct
 import traceback
 
@@ -282,11 +283,16 @@ class RecordFile:
         compacted.mark_compacted()
         compacted.padding = self.padding
 
+        backup = None
         if target is None:
             self.close()
-            self._rotate(self.path, self.path + '.old')
+            backup = self.path + '.old'
             target = self.path
+            self._rotate(target, backup)
         self._rotate(tempfile, target)
+        compacted.path = target
+        if backup:
+            os.remove(backup)
 
         return compacted
 
@@ -549,12 +555,35 @@ class RecordStore(RecordStoreReadOnly):
 
         return full_idx
 
-    def compact(self, new_aes_key=False, force=False):
+    def compact(self,
+            new_aes_key=False, force=False, partial=False,
+            progress_callback=None):
         aes_key = self.aes_key if (new_aes_key is False) else new_aes_key
+
+        last_chunk_idx = self.next_idx // self.chunk_records
+        done = []
+        progress = {'compacting': None, 'done': done, 'total': last_chunk_idx+1}
+        which = None
+        if partial:
+            which = random.randint(0, last_chunk_idx)
+
         for idx in range(0, self.next_idx, self.chunk_records):
-            (_, chunk_obj) = self.get_chunk(idx)
-            chunk_obj = chunk_obj.compact(new_aes_key=aes_key, force=force)
-            self.chunks[(idx // self.chunk_records)] = chunk_obj
+            if (which is None) or (which == 0) or (idx == 0):
+                chunk_idx = (idx // self.chunk_records)
+                if progress_callback is not None:
+                    progress['compacting'] = chunk_idx
+                    progress_callback(progress)
+
+                (_, chunk_obj) = self.get_chunk(idx)
+                chunk_obj = chunk_obj.compact(new_aes_key=aes_key, force=force)
+                self.chunks[chunk_idx] = chunk_obj
+                done.append(chunk_idx)
+            if which is not None:
+                which -= 1
+
+        if progress_callback:
+            del progress['compacting']
+            progress_callback(progress)
 
 
 if __name__ == "__main__":

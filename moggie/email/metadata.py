@@ -3,7 +3,7 @@ import hashlib
 import re
 import time
 
-from ..util.dumbcode import dumb_encode_asc
+from ..util.dumbcode import dumb_encode_asc, dumb_decode
 
 from .headers import parse_header
 
@@ -13,11 +13,9 @@ class Metadata(list):
     OFS_TIMESTAMP = 0
     OFS_IDX = 1
     OFS_POINTERS = 2
-    OFS_HEADER_LENGTH = 3
-    OFS_MESSAGE_LENGTH = 4
-    OFS_HEADERS = 5
-    OFS_MORE = 6
-    _FIELDS = 7
+    OFS_HEADERS = 3
+    OFS_MORE = 4
+    _FIELDS = 5
 
     # These are the headers we want extracted and stored in metadata.
     # Note the Received headers are omitted, too big and too much noise.
@@ -43,7 +41,7 @@ class Metadata(list):
     def ghost(self, msgid, more=None):
         msgid = msgid if isinstance(msgid, bytes) else bytes(msgid, 'latin-1')
         return Metadata(0, 0,
-            Metadata.PTR(0, b'/dev/null', 0), 0, 0,
+            Metadata.PTR(0, b'/dev/null', 0, 0, 0),
             b'Message-Id: %s' % msgid,
             more=more)
 
@@ -55,12 +53,15 @@ class Metadata(list):
         OFS_PTR_TYPE = 0
         OFS_MAILBOX = 1
         OFS_OFFSET = 2
-        _FIELDS = 3
+        OFS_HEADER_LENGTH = 3
+        OFS_MESSAGE_LENGTH = 4
+        _FIELDS = 5
 
-        def __init__(self, ptr_type, mailbox, offset):
+        def __init__(self, ptr_type, mailbox, offset, hlen, mlen):
             if isinstance(mailbox, bytes):
                 mailbox = dumb_encode_asc(mailbox)
-            list.__init__(self, [int(ptr_type), mailbox, int(offset)])
+            list.__init__(self, [
+                int(ptr_type), mailbox, int(offset), int(hlen), int(mlen)])
 
         is_local_file = property(
             lambda s: s.ptr_type in (s.IS_MBOX, s.IS_MAILDIR))
@@ -68,8 +69,17 @@ class Metadata(list):
         ptr_type = property(lambda s: s[s.OFS_PTR_TYPE])
         mailbox = property(lambda s: s[s.OFS_MAILBOX])
         offset =  property(lambda s: s[s.OFS_OFFSET])
+        header_length  = property(lambda s: s[s.OFS_HEADER_LENGTH])
+        message_length = property(lambda s: s[s.OFS_MESSAGE_LENGTH])
+        container = property(lambda s: s.get_container())
 
-    def __init__(self, ts, idx, ptrs, hlen, mlen, hdrs, more=None):
+        def get_container(self):
+            mailbox = dumb_decode(self.mailbox)
+            if self.ptr_type == self.IS_MAILDIR:
+                return mailbox.rsplit(b'/', 1)[0]
+            return mailbox
+
+    def __init__(self, ts, idx, ptrs, hdrs, more=None):
         # The encodings here are to make sure we are JSON serializable.
         if isinstance(hdrs, bytes):
             hdrs = str(hdrs, 'latin-1')
@@ -82,7 +92,7 @@ class Metadata(list):
                 raise ValueError('Invalid PTR: %s' % ptr)
 
         list.__init__(self, [
-            ts or 0, idx or 0, ptrs, hlen, mlen, hdrs.replace('\r', ''),
+            ts or 0, idx or 0, ptrs, hdrs.replace('\r', ''),
             more or {}])
 
         self._raw_headers = {}
@@ -101,8 +111,6 @@ class Metadata(list):
     timestamp      = property(lambda s: s[s.OFS_TIMESTAMP])
     idx            = property(lambda s: s[s.OFS_IDX])
     pointers       = property(lambda s: [Metadata.PTR(*p) for p in sorted(s[s.OFS_POINTERS])])
-    header_length  = property(lambda s: s[s.OFS_HEADER_LENGTH])
-    message_length = property(lambda s: s[s.OFS_MESSAGE_LENGTH])
     more           = property(lambda s: s[s.OFS_MORE])
     headers        = property(lambda s: s[s.OFS_HEADERS])
     uuid_asc       = property(lambda s: dumb_encode_asc(s.uuid))
@@ -111,11 +119,9 @@ class Metadata(list):
         ).digest())
 
     def __str__(self):
-        return ('%d=%s:%d/%d@%s %d %s\n%s\n' % (
+        return ('%d=%s@%s %d %s\n%s\n' % (
             self.idx,
             self.uuid_asc,
-            self.header_length,
-            self.message_length,
             self.pointers,
             self.timestamp,
             self.more,
@@ -130,9 +136,12 @@ class Metadata(list):
 
     def add_pointers(self, pointers):
         combined = self.pointers
+        by_container = dict((p.container, p) for p in combined)
         for mp in (Metadata.PTR(*p) for p in pointers):
-            if mp not in combined:
-                combined.append(mp)
+            replacing = by_container.get(mp.container)
+            if replacing:
+                combined.remove(replacing)
+            combined.append(mp)
         self[self.OFS_POINTERS] = combined
 
     def get_raw_header(self, header):
@@ -158,12 +167,13 @@ class Metadata(list):
 
 if __name__ == "__main__":
     import json
+    from ..util.dumbcode import dumb_decode
 
-    md1 = Metadata(0, 0, Metadata.PTR(0, b'/tmp/test.mbx', 0), 100, 200, """\
+    md1 = Metadata(0, 0, Metadata.PTR(0, b'/tmp/test.mbx', 0, 100, 200), """\
 From: Bjarni <bre@example.org>\r
 To: bre@example.org\r
 Subject: This is Great\r\n""")
-    md2 = Metadata(0, 0, [[0, b'/tmp/test.mbx', 0]], 100, 200, """\
+    md2 = Metadata(0, 0, [[1, b'/tmp/cur/test.mbx', 0, 100, 200]], """\
 To: bre@example.org
 From: Bjarni <bre@example.org>
 Subject: This is Great""")
@@ -172,12 +182,19 @@ Subject: This is Great""")
     #print('%s' % (md1.parsed(),))
 
     assert(md1.uuid == md2.uuid)
-    assert(str(md1)[:70] == str(md2)[:70])
+    assert(md1.pointers[0].container == dumb_decode(md1.pointers[0].mailbox))
+    assert(md2.pointers[0].container != md2.pointers[0].mailbox)
 
-    # Make sure that adding pointers works sanely
-    md1.add_pointers([Metadata.PTR(0, b'/dev/null', 0)])
+    # Make sure that adding pointers works sanely; the first should
+    # be added, the second should merely update the pointer list.
+    assert(md1.pointers[0].header_length == 100)
+    md1.add_pointers([Metadata.PTR(0, b'/dev/null', 0, 200, 200)])
+    md1.add_pointers([Metadata.PTR(0, b'/tmp/test.mbx', 0, 300, 300)])
     assert(len(md1.pointers) == 2)
-    md1.add_pointers([(0, b'/dev/null', 0)])
+    assert(md1.pointers[0].header_length == 200)
+    assert(md1.pointers[1].header_length == 300)
+    assert(md1.pointers[1].container == b'/tmp/test.mbx')
+    md1.add_pointers([(0, b'/dev/null', 0, 100, 200)])
     assert(len(md1.pointers) == 2)
 
     print("Tests passed OK")

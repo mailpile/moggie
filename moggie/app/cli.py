@@ -1,8 +1,45 @@
 import os
 import sys
 
-
 # TODO: add a status command, to check what is live?
+
+class Nonsense(Exception):
+    pass
+
+
+def CommandImport(wd, args):
+    from ..config import AppConfig
+    from ..workers.app import AppWorker
+    from ..jmap.requests import RequestMailbox, RequestSearch, RequestAddToIndex
+
+    SEARCH = ('in:incoming',)
+
+    paths = []
+    while args and ((args[-1] in SEARCH) or os.path.exists(args[-1])):
+        paths.append(args.pop(-1))
+    paths.reverse()
+    if not paths:
+        raise Nonsense('No valid paths found!')
+
+    worker = AppWorker.FromArgs(wd, args[0:])
+    if not worker.connect():
+        raise Nonsense('Failed to connect to app')
+
+
+    for path in paths:
+        print('Adding %s' % path)
+        if path in SEARCH:
+            request_obj = RequestSearch(
+                context=AppConfig.CONTEXT_ZERO,
+                terms=path)
+        else:
+            request_obj = RequestMailbox(
+                context=AppConfig.CONTEXT_ZERO,
+                mailbox=path)
+        worker.jmap(RequestAddToIndex(
+            context=AppConfig.CONTEXT_ZERO,
+            search=request_obj,
+            force=(path in SEARCH)))
 
 
 def CommandHelp(wd, args):
@@ -82,5 +119,6 @@ def CommandConfig(wd, args):
 
 CLI_COMMANDS = {
     'help': CommandHelp,
+    'import': CommandImport,
     'encrypt': CommandEnableEncryption,
     'config': CommandConfig}

@@ -354,7 +354,12 @@ class BaseWorker(Process):
         else:
             conn = conn(method=method, headers=self._auth_header)
 
-        peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)
+        try:
+            peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)
+        except socket.timeout:
+            print('TIMED OUT: %s' % (path,))
+            raise
+
         if peeked.startswith(self.HTTP_200):
             hdr = peeked.split(b'\r\n\r\n', 1)[0]
             junk = conn.recv(len(hdr) + 4)

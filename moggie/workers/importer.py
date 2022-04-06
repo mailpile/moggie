@@ -17,7 +17,7 @@ class ImportWorker(BaseWorker):
     KIND = 'import'
     NICE = 20
     BACKGROUND_TASK_SLEEP = 0
-    BATCH_SIZE = 100
+    BATCH_SIZE = 250
 
     def __init__(self, status_dir,
             app_worker=None,
@@ -34,6 +34,8 @@ class ImportWorker(BaseWorker):
         self.app = app_worker
         self.search = search_worker
         self.metadata = metadata_worker
+        self.imported = 0
+        self.compacted = 0
 
         self.kwe = KeywordExtractor()  # FIXME: Configurable? Plugins?
 
@@ -47,21 +49,20 @@ class ImportWorker(BaseWorker):
     def api_import_search(self,
             request, initial_tags, force, callback_chain, **kwargs):
         request_obj = to_jmap_request(request)
-        if not callback_chain:
-            self.reply_json(
-                self._import_search(request_obj, initial_tags, force))
-        else:
-            self.reply_json({'running': True})
-            def background_import_search():
-                rv = self._import_search(request_obj, initial_tags, force,
-                        callback_chain=callback_chain)
-            self.add_background_job(background_import_search)
+        def background_import_search():
+            rv = self._import_search(request_obj, initial_tags, force,
+                    callback_chain=callback_chain)
+        self.add_background_job(background_import_search)
+        self.reply_json({'running': True})
 
     def _get_email(self, metadata):
-        if metadata.pointers[0].is_local_file:
-            return self.fs.email(metadata, text=True, data=False)
-        else:
-            return self.app.jmap(RequestEmail(metadata=metadata, text=True)).get('email')
+        try:
+            if metadata.pointers[0].is_local_file:
+                return self.fs.email(metadata, text=True, data=False)
+            else:
+                return self.app.jmap(RequestEmail(metadata=metadata, text=True)).get('email')
+        except:
+            return None
 
     def _index_full_messages(self, email_idxs, callback_chain):
         # Full indexing, per message in "in:incoming":
@@ -86,17 +87,24 @@ class ImportWorker(BaseWorker):
              # 3. Run the filtering logic to mutate keywords/tags
              pass  # FIXME
 
+             self.imported += 1
              if not self.keep_running:
                  return
 
         # 4. Add/remove results from the search engine
-        self.search.add_results(list(keywords.items()), wait=False)
+        self.search.add_results(
+            list(keywords.items()), wait=False)
 
         # 5. Remove messages from Incoming
         # FIXME: Make this a callback action when add_results completes
-        self.search.del_results([[list(keywords.keys()), 'in:incoming']])
+        self.search.del_results(
+            [[list(keywords.keys()), 'in:incoming']], wait=False)
+        if self.imported > self.compacted + 5000:
+            self.search.compact(full=False)
+            self.compacted = self.imported
 
         # 6. Report progress
+        # FIXME: Make this a callback action when del_results completes
         if callback_chain:
             self.results_to_callback_chain(
                 callback_chain, {'indexed': len(keywords)})

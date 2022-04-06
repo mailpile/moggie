@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import threading
+import traceback
 import time
 
 from ..config import AppConfig
@@ -17,14 +18,19 @@ from ..jmap.responses import *
 
 async def async_run_in_thread(method, *m_args, **m_kwargs):
     def runner(l, q):
-        l.call_soon_threadsafe(q.put_nowait, method(*m_args, **m_kwargs))
+        time.sleep(0.1)
+        try:
+            rv = method(*m_args, **m_kwargs)
+        except:
+            traceback.print_exc()
+            rv = None
+        l.call_soon_threadsafe(q.put_nowait, rv)
 
     loop = asyncio.get_event_loop()
     queue = asyncio.Queue()
     thr = threading.Thread(target=runner, args=(loop, queue))
     thr.daemon = True
     thr.start()
-
     return await queue.get()
 
 
@@ -177,7 +183,8 @@ class AppCore:
         # FIXME: Access questions, context settings...
         result = await async_run_in_thread(self.importer.import_search,
             jmap_request['search'],
-            jmap_request.get('initial_tags', []))
+            jmap_request.get('initial_tags', []),
+            force=jmap_request.get('force', False))
         return ResponsePing(jmap_request)  # FIXME
 
     async def api_jmap(self, access, client_request):
@@ -239,9 +246,16 @@ class AppCore:
 
     # Internal API
 
+    async def rpc_check_result(self, request_id, **kwargs):
+        pass
+
     async def rpc_jmap(self, request, **kwargs):
-        rv = await self.api_jmap(self.config.access_zero(), request)
-        self.worker.reply_json(rv['_result'])
+        try:
+            rv = await self.api_jmap(self.config.access_zero(), request)
+            self.worker.reply_json(rv['_result'])
+        except:
+            traceback.print_exc()
+            self.worker.reply_json({'error': 'FIXME'})
 
     def rpc_session_resource(self, **kwargs):
         jsr = AppSessionResource(self, self.config.access_zero())

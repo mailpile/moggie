@@ -46,11 +46,14 @@ class RequestCounts(RequestBase):
 
 
 class RequestAddToIndex(RequestBase):
-    def __init__(self, context='', search='', initial_tags=[], req_id=None):
+    def __init__(self,
+            context='', search='', initial_tags=[], force=False,
+            req_id=None):
         self.update({
             'prototype': 'add_to_index',
             'context': context,
             'search': search,
+            'force': force,
             'tags': initial_tags
         }, req_id=req_id)
 

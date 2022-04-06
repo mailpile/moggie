@@ -316,14 +316,14 @@ From: root@example.org (Cron Daemon)
 To: bre@example.org
 Subject: Sure, sure
 """
-    foo_ptr = Metadata.PTR(0, b'/tmp/foo', 0)
-    n,i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, 0, 0, headers, {'thing': 'stuff', 'a': 'b'}))
-    n,i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, 0, 0, headers, {'wink': 123, 'a': 'c'}))
-    ms.append(Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net'))
-    ms.append(Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net'))
-    ms[100000] = Metadata(int(time.time()), 0, foo_ptr, 0, 0, b'From: bre@klai.net')
+    foo_ptr = Metadata.PTR(0, b'/tmp/foo', 0, 0, 0)
+    n,i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, {'thing': 'stuff', 'a': 'b'}))
+    n,i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, {'wink': 123, 'a': 'c'}))
+    ms.append(Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net'))
+    ms.append(Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net'))
+    ms[100000] = Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net')
     t1M = int(time.time() + 100)
-    ms[1000000] = Metadata(t1M, 0, foo_ptr, 0, 0, b'From: bre@klai.net')
+    ms[1000000] = Metadata(t1M, 0, foo_ptr, b'From: bre@klai.net')
 
     assert(i1 == i2)
     assert(ms[i1].more['thing'] == 'stuff')

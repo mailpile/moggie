@@ -1,9 +1,11 @@
+import asyncio
 import json
 import os
 import sys
 import socket
 import time
 import threading
+import traceback
 
 from upagekite import uPageKite, LocalHTTPKite
 from upagekite.httpd import HTTPD, url, async_url
@@ -183,7 +185,7 @@ class PublicWorker(BaseWorker):
         self.app = self.get_app()
         self.shared_req_env = {'app': self.app, 'worker': self}
 
-        self._rpc_lock = threading.Lock()
+        self._rpc_lock = asyncio.Lock()
         self._rpc_response = None
         self._rpc_response_map = {
             self.HTTP_400: {'code': 400, 'msg': 'Invalid Request'},
@@ -251,7 +253,7 @@ class PublicWorker(BaseWorker):
     async def handle_web_rpc(self, req_env):
         args = bytes(req_env.request_path, 'latin-1').split(b'/')[3:]
         func = b'rpc/' + args.pop(0)
-        with self._rpc_lock:
+        async with self._rpc_lock:
             await self.async_rpc_handler(
                 func,
                 req_env.http_method,
@@ -282,6 +284,10 @@ class PublicWorker(BaseWorker):
                 uPK=uPK)
 
             self.pk_manager.run()
+        except KeyboardInterrupt:
+            pass
+        except:
+            traceback.print_exc()
         finally:
             self.shutdown_tasks()
 

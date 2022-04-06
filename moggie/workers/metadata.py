@@ -24,9 +24,11 @@ class MetadataWorker(BaseWorker):
         BaseWorker.__init__(self, status_dir, name=name)
         self.functions.update({
             b'info':         (True, self.api_info),
+            b'compact':      (True, self.api_compact),
             b'add_metadata': (True, self.api_add_metadata),
             b'metadata':     (True, self.api_metadata)})
 
+        self.change_lock = threading.Lock()
         self.encryption_keys = encryption_keys
         self.metadata_dir = metadata_dir
         self._metadata = None
@@ -39,6 +41,9 @@ class MetadataWorker(BaseWorker):
             self.encryption_keys)
         del self.encryption_keys
         return super()._main_httpd_loop()
+
+    def compact(self, compact, full=False):
+        return self.call('compact', full)
 
     def add_metadata(self, metadata, update=True):
         return self.call('add_metadata', update, metadata)
@@ -54,16 +59,26 @@ class MetadataWorker(BaseWorker):
         self.reply_json({
             'maxint': len(self._metadata)})
 
+    def api_compact(self, full, callback_chain, **kwargs):
+        def background_compact():
+            with self.change_lock:
+                self._metadata.compact(partial=not full)
+                self.results_to_callback_chain(callback_chain,
+                    {'compacted': True, 'full': full})
+        self.add_background_job(background_compact)
+        self.reply_json({'running': True})
+
     def api_add_metadata(self, update, metadata, **kwas):
         added, updated = [], []
         for m in sorted(metadata):
             if isinstance(m, list):
                 m = Metadata(*m)
-            if update:
-                is_new, idx = self._metadata.update_or_add(m)
-            else:
-                is_new = False
-                idx = self._metadata.add_if_new(m)
+            with self.change_lock:
+                if update:
+                    is_new, idx = self._metadata.update_or_add(m)
+                else:
+                    is_new = False
+                    idx = self._metadata.add_if_new(m)
             if idx:
                 if is_new:
                     added.append(idx)

@@ -6,7 +6,7 @@
 
 class ResponsePing(dict):
     def __init__(self, request):
-        self.update({'prototype': 'pong', 'ts': request['ts']})
+        self.update({'prototype': 'pong', 'ts': request.get('ts', 0)})
 
 
 class ResponseAddToIndex(dict):

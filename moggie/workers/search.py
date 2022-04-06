@@ -46,6 +46,7 @@ class SearchWorker(BaseWorker):
             b'explain':      (True, self.api_explain),
             b'search':       (True, self.api_search)})
 
+        self.change_lock = threading.Lock()
         self.encryption_keys = encryption_keys
         self.engine_dir = engine_dir
         self.defaults = defaults
@@ -81,10 +82,10 @@ class SearchWorker(BaseWorker):
 
     def mutate(self, mset, op_kw_list):
         strop_kw_list = [[self._OP_STR_MAP(op), kw] for op, kw in op_kw_list]
-        return self.call('mutate', mset, storp_kw_list)
+        return self.call('mutate', mset, strop_kw_list)
 
-    def compact(self):
-        return self.call('compact')
+    def compact(self, full=False):
+        return self.call('compact', full)
 
     def update_terms(self, terms):
         return self.call('update_terms', terms)
@@ -104,34 +105,43 @@ class SearchWorker(BaseWorker):
 
     def api_mutate(self, mset, strop_kw_list, **kwargs):
         op_kw_list = [(self._STR_OP_MAP(op), kw) for op, kw in strop_kw_list]
-        self.reply_json(self._engine.mutate(mset, op_kw_list))
+        with self.change_lock:
+            self.reply_json(self._engine.mutate(mset, op_kw_list))
 
-    def api_compact(self, **kwargs):
-        t0 = time.time()
-        self._engine.create_part_space()
-        t1 = time.time()
-        self._engine.records.compact()
-        self.reply_json({
-            'wordblobs': '%.2f seconds' % (t1 - t0),
-            'compacted': '%.2f seconds' % (time.time() - t1)})
+    def api_compact(self, full, callback_chain, **kwargs):
+        def report_progress(progress):
+            progress['full'] = full
+            print('[search] Compacting: %s' % (progress,))
+            self.results_to_callback_chain(callback_chain, progress)
+        def background_compact():
+            with self.change_lock:
+                self._engine.records.compact(
+                    partial=not full,
+                    progress_callback=report_progress)
+        self.add_background_job(background_compact)
+        self.reply_json({'running': True})
 
     def api_add_results(self, results, callback_chain, wait, **kwargs):
         if wait and not callback_chain:
-            self.reply_json(self._engine.add_results(results))
+            with self.change_lock:
+                self.reply_json(self._engine.add_results(results))
         else:
             self.reply_json({'running': True})
             def background_add_results():
-                rv = self._engine.add_results(results)
+                with self.change_lock:
+                    rv = self._engine.add_results(results)
                 self.results_to_callback_chain(callback_chain, rv)
             self.add_background_job(background_add_results)
 
     def api_del_results(self, results, callback_chain, wait, **kwargs):
         if wait and not callback_chain:
-            self.reply_json(self._engine.del_results(results))
+            with self.change_lock:
+                self.reply_json(self._engine.del_results(results))
         else:
             self.reply_json({'running': True})
             def background_add_results():
-                rv = self._engine.del_results(results)
+                with self.change_lock:
+                    rv = self._engine.del_results(results)
                 self.results_to_callback_chain(callback_chain, rv)
             self.add_background_job(background_add_results)
 

@@ -223,10 +223,11 @@ class FileStorage(BaseStorage):
             if skip > 0:
                 skip -= 1
             else:
+                hl, ml = hend-beg, end-beg
                 lts, md = self._ts_and_Metadata(
                     now, lts, obj[beg:hend],
-                    [Metadata.PTR(Metadata.PTR.IS_MBOX, relpath, beg)],
-                    hend-beg, end-beg, hdrs)
+                    [Metadata.PTR(Metadata.PTR.IS_MBOX, relpath, beg, hl, ml)],
+                    hdrs)
                 yield(md)
 
             beg = end+1
@@ -259,8 +260,8 @@ class FileStorage(BaseStorage):
                         lts, md = self._ts_and_Metadata(
                             now, lts, fm[:hend],
                             [Metadata.PTR(Metadata.PTR.IS_MAILDIR,
-                                          self.relpath(fn), 0)],
-                            hend, end, hdrs)
+                                          self.relpath(fn), 0, hend, end)],
+                            hdrs)
                         yield(md)
                     except (ValueError, TypeError):
                         pass
@@ -274,7 +275,7 @@ class FileStorage(BaseStorage):
         if ptr.ptr_type not in self.EMAIL_PTR_TYPES:
             raise KeyError('Not a filesystem pointer: %s' % ptr)
         beg = ptr.offset
-        end = ptr.offset + metadata.message_length
+        end = ptr.offset + ptr.message_length
         if with_ptr:
             return ptr, self[ptr.mailbox][beg:end]
         else:

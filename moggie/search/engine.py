@@ -246,9 +246,6 @@ class SearchEngine:
             # FIXME: This becomes expensive if update batches are small!
             self.records[self.IDX_PART_SPACE] = self.part_spaces[0]
 
-            with open('/tmp/part-space.txt', 'wb') as fd:
-                fd.write(self.part_spaces[0])
-
         return self.part_spaces[0]
 
     def add_static_terms(self, wordlist):
