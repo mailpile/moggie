@@ -8,6 +8,7 @@ from ..jmap.requests import *
 from ..util.dumbcode import dumb_encode_asc
 from ..storage.files import FileStorage
 from ..search.extractor import KeywordExtractor
+from ..search.filters import FilterEngine, FilterError
 from .base import BaseWorker
 
 
@@ -17,6 +18,8 @@ class ImportWorker(BaseWorker):
     KIND = 'import'
     NICE = 20
     BACKGROUND_TASK_SLEEP = 0
+
+    COMPACT_INTERVAL = 5000  # Keeps us from growing without bounds
     BATCH_SIZE = 250
 
     def __init__(self, status_dir,
@@ -64,7 +67,7 @@ class ImportWorker(BaseWorker):
         except:
             return None
 
-    def _index_full_messages(self, email_idxs, callback_chain):
+    def _index_full_messages(self, email_idxs, filters, callback_chain):
         # Full indexing, per message in "in:incoming":
         #
         #...
@@ -81,11 +84,11 @@ class ImportWorker(BaseWorker):
 
              # 2. Generate keywords and tags
              stat, kws = self.kwe.extract_email_keywords(md, email)
-             keywords[md.idx] = list(kws)
              # FIXME: Check status: want more data? e.g. full attachments?
 
              # 3. Run the filtering logic to mutate keywords/tags
-             pass  # FIXME
+             filters.filter(kws, md, email)
+             keywords[md.idx] = list(kws)
 
              self.imported += 1
              if not self.keep_running:
@@ -99,7 +102,7 @@ class ImportWorker(BaseWorker):
         # FIXME: Make this a callback action when add_results completes
         self.search.del_results(
             [[list(keywords.keys()), 'in:incoming']], wait=False)
-        if self.imported > self.compacted + 5000:
+        if self.imported > self.compacted + self.COMPACT_INTERVAL:
             self.search.compact(full=False)
             self.compacted = self.imported
 
@@ -112,10 +115,13 @@ class ImportWorker(BaseWorker):
     def _import_search(self, request_obj, initial_tags, force,
             callback_chain=None):
 
+        filters = FilterEngine().validate()  # FIXME: Take script as argument
+
         def _full_indexer(email_idxs):
             def _full_index():
-                self._index_full_messages(email_idxs, callback_chain)
+                self._index_full_messages(email_idxs, filters, callback_chain)
             return _full_index
+
 
         tags = ['in:incoming'] + initial_tags
         done = False
