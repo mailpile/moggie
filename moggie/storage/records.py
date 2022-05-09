@@ -36,6 +36,8 @@ class RecordFile:
             compress=False,
             padding=16,
             aes_keys=None,
+            encoding_kwargs=None,
+            decoding_kwargs=None,
             create=False):
 
         first_aes_key = aes_keys[0] if aes_keys else None
@@ -51,6 +53,9 @@ class RecordFile:
         self.header_size += (len(self.prefix) + self.int_size + self.long_size)
         self.compress = compress
         self.padding = b' ' * padding
+
+        self.encoding_kwargs = encoding_kwargs or (lambda: {})
+        self.decoding_kwargs = decoding_kwargs or (lambda: {})
 
         # We derive our AES key(s) from those provided, instead of using
         # directly. This reduces the odds of collisions (IV reuse etc.)
@@ -167,9 +172,11 @@ class RecordFile:
         end = beg + self.length(idx)
         if decode:
             aes_key = aes_key if (aes_key is not None) else self.aes_key
+            kwargs = self.decoding_kwargs()
             return dumb_decode(
                 self.safe_mmap(end)[beg:end],
-                iv_to_aes_key=self.iv_to_key)
+                iv_to_aes_key=self.iv_to_key,
+                **kwargs)
         else:
             return bytes(self.safe_mmap(end)[beg:end])
 
@@ -191,7 +198,8 @@ class RecordFile:
                 aes_pair = None
             encoded = dumb_encode_bin(value,
                 compress=compress,
-                aes_key_iv=aes_pair)
+                aes_key_iv=aes_pair,
+                **self.encoding_kwargs())
         else:
             encoded = value
 
@@ -274,6 +282,8 @@ class RecordFile:
 
         compacted = RecordFile(tempfile, self.file_id, self.chunk_records,
             compress=self.compress,
+            encoding_kwargs=self.encoding_kwargs,
+            decoding_kwargs=self.decoding_kwargs,
             padding=len(self.padding) if (padding is None) else padding,
             aes_keys=[new_aes_key],
             create=True)
@@ -305,7 +315,9 @@ class RecordStoreReadOnly:
             sparse=False,
             aes_keys=None,
             est_rec_size=1024,
-            target_file_size=50*1024*1024):
+            target_file_size=50*1024*1024,
+            encoding_kwargs=None,
+            decoding_kwargs=None):
 
         first_aes_key = aes_keys[0] if aes_keys else None
 
@@ -320,6 +332,9 @@ class RecordStoreReadOnly:
         self.workdir = workdir
         if not os.path.exists(workdir):
             os.mkdir(workdir, 0o700)
+
+        self.encoding_kwargs = encoding_kwargs or (lambda: {})
+        self.decoding_kwargs = decoding_kwargs or (lambda: {})
 
         # Derive new keys, so we don't keep the masters sitting around.
         self.aes_keys = []
@@ -426,6 +441,8 @@ class RecordStoreReadOnly:
                 ('RecordStore(%s), chunk %d' % (self.store_id, chunk)),
                 self.chunk_records,
                 compress=self.compress,
+                encoding_kwargs=self.encoding_kwargs,
+                decoding_kwargs=self.decoding_kwargs,
                 aes_keys=self.aes_keys,
                 create=create)
 

@@ -2,11 +2,30 @@ import io
 import os
 import struct
 import time
+import zlib
 
 from mmap import mmap, ACCESS_WRITE
 
 from .records import RecordStore
 from ..email.metadata import Metadata
+
+
+# This is not actually a valid Metadata entry, but it contains strings we
+# expect to see, to prime the compressor/decompressor.
+#
+# These strings can never change once we go public, and we will run out of
+# alphabet for new markers, so changes here should be only made carefully.
+#
+# The last entry in the table will be used to compress new data.
+#
+METADATA_ZDICTS = [
+    ('m', b'm',  b"""\
+[01234, 56789, [[0, "BL2hvbWUvdmFybWFpY3VybWJ4", 0, 4321, 9876], []],
+"From: <joe@gmail.com>\nTo: <anna@live.net>\nSubject:\nCc:\nDate:\nMessage-Id:",
+{"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],
+"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],
+"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],
+{"attachments": {}}]""")]
 
 
 class IntColumn:
@@ -85,6 +104,21 @@ class IntColumn:
         return self.baseline + val
 
 
+def _make_cfuncs(zdict):
+    comp = zlib.compressobj(level=9, zdict=zdict)
+    deco = zlib.decompressobj(zdict=zdict)
+
+    def compress_func(data):
+        cobj = comp.copy()
+        return cobj.compress(data) + cobj.flush()
+
+    def decompress_func(data):
+        cobj = deco.copy()
+        return cobj.decompress(data) + cobj.flush()
+
+    return compress_func, decompress_func
+
+
 class MetadataStore(RecordStore):
 
     # Dividing by 30 lets us not care about 32-bit timestamp rollover
@@ -93,12 +127,20 @@ class MetadataStore(RecordStore):
     def __init__(self, workdir, store_id, aes_keys):
         super().__init__(workdir, store_id,
             sparse=True,
-            compress=400,
+            compress=64,
             aes_keys=aes_keys,
             est_rec_size=400,
             target_file_size=64*1024*1024)
 
         self.thread_cache = {}
+
+        decompressors = []
+        for ma, mb, zdict in METADATA_ZDICTS:
+            compress_func, decompress_func = _make_cfuncs(zdict)
+            decompressors.append((ma, mb, decompress_func))
+            # Last one wins
+            self.encoding_kwargs = lambda: {'comp_bin': (mb, compress_func)}
+        self.decoding_kwargs = lambda: {'decomp_bin': decompressors}
 
         if 0 not in self:
             self[0] = Metadata.ghost('<internal-ghost-zero@moggie>')

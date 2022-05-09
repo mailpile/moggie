@@ -169,10 +169,15 @@ if __name__ == "__main__":
     import json
     from ..util.dumbcode import dumb_decode
 
-    md1 = Metadata(0, 0, Metadata.PTR(0, b'/tmp/test.mbx', 0, 100, 200), """\
+    # We are seeding the compression engine with known common strings,
+    # and this gets base64 encoded - groups of 3 chars become groups
+    # of four; thus the weird name. I may be overthinking it!
+    mbx_path = b'/home/varmaicurmbx'
+
+    md1 = Metadata(0, 0, Metadata.PTR(0, mbx_path, 0, 100, 200), """\
 From: Bjarni <bre@example.org>\r
 To: bre@example.org\r
-Subject: This is Great\r\n""")
+Subject: This is Great\r\n""", {'tags': 'inbox,unread,sent'})
     md2 = Metadata(0, 0, [[1, b'/tmp/cur/test.mbx', 0, 100, 200]], """\
 To: bre@example.org
 From: Bjarni <bre@example.org>
@@ -189,11 +194,11 @@ Subject: This is Great""")
     # be added, the second should merely update the pointer list.
     assert(md1.pointers[0].header_length == 100)
     md1.add_pointers([Metadata.PTR(0, b'/dev/null', 0, 200, 200)])
-    md1.add_pointers([Metadata.PTR(0, b'/tmp/test.mbx', 0, 300, 300)])
+    md1.add_pointers([Metadata.PTR(0, mbx_path, 0, 300, 300)])
     assert(len(md1.pointers) == 2)
     assert(md1.pointers[0].header_length == 200)
     assert(md1.pointers[1].header_length == 300)
-    assert(md1.pointers[1].container == b'/tmp/test.mbx')
+    assert(md1.pointers[1].container == mbx_path)
     md1.add_pointers([(0, b'/dev/null', 0, 100, 200)])
     assert(len(md1.pointers) == 2)
 

@@ -85,7 +85,7 @@ class SearchWorker(BaseWorker):
         return self.call('mutate', mset, strop_kw_list)
 
     def compact(self, full=False):
-        return self.call('compact', full)
+        return self.call('compact', full, None)
 
     def update_terms(self, terms):
         return self.call('update_terms', terms)
