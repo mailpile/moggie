@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import threading
 import traceback
@@ -22,7 +23,7 @@ async def async_run_in_thread(method, *m_args, **m_kwargs):
         try:
             rv = method(*m_args, **m_kwargs)
         except:
-            traceback.print_exc()
+            logging.exception('async in thread crashed, %s' % (method,))
             rv = None
         l.call_soon_threadsafe(q.put_nowait, rv)
 
@@ -200,7 +201,7 @@ class AppCore:
         try:
             jmap_request = to_jmap_request(client_request)
         except KeyError as e:
-            print('Invalid request: %s' % e)
+            logging.warning('Invalid request: %s' % e)
             return {'code': 500}
 
         # FIXME: This is a hack
@@ -222,8 +223,8 @@ class AppCore:
 
         if result is not None:
             code, json_result = 200, json.dumps(result, indent=2)
-#           if type(jmap_request) != RequestPing:
-#               print('<< %s' % json_result[:256])
+            if type(jmap_request) != RequestPing:
+                logging.debug('<< %s' % json_result[:256])
         else:
             code = 400
             result = {'error': 'Unknown %s' % type(jmap_request)}
@@ -254,7 +255,7 @@ class AppCore:
             rv = await self.api_jmap(self.config.access_zero(), request)
             self.worker.reply_json(rv['_result'])
         except:
-            traceback.print_exc()
+            logging.exception('rpc_jmap failed %s' % (request,))
             self.worker.reply_json({'error': 'FIXME'})
 
     def rpc_session_resource(self, **kwargs):

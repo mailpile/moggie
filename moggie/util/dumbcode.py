@@ -1,5 +1,6 @@
 import binascii
 import json
+import logging
 import zlib
 
 from urllib.parse import quote, unquote, unquote_to_bytes
@@ -157,7 +158,8 @@ def dumb_decode(v,
     try:
         return (v if isinstance(v, str) else str(v, 'utf-8'))
     except:
-        print('BOGUS: %s' % v)
+        logging.exception(
+            'BOGUS: %s (decomps=%s/%s)' % (v, decomp_bin, decomp_asc))
         raise
 
 

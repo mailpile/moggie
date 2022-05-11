@@ -1,5 +1,6 @@
 import inspect
 import json
+import logging
 import os
 import socket
 import sys
@@ -15,7 +16,7 @@ except ImportError:
 from base64 import b64encode
 from multiprocessing import Process
 
-from ..config import APPNAME
+from ..config import APPNAME, configure_logging
 from ..util.dumbcode import *
 from ..util.http import url_parts, http1x_connect
 
@@ -90,6 +91,7 @@ class BaseWorker(Process):
         self._background_job_lock = threading.Lock()
 
     def run(self):
+        configure_logging(type(self).__name__)
         if self.NICE and hasattr(os, 'nice'):
             os.nice(self.NICE)
         if setproctitle:
@@ -114,6 +116,7 @@ class BaseWorker(Process):
         finally:
             try:
                 os.remove(self._status_file)
+                logging.shutdown()
             except FileNotFoundError:
                 pass
 
@@ -151,7 +154,7 @@ class BaseWorker(Process):
             except (QuitException, KeyboardInterrupt):
                 self.keep_running = False
             except:
-                traceback.print_exc()
+                logging.exception('Error in main HTTP loop')
                 self.status['requests_failed'] += 1
                 if client:
                     client.send(self.HTTP_500)
@@ -204,7 +207,7 @@ class BaseWorker(Process):
             conn = self._conn('ping', timeout=1, secret='-')
             result = conn.recv(len(self.HTTP_403))
         except:
-            traceback.print_exc()
+            logging.exception('PING failed')
             result = None
         return (result == self.HTTP_403)
 
@@ -252,9 +255,9 @@ class BaseWorker(Process):
                 self.call(callback_url, rv, callback_chain or None)
                 return
             except PermissionError:
-                traceback.print_exc()
+                logging.exception('Failed to call %s' % callback_url)
             except OSError:
-                traceback.print_exc()
+                logging.exception('Failed to call %s' % callback_url)
                 time.sleep(2**tries)
 
     def _background_worker(self, which, queue):
@@ -264,13 +267,13 @@ class BaseWorker(Process):
                     job = queue.pop(0)
                 job()
             except:
-                traceback.print_exc()
+                logging.exception('Background job failed')
             if self.BACKGROUND_TASK_SLEEP:
                 time.sleep(self.BACKGROUND_TASK_SLEEP)
             with self._background_job_lock:
                 if not queue:
                     del self._background_threads[which]
-                    print('Goodbye, cruel world')
+                    logging.debug('Background worker finished, exiting.')
                     return
 
     def _start_background_workers(self):
@@ -357,7 +360,7 @@ class BaseWorker(Process):
         try:
             peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)
         except socket.timeout:
-            print('TIMED OUT: %s' % (path,))
+            logging.warning('TIMED OUT: %s' % (path,))
             raise
 
         if peeked.startswith(self.HTTP_200):
@@ -386,7 +389,7 @@ class BaseWorker(Process):
             data_len = b'..'
 
         # FIXME: This is not a good way to do logging
-        print(str(
+        logging.info(str(
             b'%s - %s %s - %s /%s' % (
                 self._client_addrinfo[0].encode('latin-1'),
                 pre[9:12],
@@ -486,14 +489,14 @@ class BaseWorker(Process):
                 stats['requests_ok'] += 1
                 return rv
             except TypeError:
-                traceback.print_exc()
+                logging.exception('Error in RPC handler %s %s' % (method, fn))
                 if kwargs:
                     self.status['requests_ignored'] += 1
                     return self.reply(self.HTTP_400)  # This is a guess :-(
             except KeyboardInterrupt:
                 pass
             except:
-                traceback.print_exc()
+                logging.exception('Error in RPC handler %s %s' % (method, fn))
             self.status['requests_failed'] += 1
             self.reply(self.HTTP_500)
         else:
@@ -533,14 +536,14 @@ class BaseWorker(Process):
                 stats['requests_ok'] += 1
                 return rv
             except TypeError:
-                traceback.print_exc()
+                logging.exception('Error in RPC handler %s %s' % (method, fn))
                 if kwargs:
                     self.status['requests_ignored'] += 1
                     return self.reply(self.HTTP_400)  # This is a guess :-(
             except KeyboardInterrupt:
                 pass
             except:
-                traceback.print_exc()
+                logging.exception('Error in RPC handler %s %s' % (method, fn))
             self.status['requests_failed'] += 1
             self.reply(self.HTTP_500)
         else:

@@ -1,6 +1,7 @@
 import binascii
 import base64
 import json
+import logging
 import math
 import os
 import re
@@ -8,6 +9,7 @@ import time
 import threading
 import struct
 from configparser import ConfigParser, NoOptionError, _UNSET
+from logging.handlers import TimedRotatingFileHandler
 
 from ..crypto.aes_utils import make_aes_key
 from ..crypto.passphrases import stretch_with_scrypt, generate_passcode
@@ -19,6 +21,35 @@ APPNAME    = 'moggie'  #'mailpile'
 APPNAME_UC = 'Moggie'  #'Mailpile'
 APPVER     = '2.0.0'
 APPURL     = 'https://github.com/BjarniRunar/moggie'
+
+LOGDIR     = '/tmp/moggie.%d' % os.getuid()
+
+
+def configure_logging(
+        worker_name=APPNAME,
+        logdir=None,
+        profile_dir=None,
+        stdout=False,
+        level=logging.DEBUG):
+    global LOGDIR
+    if profile_dir:
+        logdir = os.path.join(profile_dir, 'logs')
+    if logdir:
+        LOGDIR = logdir
+    if not os.path.exists(LOGDIR):
+        os.mkdir(LOGDIR, 0o700)
+
+    handlers = [TimedRotatingFileHandler(os.path.join(LOGDIR, worker_name),
+        when='D', interval=1, backupCount=7)]
+    if stdout:
+        handlers.append(logging.StreamHandler())
+    logging.basicConfig(
+        format='%(asctime)s %(levelname)s: %(message)s',
+        datefmt='%Y%m%d-%H%M%S',
+        level=level,
+        handlers=handlers,
+        force=True)
+    return logging
 
 
 class AccessConfig(ConfigSectionProxy):
@@ -188,6 +219,9 @@ class AppConfig(ConfigParser):
     def __init__(self, profile_dir):
         self.lock = threading.RLock()
         self.suppress_saves = []
+
+        global LOGDIR
+        LOGDIR = os.path.join(profile_dir, 'logs')
 
         self.filepath = os.path.join(profile_dir, 'config.rc')
         self.backups = os.path.join(profile_dir, 'backups')

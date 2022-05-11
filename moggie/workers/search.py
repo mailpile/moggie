@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 import traceback
@@ -111,7 +112,7 @@ class SearchWorker(BaseWorker):
     def api_compact(self, full, callback_chain, **kwargs):
         def report_progress(progress):
             progress['full'] = full
-            print('[search] Compacting: %s' % (progress,))
+            logging.info('[search] Compacting: %s' % (progress,))
             self.results_to_callback_chain(callback_chain, progress)
         def background_compact():
             with self.change_lock:

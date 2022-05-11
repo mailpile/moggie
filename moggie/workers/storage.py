@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 import traceback
 import threading
@@ -235,7 +236,7 @@ class StorageWorker(BaseWorker):
                         nd.append(b',')
                         data.extend(nd)
                     except:
-                        traceback.print_exc()
+                        logging.exception('api_json failed to encode data')
             if len(data) > 1:
                 data[-1] = b'}\n'
                 data = b''.join(data)

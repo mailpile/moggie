@@ -1,3 +1,4 @@
+import logging
 import os
 import sys
 
@@ -114,6 +115,7 @@ COMMANDS = {
 
 def Main(args):
     from ..config.paths import DEFAULT_WORKDIR
+    from ..config import configure_logging
     wd = DEFAULT_WORKDIR()
 
     command = 'default'
@@ -123,6 +125,8 @@ def Main(args):
     if command not in COMMANDS:
         from .cli import CLI_COMMANDS
         COMMANDS.update(CLI_COMMANDS)
+
+    configure_logging(profile_dir=wd, stdout=True, level=logging.INFO)
 
     command = COMMANDS.get(command)
     if command is not None:

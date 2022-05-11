@@ -12,6 +12,7 @@
 # communicate with the running app without authenticating every time.
 #
 import json
+import logging
 import os
 import sys
 import traceback
@@ -61,8 +62,7 @@ async def web_websocket(opcode, msg, conn, ws,
                 await conn.send(result['body'])
                 return
         except:
-            traceback.print_exc()
-            pass
+            logging.exception('websocket failed: %s' % (msg,))
         await conn.send(json.dumps({'error': code}))  #FIXME
 
 
@@ -78,7 +78,7 @@ async def web_jmap_session(req_env):
         except PermissionError:
             code, msg, status = 403, 'Access Denied', 'rej'
         except:
-            traceback.print_exc()
+            logging.exception('web_jmap_session failed')
 
         # If we get this far, we had an internal error of some sort.
         timer.status = status
@@ -102,7 +102,7 @@ async def web_jmap(req_env):
         except PermissionError:
             code, msg, status = 403, 'Access Denied', 'rej'
         except:
-            traceback.print_exc()
+            logging.exception('web_jmap failed')
 
         # If we get this far, we had an internal error of some sort.
         timer.status = status
@@ -151,12 +151,12 @@ class AppWorker(PublicWorker):
         req_info = require(req_env, **req_kwargs)
         # If cookie is in session list, we know who this is
         # If we have a username and password, yay
-        print('req_info = %s' % (req_info,))
+        logging.debug('req_info = %s' % (req_info,))
         if 'auth_basic' in req_info:
-            print('FIXME: BASIC AUTH')
+            logging.warning('FIXME: BASIC AUTH')
         elif 'auth_bearer' in req_info:
             acl = self.app.config.access_from_token(req_info['auth_bearer'])
-            print('Access: %s = %s' % (acl.config_key, acl))
+            logging.debug('Access: %s = %s' % (acl.config_key, acl))
             return acl
         raise PermissionError('Please login')
 

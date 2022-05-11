@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import sys
 import socket
@@ -26,10 +27,10 @@ class WorkerPageKiteSettings(uPageKiteDefaults):
 
     MAX_POST_BYTES = 256*1024*1024
 
-    info = uPageKiteDefaults.log
-    error = uPageKiteDefaults.log
-    debug = uPageKiteDefaults.log
-    #trace = uPageKiteDefaults.log
+    info = logging.info
+    error = logging.error
+    debug = logging.debug
+    #trace = logging.debug
 
     @classmethod
     async def network_send_sleep(uPK, sent):
@@ -287,7 +288,7 @@ class PublicWorker(BaseWorker):
         except KeyboardInterrupt:
             pass
         except:
-            traceback.print_exc()
+            logging.exception('_main_httpd_loop loop crashed')
         finally:
             self.shutdown_tasks()
 

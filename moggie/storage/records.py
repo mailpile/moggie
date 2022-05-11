@@ -1,6 +1,7 @@
 import binascii
 import hashlib
 import io
+import logging
 import time
 import os
 import re
@@ -277,7 +278,7 @@ class RecordFile:
                 and (padding is None)
                 and (target is None)
                 and (os.path.getmtime(self.path) - self.compacted_time() < 5)):
-            print('No changes, doing nothing')
+            logging.info('compact: No changes, doing nothing')
             return self
 
         compacted = RecordFile(tempfile, self.file_id, self.chunk_records,
