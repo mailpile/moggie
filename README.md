@@ -8,7 +8,7 @@ A fast, secure e-mail client? Someday!
 
 ## Project status
 
-Nothing works yet, please check back later.
+[Issue #1 tracks progress and gives a rough idea of what is planned](https://github.com/BjarniRunar/moggie/issues/1).
 
 
 ## Credits and License ##
