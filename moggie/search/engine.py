@@ -1,4 +1,5 @@
 import copy
+import logging
 import os
 import struct
 import re
@@ -138,7 +139,7 @@ class SearchEngine:
             self.config.update(self.records[self.IDX_CONFIG])
         except (KeyError, IndexError):
             self.records[self.IDX_CONFIG] = self.config
-        print('engine config: %s' % (self.config,))
+        logging.debug('Search engine config: %s' % (self.config,))
 
         try:
             self.part_spaces = [self.records[self.IDX_PART_SPACE]]
@@ -482,7 +483,7 @@ class SearchEngine:
         max_results = self.config.get('partial_matches', 10)
         matches = self.candidates(term, max_results)
         if len(matches) > 1:
-            #print('Expanded %s(<%d) to %s' % (term, max_results, matches))
+            #logging.debug('Expanded %s(<%d) to %s' % (term, max_results, matches))
             return tuple([IntSet.Or] + matches)
         else:
             return matches[0]

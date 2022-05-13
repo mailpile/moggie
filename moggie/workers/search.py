@@ -34,9 +34,9 @@ class SearchWorker(BaseWorker):
         'SUB': IntSet.Sub}
 
     def __init__(self, status_dir, engine_dir, maxint, encryption_keys,
-            name=KIND, defaults=None):
+            name=KIND, defaults=None, notify=None):
 
-        BaseWorker.__init__(self, status_dir, name=name)
+        BaseWorker.__init__(self, status_dir, name=name, notify=notify)
         self.functions.update({
             b'add_results':  (True, self.api_add_results),
             b'del_results':  (True, self.api_del_results),
@@ -112,7 +112,7 @@ class SearchWorker(BaseWorker):
     def api_compact(self, full, callback_chain, **kwargs):
         def report_progress(progress):
             progress['full'] = full
-            logging.info('[search] Compacting: %s' % (progress,))
+            self.notify('[search] Compacting: %s' % (progress,), data=progress)
             self.results_to_callback_chain(callback_chain, progress)
         def background_compact():
             with self.change_lock:
@@ -131,6 +131,9 @@ class SearchWorker(BaseWorker):
             def background_add_results():
                 with self.change_lock:
                     rv = self._engine.add_results(results)
+                self.notify(
+                    '[search] Updated %d search result(s)'
+                    % (len(results)), data=rv)
                 self.results_to_callback_chain(callback_chain, rv)
             self.add_background_job(background_add_results)
 

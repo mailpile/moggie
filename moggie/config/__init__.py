@@ -44,7 +44,7 @@ def configure_logging(
     if stdout:
         handlers.append(logging.StreamHandler())
     logging.basicConfig(
-        format='%(asctime)s %(levelname)s: %(message)s',
+        format='%(asctime)s.%(msecs)03d %(levelname)s: %(message)s',
         datefmt='%Y%m%d-%H%M%S',
         level=level,
         handlers=handlers,

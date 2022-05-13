@@ -1,3 +1,4 @@
+import logging
 import re
 
 from .rfc2074 import rfc2074_unquote
@@ -79,7 +80,7 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE):
                 try:
                     val = bytes(val[1:-1], 'latin-1').decode('unicode-escape')
                 except UnicodeDecodeError:
-                    print('UNDECODABLE: %s in %s' % (val, ohdr))
+                    logging.error('UNDECODABLE: %s in %s' % (val, ohdr))
                     raise
             params[p.group(2).lower()] = val
         else:

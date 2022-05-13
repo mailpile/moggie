@@ -58,7 +58,7 @@ class BaseWorker(Process):
     HTTP_JSON = HTTP_200 + b'Content-Type: application/json\r\n'
     HTTP_OK   = HTTP_JSON + b'Content-Length: 17\r\n\r\n{"result": true}\n'
 
-    def __init__(self, status_dir, host=None, port=None, name=None):
+    def __init__(self, status_dir, host=None, port=None, name=None, notify=None):
         Process.__init__(self)
 
         self.name = name or self.KIND
@@ -76,6 +76,7 @@ class BaseWorker(Process):
             b'noop':   (True,  self.api_noop),
             b'status': (False, self.api_status)}
 
+        self._notify = notify
         self._secret = b64encode(os.urandom(18), b'-_').strip()
         self._auth_header = ''
         self._status_file = os.path.join(status_dir, self.name + '.url')
@@ -231,6 +232,19 @@ class BaseWorker(Process):
                 return self
 
         return None
+
+    def notify(self, message, data=None):
+        logging.info(message)
+        if self._notify:
+            try:
+                notification = {'message': message}
+                if data is not None:
+                    notification['data'] = data
+                self.call(self._notify, notification)
+            except KeyboardInterrupt:
+                raise
+            except:
+                logging.exception('Failed to notify %s' % self._notify)
 
     def callback_url(self, fn):
         return '%s/%s' % (self.url, fn)

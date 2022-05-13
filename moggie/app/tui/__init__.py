@@ -722,6 +722,7 @@ class TuiFrame(urwid.Frame):
 
         self.hidden = 0
         self.crumbs = []
+        self.notifications = []
         self.columns = urwid.Columns([self.filler1], dividechars=1)
         self.context_list = ContextList(self, [])
         self.all_columns = [self.context_list]
@@ -740,6 +741,10 @@ class TuiFrame(urwid.Frame):
                     widget.incoming_message(message)
                 except:
                     dbg(traceback.format_exc())
+
+        if message.get('prototype') == 'notification':
+            self.notifications.append(message)
+            self.update_topbar()
 
     def link_bridge(self, app_bridge):
         self.app_bridge = app_bridge
@@ -782,9 +787,12 @@ class TuiFrame(urwid.Frame):
         # FIXME: Calculate/hint hotkeys based on what our columns suggest?
 
         maxwidth = self.render_cols_rows[0] - 2
-        crumbtrail = ' -> '.join(self.crumbs)
-        if len(crumbtrail) > maxwidth:
-            crumbtrail = '...' + crumbtrail[-(maxwidth-3):]
+        if self.notifications and self.notifications[-1]['ts'] > time.time() - 60:
+            crumbtrail = self.notifications[-1]['message']
+        else:
+            crumbtrail = ' -> '.join(self.crumbs)
+            if len(crumbtrail) > maxwidth:
+                crumbtrail = '...' + crumbtrail[-(maxwidth-3):]
 
         global_hks = []
         column_hks = []
@@ -848,6 +856,7 @@ class TuiFrame(urwid.Frame):
                 self.focus_last_column()
 
     def update_columns(self, update=True, focus=True):
+        self.notifications = []
         cols, rows = self.screen.get_cols_rows()
 
         self.hidden = 0

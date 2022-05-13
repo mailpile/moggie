@@ -68,6 +68,7 @@ class AppCore:
         self.config = AppConfig(self.work_dir)
 
         self.rpc_functions = {
+            b'rpc/notify':            (True, self.rpc_notify),
             b'rpc/jmap':              (True, self.rpc_jmap),
             b'rpc/jmap_session':      (True, self.rpc_session_resource),
             b'rpc/crypto_status':     (True, self.rpc_crypto_status),
@@ -92,6 +93,7 @@ class AppCore:
             self.worker.profile_dir,
             self.metadata.info()['maxint'],
             self.config.get_aes_keys(),
+            notify=self.worker.callback_url('rpc/notify'),
             name='search').connect()
 
         self.importer = ImportWorker(self.worker.worker_dir,
@@ -246,6 +248,10 @@ class AppCore:
 
 
     # Internal API
+
+    async def rpc_notify(self, notification, **kwargs):
+        await self.worker.broadcast(ResponseNotification(notification))
+        self.worker.reply_json({'ok': 'thanks'})
 
     async def rpc_check_result(self, request_id, **kwargs):
         pass

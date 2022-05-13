@@ -3,10 +3,20 @@
 # FIXME: These should all be rewritten to actually use JMAP.
 # FIXME: There should probably be sanity checks and validation etc.
 #
+import time
+
 
 class ResponsePing(dict):
     def __init__(self, request):
         self.update({'prototype': 'pong', 'ts': request.get('ts', 0)})
+
+
+class ResponseNotification(dict):
+    def __init__(self, notification):
+        self.update(notification)
+        self.update({
+            'prototype': 'notification',
+            'ts': int(time.time())})
 
 
 class ResponseAddToIndex(dict):
@@ -17,7 +27,7 @@ class ResponseAddToIndex(dict):
             'req_id': request['req_id'],
             'total': total,
             'done': done
-        }, req_id=req_id)
+        })
 
 
 class ResponseMailbox(dict):

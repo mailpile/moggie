@@ -19,7 +19,7 @@ import traceback
 
 from upagekite.httpd import HTTPD, url, async_url
 from upagekite.web import process_post
-from upagekite.websocket import websocket
+from upagekite.websocket import websocket, ws_broadcast
 
 from ..app.core import AppCore
 from .public import PublicWorker, RequestTimer, require
@@ -146,6 +146,9 @@ class AppWorker(PublicWorker):
 
     def shutdown_tasks(self):
         self.app.shutdown_tasks()
+
+    async def broadcast(self, message):
+        await ws_broadcast('app', json.dumps(message))
 
     def get_auth(self, req_env, **req_kwargs):
         req_info = require(req_env, **req_kwargs)
