@@ -98,8 +98,7 @@ class StorageWorker(BaseWorker):
 
     def info(self, key=None, details=None):
         if details is not None:
-            return self.call('info', key, qs={
-                'details': details, 'limit': limit, 'skip': skip})
+            return self.call('info', key, qs={'details': details})
         return self.call('info', key)
 
     def mailbox(self, key, skip=0, limit=None):

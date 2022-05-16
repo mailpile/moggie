@@ -17,18 +17,16 @@ class FileMap(mmap.mmap):
 
 
 class FileStorage(BaseStorage):
-
-    EMAIL_PTR_TYPES = (Metadata.PTR.IS_MBOX, Metadata.PTR.IS_MAILDIR)
-
     def __init__(self, *args, **kwargs):
         self.relative_to = kwargs.get('relative_to')
-
         if 'relative_to' in kwargs:
             del kwargs['relative_to']
+
         if isinstance(self.relative_to, str):
             self.relative_to = self.relative_to.encode('utf-8')
 
         BaseStorage.__init__(self, *args, **kwargs)
+
         self.dict = None
 
     def relpath(self, path):
@@ -91,7 +89,7 @@ class FileStorage(BaseStorage):
         raise Exception('Not Implemented')
 
     def capabilities(self):
-        return ['info', 'get', 'length', 'set']  #, 'del']
+        return ['info', 'get', 'length', 'set', 'del']
 
     def info(self, key=None, details=False, limit=None, skip=0):
         path = self.key_to_path(key or b'B/')
@@ -130,6 +128,36 @@ class FileStorage(BaseStorage):
                 info['magic'] = 'mbox'
 
         return info
+
+
+class MailboxFileStorage(FileStorage):
+    """
+    This extends the basic FileStorage with mbox and Maildir handling
+    features.
+    """
+    EMAIL_PTR_TYPES = (Metadata.PTR.IS_MBOX, Metadata.PTR.IS_MAILDIR)
+
+    DELETED_MARKER = b"""\
+From DELETED\r\n\
+From: nobody <deleted@example.org>\r\n\
+\r\n\
+(deleted)\r\n"""
+    DELETED_FILLER = b"                                                    \r\n"
+
+    def __init__(self, *args, **kwargs):
+        self.metadata = kwargs.get('metadata')
+        if 'metadata' in kwargs:
+            del kwargs['metadata']
+
+        # FIXME: We should compact mboxes periodically, to reclaim space.
+        #        This is an operation we need to coordinate with the metadata
+        #        index, since it changes the pointers for such messages.
+        self.needs_compacting = set()
+
+        FileStorage.__init__(self, *args, **kwargs)
+
+    def capabilities(self):
+        return super().capabilities() + ['mailboxes']
 
     def quick_msgparse(self, obj, beg):
         sep = b'\r\n\r\n' if (b'\r\n' in obj[beg:beg+256]) else b'\n\n'
@@ -224,11 +252,12 @@ class FileStorage(BaseStorage):
                 skip -= 1
             else:
                 hl, ml = hend-beg, end-beg
-                lts, md = self._ts_and_Metadata(
-                    now, lts, obj[beg:hend],
-                    [Metadata.PTR(Metadata.PTR.IS_MBOX, relpath, beg, hl, ml)],
-                    hdrs)
-                yield(md)
+                if obj[beg:beg+len(self.DELETED_MARKER)] != self.DELETED_MARKER:
+                    lts, md = self._ts_and_Metadata(
+                        now, lts, obj[beg:hend],
+                        [Metadata.PTR(Metadata.PTR.IS_MBOX, relpath, beg, hl, ml)],
+                        hdrs)
+                    yield(md)
 
             beg = end+1
         except (ValueError, TypeError):
@@ -266,6 +295,35 @@ class FileStorage(BaseStorage):
                     except (ValueError, TypeError):
                         pass
 
+    def add_message(self, mailbox, message):
+        """
+        Add a message to a mailbox.
+        """
+        raise Exception('FIXME')
+
+    def delete_message(self, metadata=None, ptrs=None):
+        """
+        Delete the message from one or more locations.
+        Returns a list of pointers which could not be deleted.
+        """
+        failed = []
+        for ptr in (ptrs if (ptrs is not None) else metadata.pointers):
+            if ptr.ptr_type == Metadata.PTR.IS_MBOX:
+                length = ptr.message_length
+                beg = ptr.offset
+                end = ptr.offset + length
+                fill = (
+                    self.DELETED_MARKER +
+                    self.DELETED_FILLER * (1 + length // len(self.DELETED_FILLER))
+                    )[:length-2] + b'\r\n'
+                self[ptr.mailbox][beg:end] = fill
+                self.needs_compacting.add(ptr.mailbox)
+            elif ptr.ptr_type == Metadata.PTR.IS_MAILDIR:
+                del self[ptr.mailbox]
+            else:
+                failed.append(ptr)
+        return failed
+
     def message(self, metadata, with_ptr=False):
         """
         Returns a slice of bytes that map to the message on disk.
@@ -276,10 +334,20 @@ class FileStorage(BaseStorage):
             raise KeyError('Not a filesystem pointer: %s' % ptr)
         beg = ptr.offset
         end = ptr.offset + ptr.message_length
+
+        # FIXME: We need to check whether this is actually the right message, or
+        #        whether the mailbox has changed from under us. If it has, we
+        #        need to (in coordination with the metadata index) rescan for
+        #        messages update the metadata. This is true for both mbox and
+        #        Maildir: Maildir files may get renamed if other apps change
+        #        read/unread status or assign tags. For mbox, messages can move
+        #        around within the file.
+
+        data = self[ptr.mailbox][beg:end]
         if with_ptr:
-            return ptr, self[ptr.mailbox][beg:end]
+            return ptr, data
         else:
-            return self[ptr.mailbox][beg:end]
+            return data
 
     def parse_message(self, metadata):
         ptr, msg = self.message(metadata, with_ptr=True)
@@ -290,7 +358,7 @@ class FileStorage(BaseStorage):
 if __name__ == "__main__":
     import sys
 
-    fs = FileStorage(relative_to=b'/home/bre')
+    fs = MailboxFileStorage(relative_to=b'/home/bre')
     fn = dumb_encode_asc(__file__)
     assert(fs.length(fn) == len(fs[fn]))
 
@@ -301,8 +369,16 @@ if __name__ == "__main__":
 
     print('Tests passed OK')
     if 'more' in sys.argv:
+        tmbox = '/tmp/test.mbx'
+        os.system('cp /home/bre/Mail/mailpile/2013-08.mbx '+tmbox)
         print('%s\n\n' % fs.info('b/home/bre/Mail/GMaildir/[Gmail].All Mail', details=True))
-        print('%s\n\n' % fs.info('b/home/bre/Mail/mailpile/2013-08.mbx', details=True))
+        print('%s\n\n' % fs.info('b'+tmbox, details=True))
+
+        msgs1 = sorted(list(fs.parse_mbox('b'+tmbox)))
+        assert([] == fs.delete_message(msgs1[0]))
+        msgs2 = sorted(list(fs.parse_mbox('b'+tmbox)))
+        assert(len(msgs1) == len(msgs2)+1)
+        os.remove(tmbox)
 
         big = 'b/home/bre/Mail/klaki/gmail-2011-11-26.mbx'
         print('%s\n\n' % fs.info(big, details=True))

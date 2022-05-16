@@ -7,7 +7,7 @@ import traceback
 import time
 
 from ..config import AppConfig
-from ..storage.files import FileStorage
+from ..storage.files import MailboxFileStorage
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorker
@@ -80,10 +80,6 @@ class AppCore:
     # Lifecycle
 
     def start_workers(self):
-        self.storage = StorageWorker(self.worker.worker_dir,
-            FileStorage(relative_to=os.path.expanduser('~')),
-            name='fs').connect()
-
         self.metadata = MetadataWorker(self.worker.worker_dir,
             self.worker.profile_dir,
             self.config.get_aes_keys(),
@@ -95,6 +91,12 @@ class AppCore:
             self.config.get_aes_keys(),
             notify=self.worker.callback_url('rpc/notify'),
             name='search').connect()
+
+        self.storage = StorageWorker(self.worker.worker_dir,
+            MailboxFileStorage(
+                relative_to=os.path.expanduser('~'),
+                metadata=self.metadata),
+            name='fs').connect()
 
         self.importer = ImportWorker(self.worker.worker_dir,
             fs_worker=self.storage,
@@ -108,9 +110,9 @@ class AppCore:
         # to shut down first, before shutting down low level systems.
         all_workers = [
             self.importer,
+            self.storage,   # This one talks to the metadata index!
             self.search,
-            self.metadata,
-            self.storage]
+            self.metadata]
         for p in (1, 2, 3):
             for worker in all_workers:
                 try:
