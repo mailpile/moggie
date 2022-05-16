@@ -19,7 +19,7 @@ def CommandStart(wd, args):
         if wait:
             worker.join()
         else:
-            print('Running %s in the background' % worker.KIND)
+            sys.stderr.write('Running %s in the background.\n' % worker.KIND)
         os._exit(0)
     else:
         sys.exit(1)
@@ -32,7 +32,9 @@ def CommandStop(wd, args):
     if worker.connect(autostart=False):
         result = worker.quit()
         if result and result.get('quitting'):
+            sys.stderr.write('Shutting down %s.\n' % worker.KIND)
             sys.exit(0)
+    sys.stderr.write('Not running? (%s)\n' % worker.KIND)
     sys.exit(1)
 
 

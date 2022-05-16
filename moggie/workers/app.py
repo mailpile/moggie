@@ -128,8 +128,9 @@ class AppWorker(PublicWorker):
 
     def connect(self, *args, **kwargs):
         conn = super().connect(*args, **kwargs)
-        self.auth_token = self.call('rpc/get_access_token')['token']
-        self.set_rpc_authorization('Bearer %s' % self.auth_token)
+        if conn:
+            self.auth_token = self.call('rpc/get_access_token')['token']
+            self.set_rpc_authorization('Bearer %s' % self.auth_token)
         return conn
 
     def jmap(self, request_obj):
