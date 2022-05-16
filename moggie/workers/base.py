@@ -35,6 +35,7 @@ class BaseWorker(Process):
     """
     KIND = "base"
     NICE = 0  # Raise this number to lower worker priority
+    LOG_STDOUT = False
 
     # By default we disallow GET and HEAD, because these are RPC
     # services, not public facing and certainly not intended for
@@ -92,12 +93,15 @@ class BaseWorker(Process):
         self._background_job_lock = threading.Lock()
 
     def run(self):
-        configure_logging(type(self).__name__)
-        if self.NICE and hasattr(os, 'nice'):
-            os.nice(self.NICE)
-        if setproctitle:
-            setproctitle('%s: %s' % (APPNAME, self.name))
+        configure_logging(type(self).__name__, stdout=self.LOG_STDOUT)
+        logging.info('Started %s(%s), pid=%d'
+            % (type(self).__name__, self.name, os.getpid()))
         try:
+            if self.NICE and hasattr(os, 'nice'):
+                os.nice(self.NICE)
+            if setproctitle:
+                setproctitle('%s: %s' % (APPNAME, self.name))
+
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._sock.bind((self._want_host, self._want_port))
             self._sock.settimeout(self.ACCEPT_TIMEOUT)
@@ -114,7 +118,11 @@ class BaseWorker(Process):
             return self._main_httpd_loop()
         except KeyboardInterrupt:
             pass
+        except:
+            logging.exception('Crashed!')
         finally:
+            logging.info('Stopped %s(%s), pid=%d'
+                % (type(self).__name__, self.name, os.getpid()))
             try:
                 os.remove(self._status_file)
                 logging.shutdown()
@@ -207,13 +215,15 @@ class BaseWorker(Process):
         try:
             conn = self._conn('ping', timeout=1, secret='-')
             result = conn.recv(len(self.HTTP_403))
-        except:
-            logging.exception('PING failed')
+        except Exception as e:
+            logging.debug('PING failed (%s)' % e)
             result = None
         return (result == self.HTTP_403)
 
     def connect(self, autostart=True):
         if (self.url or self._load_url()) and self._ping():
+            logging.debug('Connected running %s(%s) at %s'
+                % (type(self).__name__, self.name, self.url))
             return self
 
         if autostart:
@@ -223,6 +233,7 @@ class BaseWorker(Process):
                 pass
 
             self.url = None
+            logging.debug('Launching %s(%s)' % (type(self).__name__, self.name,))
             self.start()
             for t in range(1, 11):
                 if not self._load_url():
@@ -566,8 +577,10 @@ class BaseWorker(Process):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
 
     class TestWorker(BaseWorker):
+        LOG_STDOUT = True
         def __init__(self, *args, **kwargs):
             BaseWorker.__init__(self, *args, **kwargs)
             self.functions.update({

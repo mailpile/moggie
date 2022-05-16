@@ -165,6 +165,7 @@ class AppWorker(PublicWorker):
 
 
 if __name__ == '__main__':
+    logging.basicConfig(level=logging.DEBUG)
     aw = AppWorker('/tmp').connect()
     if aw:
         try:

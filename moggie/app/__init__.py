@@ -91,8 +91,6 @@ def CommandMuttalike(wd, args):
     except Nonsense as e:
         return COMMANDS['help'](wd, [], invalid=str(e))
 
-    print('sys_args=%s tui_args=%s send_args=%s' % (sys_args, tui_args, send_args))
-
     # This is our default mode of operation
     if not args and not tui_args and not send_args:
         tui_args['-y'] = True
@@ -126,8 +124,7 @@ def Main(args):
         from .cli import CLI_COMMANDS
         COMMANDS.update(CLI_COMMANDS)
 
-    configure_logging(profile_dir=wd, stdout=True, level=logging.INFO)
-
+    configure_logging(profile_dir=wd, level=logging.DEBUG)
     command = COMMANDS.get(command)
     if command is not None:
         command(wd, args)

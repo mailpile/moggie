@@ -39,7 +39,8 @@ def configure_logging(
     if not os.path.exists(LOGDIR):
         os.mkdir(LOGDIR, 0o700)
 
-    handlers = [TimedRotatingFileHandler(os.path.join(LOGDIR, worker_name),
+    logfile = os.path.join(LOGDIR, worker_name)
+    handlers = [TimedRotatingFileHandler(logfile,
         when='D', interval=1, backupCount=7)]
     if stdout:
         handlers.append(logging.StreamHandler())
@@ -49,7 +50,7 @@ def configure_logging(
         level=level,
         handlers=handlers,
         force=True)
-    return logging
+    return logfile
 
 
 class AccessConfig(ConfigSectionProxy):

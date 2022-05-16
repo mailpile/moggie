@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 import traceback
@@ -170,6 +171,8 @@ if __name__ == '__main__':
     from ..jmap.requests import RequestMailbox
     from ..jmap.responses import ResponseMailbox
     from ..email.metadata import Metadata
+
+    logging.basicConfig(level=logging.DEBUG)
 
     class MockAppWorker:
         def jmap(self, request_obj):

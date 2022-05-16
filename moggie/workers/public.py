@@ -295,6 +295,7 @@ class PublicWorker(BaseWorker):
 
 if __name__ == '__main__':
     import sys
+    logging.basicConfig(level=logging.DEBUG)
     aw = PublicWorker.FromArgs('/tmp', sys.argv[1:])
     if aw.connect():
         try:

@@ -280,6 +280,7 @@ class StorageWorker(BaseWorker):
 
 if __name__ == '__main__':
     from ..storage.memory import CacheStorage as Storage
+    logging.basicConfig(level=logging.DEBUG)
 
     objects = Storage({
         dumb_encode_asc(b'abc'): [1, 2, 3],

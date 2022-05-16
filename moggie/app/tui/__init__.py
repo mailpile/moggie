@@ -2,6 +2,8 @@ import asyncio
 import copy
 import datetime
 import json
+import logging
+import os
 import re
 import random
 import sys
@@ -12,7 +14,7 @@ import traceback
 import websockets
 import websockets.exceptions
 
-from ...config import AppConfig, APPNAME, APPVER
+from ...config import AppConfig, APPNAME, APPVER, configure_logging
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
 from ...jmap.core import JMAPSessionResource
@@ -21,6 +23,9 @@ from ...util.rpc import AsyncRPCBridge
 from ...workers.app import AppWorker
 from ..suggestions import *
 from .decorations import palette, ENVELOPES, HELLO, HELLO_CREDITS
+
+
+DEFAULT_LOG_LEVEL = 5  # FIXME: Should be 2
 
 
 def dbg(txt):
@@ -939,6 +944,26 @@ class TuiFrame(urwid.Frame):
 
 
 def Main(workdir, sys_args, tui_args, send_args):
+    loglevel = max(0, min(int(sys_args.get('-d', DEFAULT_LOG_LEVEL)), 4))
+    logfile = configure_logging(
+        stdout=False,
+        profile_dir=workdir,
+        level=[
+            logging.CRITICAL,
+            logging.ERROR,
+            logging.WARNING,
+            logging.INFO,
+            logging.DEBUG
+            ][loglevel])
+    if loglevel > 2:
+        sys.stderr.write('Logging to %s (startup in 2s)\n' % (logfile,))
+        time.sleep(2)
+    logging.info('Starting %s v%s text UI with pid=%d, loglevel=%d'
+        % (APPNAME, APPVER, os.getpid(), loglevel))
+    logging.debug('.. sys_args = %s' % (sys_args))
+    logging.debug('.. tui_args = %s' % (tui_args))
+    logging.debug('.. send_args = %s' % (send_args))
+
     app_bridge = app_worker = None
     try:
         app_worker = AppWorker(workdir).connect()
@@ -1006,3 +1031,5 @@ def Main(workdir, sys_args, tui_args, send_args):
             app_bridge.keep_running = False
         if app_worker and app_worker.is_alive():
             app_worker.quit()
+        logging.info('Stopped %s v%s text UI with pid=%d'
+            % (APPNAME, APPVER, os.getpid()))

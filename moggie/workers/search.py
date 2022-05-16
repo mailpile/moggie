@@ -173,6 +173,7 @@ class SearchWorker(BaseWorker):
 
 if __name__ == '__main__':
     import sys
+    logging.basicConfig(level=logging.DEBUG)
     sw = SearchWorker('/tmp', '/tmp', 0, [b'1234'], name='moggie-sw-test').connect()
     if sw:
         print('URL: %s' % sw.url)

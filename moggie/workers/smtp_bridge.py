@@ -18,6 +18,7 @@ multiplex to save bytes on the network...
 """
 import os
 import json
+import logging
 import sys
 import socket
 import time
@@ -47,6 +48,7 @@ class SmtpBridgeSvcWorker(PublicWorker):
 
 if __name__ == '__main__':
     import sys
+    logging.basicConfig(level=logging.DEBUG)
     aw = SmtpBridgeSvcWorker.FromArgs('/tmp', sys.argv[1:])
     if aw.connect():
         try:

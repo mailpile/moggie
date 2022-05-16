@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import time
 import traceback
@@ -103,6 +104,7 @@ class MetadataWorker(BaseWorker):
 
 if __name__ == '__main__':
     import sys
+    logging.basicConfig(level=logging.DEBUG)
     os.system('rm -rf /tmp/moggie-md-test')
     mw = MetadataWorker('/tmp', '/tmp', [b'1234'], name='moggie-md-test').connect()
     if mw:
