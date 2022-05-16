@@ -240,28 +240,36 @@ From: nobody <deleted@example.org>\r\n\
         end = 0
         lts = 0
         now = int(time.time())
+        delmark = self.DELETED_MARKER
+        needs_compacting = 0
         try:
-          while end < len(obj):
-            hend, hdrs = self.quick_msgparse(obj, beg)
+            while end < len(obj):
+                hend, hdrs = self.quick_msgparse(obj, beg)
 
-            end = obj.find(b'\nFrom ', hend-1)
-            if end < 0:
-                end = len(obj)
+                end = obj.find(b'\nFrom ', hend-1)
+                if end < 0:
+                    end = len(obj)
 
-            if skip > 0:
-                skip -= 1
-            else:
-                hl, ml = hend-beg, end-beg
-                if obj[beg:beg+len(self.DELETED_MARKER)] != self.DELETED_MARKER:
-                    lts, md = self._ts_and_Metadata(
-                        now, lts, obj[beg:hend],
-                        [Metadata.PTR(Metadata.PTR.IS_MBOX, relpath, beg, hl, ml)],
-                        hdrs)
-                    yield(md)
+                if skip > 0:
+                    skip -= 1
+                else:
+                    hl, ml = hend-beg, end-beg
+                    if obj[beg:beg+len(delmark)] == delmark:
+                        needs_compacting += 1
+                    else:
+                        lts, md = self._ts_and_Metadata(
+                            now, lts, obj[beg:hend],
+                            [Metadata.PTR(
+                                Metadata.PTR.IS_MBOX, relpath, beg, hl, ml)],
+                            hdrs)
+                        yield(md)
 
-            beg = end+1
+                beg = end+1
         except (ValueError, TypeError):
             return
+        finally:
+            if needs_compacting:
+                self.needs_compacting.add(relpath)
 
     def parse_maildir(self, key, skip=0):
         path = self.key_to_path(key or b'b/')
