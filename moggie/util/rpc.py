@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import socket
 import time
 import traceback
@@ -75,15 +76,20 @@ class JsonRpcClient:
 class BridgeWorker:
     PING_INTERVAL = 3
 
-    def __init__(self, ev_loop, app, peer):
+    def __init__(self, ev_loop, name, app, peer):
         self.ws = None
         self.ws_url = app.websocket_url()
         self.ws_headers = {'Authorization': 'Bearer %s' % app.auth_token}
+        self.name = name
         self.app = app
         self.message_sink = peer.link_bridge(self)
         self.ev_loop = ev_loop
         self.keep_running = True
         self.pending = []
+        self.broken = 0
+
+    def __str__(self):
+        return '%s(%s, %s)' % (type(self).__name__, self.name, self.ws_url)
 
     def send(self, message):
         self.pending.append(message)
@@ -91,52 +97,84 @@ class BridgeWorker:
     def send_json(self, data):
         self.pending.append(json.dumps(data))
 
+    async def on_close(self, exc):
+        # FIXME: OSError probably means our backend went away and is
+        #        not coming back. How should we handle that?
+        #        The app needs to know, and inform the user, with
+        #        the option to relaunch if this is a local backend.
+        self.broken += 1
+        self.message_sink(self.name, json.dumps({
+            'internal_websocket_error': 'Websocket connection unusable',
+            'count': self.broken}))
+        if self.ws is not None:
+            await self.ws.close()
+            self.ws = None
+
     async def async_send(self, message):
-        await self.ws.send(message)
+        try:
+            await self.ws.send(message)
+            self.broken = 0
+        except Exception as e:
+            self.pending.append(message)
+            await self.on_close(e)
 
     async def queue_flusher(self):
         while self.keep_running:
             if self.ws is not None:
-                if self.pending:
-                    for message in self.pending:
-                        await self.ws.send(message)
-                    self.pending = []
-                else:
-                    await self.ws.send(json.dumps(RequestPing()))
+                try:
+                    if self.pending:
+                        for message in self.pending:
+                            await self.ws.send(message)
+                        logging.debug('%s: Sent %d messages'
+                            % (self, len(self.pending)))
+                        self.pending = []
+                    else:
+                        await self.ws.send(json.dumps(RequestPing()))
+                except (OSError, websockets.exceptions.ConnectionClosed) as e:
+                    await self.on_close(e)
+                except exception as e:
+                    logging.exception('%s: Flushing queue failed' % self)
+                    await self.on_close(e)
             for i in range(0, 10 * self.PING_INTERVAL):
                 await asyncio.sleep(0.1)
-                if self.pending:
+                if self.pending and self.ws:
                     break
 
     async def run(self):
         self.ev_loop.create_task(self.queue_flusher())
+        reconn_delay = 0
         while self.keep_running:
             try:
+                logging.debug('%s: Connecting' % self)
+
                 async with websockets.connect(self.ws_url,
                         origin=self.ws_url,
                         compression=None,
                         timeout=60,
+                        ping_timeout=5,
+                        close_timeout=1,
                         max_size=50*1024*1024,
                         max_queue=2,
                         extra_headers=self.ws_headers) as ws:
                     self.ws = ws
+                    self.broken = 0
+                    reconn_delay = 0
                     async for message in ws:
-                        self.message_sink(message)
-            except (OSError, websockets.exceptions.ConnectionClosed):
-                self.ws = None
-                # FIXME: OSError probably means our backend went away and is
-                #        not coming back. How should we handle that?
-                #        The app needs to know, and inform the user, with
-                #        the option to relaunch if this is a local backend.
-                print('FIXME: Dangit, websocket connection closed')
-                await asyncio.sleep(1)
-            except:
-                self.ws = None
-                traceback.print_exc()
+                        self.message_sink(self.name, message)
+                        logging.debug('%s: Message received' % self)
+            except (OSError, websockets.exceptions.ConnectionClosed) as e:
+                await self.on_close(e)
+            except Exception as e:
+                logging.exception('%s: error' % self)
+                await self.on_close(e)
+
+            reconn_delay += 1
+            logging.warning('%s: Websocket closed' % self)
+            await asyncio.sleep(min(reconn_delay, 15))
 
 
-def AsyncRPCBridge(ev_loop, app, peer):
-    app_bridge = BridgeWorker(ev_loop, app, peer)
+def AsyncRPCBridge(ev_loop, name, app, peer):
+    app_bridge = BridgeWorker(ev_loop, name, app, peer)
     ev_loop.create_task(app_bridge.run())
     return app_bridge
 

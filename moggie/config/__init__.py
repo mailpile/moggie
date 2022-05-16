@@ -19,7 +19,7 @@ from .helpers import ListItemProxy, DictItemProxy, ConfigSectionProxy
 
 APPNAME    = 'moggie'  #'mailpile'
 APPNAME_UC = 'Moggie'  #'Mailpile'
-APPVER     = '2.0.0'
+APPVER     = '0.0.1'   # => 1.0 when useful, 2.0 when Mailpile replacement
 APPURL     = 'https://github.com/BjarniRunar/moggie'
 
 LOGDIR     = '/tmp/moggie.%d' % os.getuid()

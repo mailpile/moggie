@@ -259,7 +259,7 @@ class ContextList(urwid.ListBox):
     def __init__(self, tui_frame, contexts, expanded=0):
         self.expanded = expanded
         self.tui_frame = tui_frame
-        self.crumb = 'ohai'
+        self.crumb = ''
         self.active = None
         self.walker = urwid.SimpleListWalker([])
         urwid.ListBox.__init__(self, self.walker)
@@ -738,22 +738,34 @@ class TuiFrame(urwid.Frame):
 
     current_context = property(lambda s: s.context_list.active)
 
-    def incoming_message(self, message):
-        message = json.loads(message)
-        for widget in self.all_columns:
-            if hasattr(widget, 'incoming_message'):
-                try:
-                    widget.incoming_message(message)
-                except:
-                    dbg(traceback.format_exc())
+    def handle_bridge_message(self, bridge_name, message):
+        try:
+            message = json.loads(message)
+            for widget in self.all_columns:
+                if hasattr(widget, 'incoming_message'):
+                    try:
+                        widget.incoming_message(message)
+                    except:
+                        dbg(traceback.format_exc())
 
-        if message.get('prototype') == 'notification':
-            self.notifications.append(message)
-            self.update_topbar()
+            if message.get('prototype') == 'notification':
+                self.notifications.append(message)
+                self.update_topbar()
+            elif message.get('internal_websocket_error'):
+                if message.get('count', 0) > 3:
+                    msg = ('Worker (%s) is unreachable. Is the network down?'
+                        % bridge_name)
+                    self.notifications.append({
+                        'message': msg,
+                        'ts': time.time(),
+                        'data': message})
+                    self.update_topbar()
+        except:
+            logging.exception('Exception handling message: %s' % (message,))
 
     def link_bridge(self, app_bridge):
         self.app_bridge = app_bridge
-        return self.incoming_message
+        return self.handle_bridge_message
 
     def set_context(self, contexts, i):
         # FIXME: Do we really need to recreate the context list?
@@ -970,7 +982,7 @@ def Main(workdir, sys_args, tui_args, send_args):
         screen = urwid.raw_display.Screen()
         tui_frame = TuiFrame(screen)
         aev_loop = asyncio.get_event_loop()
-        app_bridge = AsyncRPCBridge(aev_loop, app_worker, tui_frame)
+        app_bridge = AsyncRPCBridge(aev_loop, 'app', app_worker, tui_frame)
 
         # Request "locked" status from the app.
         app_crypto_status = app_worker.call('rpc/crypto_status')
