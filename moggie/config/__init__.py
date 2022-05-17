@@ -87,9 +87,13 @@ class AccessConfig(ConfigSectionProxy):
         return token
 
     def get_fresh_token(self):
-        age, tok = max((int(a), t) for t, a in self.tokens.items())
-        exp = age + self.MAX_TOKEN_AGE
-        if exp < time.time() + (self.MAX_TOKEN_AGE/2):
+        tokens = self.tokens.items()
+        if tokens:
+            age, tok = max((int(a), t) for t, a in tokens)
+            exp = age + self.MAX_TOKEN_AGE
+            if exp < time.time() + (self.MAX_TOKEN_AGE/2):
+                tok = self.new_token()
+        else:
             tok = self.new_token()
         return tok, int(self.tokens[tok])
 

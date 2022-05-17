@@ -1,5 +1,6 @@
 import binascii
 import time
+import struct
 
 import cryptography.hazmat.backends
 import cryptography.hazmat.primitives.hashes

@@ -16,7 +16,7 @@ def CommandImport(wd, args):
 
     paths = []
     while args and ((args[-1] in SEARCH) or os.path.exists(args[-1])):
-        paths.append(args.pop(-1))
+        paths.append(os.path.abspath(args.pop(-1)))
     paths.reverse()
     if not paths:
         raise Nonsense('No valid paths found!')

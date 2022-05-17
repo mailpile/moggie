@@ -17,7 +17,7 @@ First, brace yourself for nothing working: see Project Status above.
 
 Install Moggie:
 
-   1. apt install git python3-{cryptography,urwid,websockets}
+   1. apt install git python3-{cryptography,urwid,websockets,numpy}
    2. git clone https://github.com/BjarniRunar/moggie
    3. cd moggie
    4. git submodule init
@@ -31,6 +31,10 @@ Play with Moggie:
 
     # The following commands run from the root of the git repo
     cd /path/to/moggie
+
+    # Hard-code a dummy passphrase for Moggie. Note this ends up written
+    # in the clear to the filesystem: don't use a real passphrase.
+    python3 -m moggie config set Secrets passphrase 'this-is-insecure'
 
     # Read some mail using Moggie:
     python3 -m moggie -f /path/to/archive.mbox

@@ -1009,7 +1009,9 @@ def Main(workdir, sys_args, tui_args, send_args):
             #
             # FIXME: incomplete, we need to also ensure that Context Zero
             # is selected. Is setting expanded=0 reliably that?
-            tui_frame.show_mailbox(tui_args['-f'], AppConfig.CONTEXT_ZERO)
+            tui_frame.show_mailbox(
+                os.path.abspath(tui_args['-f']),
+                AppConfig.CONTEXT_ZERO)
             tui_frame.context_list.expanded = 0
 
         elif not app_is_locked:
