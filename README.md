@@ -11,6 +11,22 @@ A fast, secure e-mail client? Someday!
 [Issue #1 tracks progress and gives a rough idea of what is planned](https://github.com/BjarniRunar/moggie/issues/1).
 
 
+## Contributing
+
+For now, please don't?
+
+This project is in "quiet mode" (not quite stealth), because I want to
+get it to a certain level of maturity before I engage with users,
+testers and other developers. The only feedback I'm interested in at the
+moment is positive "wow that's awesome!" reinforcement. Which may not be
+justified just yet. ;-)
+
+The work is published here in case I get hit by a bus, and so the
+Mailpile community (who directly and indirectly funded my work) can see
+what I am up to.
+
+
+
 ## Architectural overview
 
 Moggie currently masquerades as a "TUI" (text-(G)UI) app, but behind the scenes
