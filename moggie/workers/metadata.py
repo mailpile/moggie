@@ -20,9 +20,10 @@ class MetadataWorker(BaseWorker):
     SORT_DATE_ASC = 1
     SORT_DATE_DEC = 2
 
-    def __init__(self, status_dir, metadata_dir, encryption_keys, name=KIND):
+    def __init__(self, status_dir, metadata_dir, encryption_keys,
+            name=KIND, notify=None):
 
-        BaseWorker.__init__(self, status_dir, name=name)
+        BaseWorker.__init__(self, status_dir, name=name, notify=notify)
         self.functions.update({
             b'info':         (True, self.api_info),
             b'compact':      (True, self.api_compact),

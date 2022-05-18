@@ -131,9 +131,6 @@ class SearchWorker(BaseWorker):
             def background_add_results():
                 with self.change_lock:
                     rv = self._engine.add_results(results)
-                self.notify(
-                    '[search] Updated %d search result(s)'
-                    % (len(results)), data=rv)
                 self.results_to_callback_chain(callback_chain, rv)
             self.add_background_job(background_add_results)
 

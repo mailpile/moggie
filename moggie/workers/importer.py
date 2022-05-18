@@ -28,9 +28,10 @@ class ImportWorker(BaseWorker):
             fs_worker=None,
             search_worker=None,
             metadata_worker=None,
+            notify=None,
             name=KIND):
 
-        BaseWorker.__init__(self, status_dir, name=name)
+        BaseWorker.__init__(self, status_dir, name=name, notify=notify)
         self.functions.update({
             b'import_search': (True, self.api_import_search)})
 
@@ -53,9 +54,12 @@ class ImportWorker(BaseWorker):
     def api_import_search(self,
             request, initial_tags, force, callback_chain, **kwargs):
         request_obj = to_jmap_request(request)
+        caller = self._caller
         def background_import_search():
-            rv = self._import_search(request_obj, initial_tags, force,
-                    callback_chain=callback_chain)
+            rv = self._import_search(
+                request_obj, initial_tags, force,
+                callback_chain=callback_chain,
+                caller=caller)
         self.add_background_job(background_import_search)
         self.reply_json({'running': True})
 
@@ -68,12 +72,23 @@ class ImportWorker(BaseWorker):
         except:
             return None
 
-    def _index_full_messages(self, email_idxs, filters, callback_chain):
+    def _notify_progress(self, progress):
+        total = progress['emails']
+        done = (progress['pending'] == 0)
+        add = progress['emails_new']
+        upd = progress['emails_upd']
+        old = total - add - upd
+        self.notify(
+            '[import] Adding %d new messages, updating %d, %d unchanged.%s'
+                % (add, upd, old, ' Done!' if done else '..'),
+            caller=progress['caller'])
+
+    def _index_full_messages(self,
+            email_idxs, progress, filters, callback_chain):
         # Full indexing, per message in "in:incoming":
         #
         #...
         email_idxs = list(self.search.intersect('in:incoming', email_idxs))
-        print('FIXME: Should index emails %s' % email_idxs)
         keywords = {}
         for md in self.metadata.metadata(email_idxs):
              # 1. Submit a request to the main app to fetch the e-mail's
@@ -96,72 +111,84 @@ class ImportWorker(BaseWorker):
                  return
 
         # 4. Add/remove results from the search engine
-        self.search.add_results(
-            list(keywords.items()), wait=False)
+        adding = list(keywords.items())
+        self.search.add_results(adding, wait=False)
 
         # 5. Remove messages from Incoming
         # FIXME: Make this a callback action when add_results completes
         self.search.del_results(
             [[list(keywords.keys()), 'in:incoming']], wait=False)
         if self.imported > self.compacted + self.COMPACT_INTERVAL:
-            self.search.compact(full=False)
+            self.search.with_caller(progress['caller']).compact(full=False)
             self.compacted = self.imported
 
         # 6. Report progress
         # FIXME: Make this a callback action when del_results completes
+        progress['pending'] -= 1
+        self._notify_progress(progress)
         if callback_chain:
             self.results_to_callback_chain(
                 callback_chain, {'indexed': len(keywords)})
 
     def _import_search(self, request_obj, initial_tags, force,
-            callback_chain=None):
+            callback_chain=None, caller=None):
 
         filters = FilterEngine().validate()  # FIXME: Take script as argument
+        progress = {
+            'caller': caller,
+            'emails': 0,
+            'emails_new': 0,
+            'emails_upd': 0,
+            'pending': 1}
 
         def _full_indexer(email_idxs):
             def _full_index():
-                self._index_full_messages(email_idxs, filters, callback_chain)
+                self._index_full_messages(
+                    email_idxs, progress, filters, callback_chain)
             return _full_index
-
 
         tags = ['in:incoming'] + initial_tags
         done = False
-        progress = 0
         while self.keep_running and not done:
             # 1. Submit a limited request_obj to the main app worker
             #    (The app is responsible for selecting the right backend
             #    mail source to process the request, we don't need to know
             #    where things are coming from)
             response = self.app.jmap(request_obj.update({
-                'skip': progress,
+                'skip': progress['emails'],
                 'limit': self.BATCH_SIZE}))
             emails = response['emails']
-            progress += len(emails)
+            progress['emails'] += len(emails)
             done = (len(emails) < self.BATCH_SIZE)
 
             # 2. Add messages to metadata index, forward any new ones to the
             #    search engine for initial tagging (in:incoming, namespaces).
             idx_ids = self.metadata.add_metadata(emails, update=True)
             new_msgs = idx_ids['added']
+            progress['emails_new'] += len(new_msgs)
             if force:
                 new_msgs.extend(idx_ids['updated'])
+                progress['emails_upd'] += len(idx_ids['updated'])
             if new_msgs:
                 added = self.search.add_results([[new_msgs, tags]])
 
                 # 3. When search engine reports success, schedule full indexing
                 #    and filtering of that batch of messages. We could do all
                 #    at once, but this way we can report progress.
+                progress['pending'] += 1
                 self.add_background_job(_full_indexer(new_msgs), which='full')
 
             # 4. Repeat until all mail is processed, report progress
+            self._notify_progress(progress)
             if callback_chain:
-                self.results_to_callback_chain(
-                    callback_chain, {'added': progress})
+                self.results_to_callback_chain(callback_chain, progress)
 
         # FIXME: error handling? ... what does that look like? Ugh.
         #        That's where this whole architecture is failing.
 
-        return {'added': progress}
+        progress['pending'] -= 1
+        self._notify_progress(progress)
+        return progress
 
 # HMM, looks like chains need error endpoints as well.
 

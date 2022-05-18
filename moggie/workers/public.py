@@ -86,7 +86,7 @@ def web_ping(req_env):
         'body': 'Pong'}
 
 
-@url('/quit')
+@url('/quit', '/quit/*')
 def web_quit(req_env):
     require(req_env, post=True, local=True)
     req_env['postpone_action'](lambda: req_env['worker'].quit())
@@ -96,7 +96,7 @@ def web_quit(req_env):
         'body': '{"quitting": true}'}
 
 
-@url('/status')
+@url('/status', '/status/*')
 def web_status(req_env):
     require(req_env, post=True, local=True)
     return {

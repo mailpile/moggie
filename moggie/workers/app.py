@@ -55,8 +55,10 @@ async def web_websocket(opcode, msg, conn, ws,
     if msg:
         code = 500
         web_auth = conn.env['auth']
+        conn_uid = conn.uid
         try:
-            result = await conn.env['app'].api_jmap(web_auth, json.loads(msg))
+            result = await conn.env['app'].api_jmap(
+                conn_uid, web_auth, json.loads(msg))
             code = result.get('code', 500)
             if code == 200 and 'body' in result:
                 await conn.send(result['body'])
@@ -98,7 +100,8 @@ async def web_jmap(req_env):
             #        to change the timer name to match the method(s) called.
             #timer.name = 'jmap_foo'
             if req_env.post_data:
-                return await req_env['app'].api_jmap(auth, req_env.post_data)
+                return await req_env['app'].api_jmap(
+                    None, auth, req_env.post_data)
         except PermissionError:
             code, msg, status = 403, 'Access Denied', 'rej'
         except:
@@ -148,8 +151,14 @@ class AppWorker(PublicWorker):
     def shutdown_tasks(self):
         self.app.shutdown_tasks()
 
-    async def broadcast(self, message):
-        await ws_broadcast('app', json.dumps(message))
+    async def broadcast(self, message, only=None):
+        if isinstance(only, list):
+            ofunc = lambda wss: (wss.uid in only)
+        elif isinstance(only, str):
+            ofunc = lambda wss: (wss.uid == only)
+        else:
+            ofunc = only
+        await ws_broadcast('app', json.dumps(message), only=ofunc)
 
     def get_auth(self, req_env, **req_kwargs):
         req_info = require(req_env, **req_kwargs)

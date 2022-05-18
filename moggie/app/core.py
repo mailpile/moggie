@@ -80,22 +80,26 @@ class AppCore:
     # Lifecycle
 
     def start_workers(self):
+        notify_url = self.worker.callback_url('rpc/notify')
+
         self.metadata = MetadataWorker(self.worker.worker_dir,
             self.worker.profile_dir,
             self.config.get_aes_keys(),
+            notify=notify_url,
             name='metadata').connect()
 
         self.search = SearchWorker(self.worker.worker_dir,
             self.worker.profile_dir,
             self.metadata.info()['maxint'],
             self.config.get_aes_keys(),
-            notify=self.worker.callback_url('rpc/notify'),
+            notify=notify_url,
             name='search').connect()
 
         self.storage = StorageWorker(self.worker.worker_dir,
             MailboxFileStorage(
                 relative_to=os.path.expanduser('~'),
                 metadata=self.metadata),
+            notify=notify_url,
             name='fs').connect()
 
         self.importer = ImportWorker(self.worker.worker_dir,
@@ -103,6 +107,7 @@ class AppCore:
             app_worker=self.worker,
             search_worker=self.search,
             metadata_worker=self.metadata,
+            notify=notify_url,
             name='importer').connect()
 
     def stop_workers(self):
@@ -128,28 +133,34 @@ class AppCore:
 
     def startup_tasks(self):
         self.start_workers()
+        self._stashed_results = {}
 
     def shutdown_tasks(self):
         self.stop_workers()
 
+    def keep_result(self, rid, rv):
+        self._results[rid] = (time.time(), rv)
+
 
     # Public API
 
-    async def api_jmap_mailbox(self, access, jmap_request):
+    async def api_jmap_mailbox(self, conn_id, access, jmap_request):
         # FIXME: Make sure access grants right to read mailboxes directly
-        info = await async_run_in_thread(self.storage.mailbox,
-            jmap_request['mailbox'],
-            limit=jmap_request['limit'],
-            skip=jmap_request['skip'])
+        def load_mailbox():
+            return self.storage.mailbox(
+                jmap_request['mailbox'],
+                limit=jmap_request['limit'],
+                skip=jmap_request['skip'])
+        info = await async_run_in_thread(load_mailbox)
         watched = False
         return ResponseMailbox(jmap_request, info, watched)
 
-    async def api_jmap_search(self, access, jmap_request):
+    async def api_jmap_search(self, conn_id, access, jmap_request):
         # FIXME: Make sure access allows requested contexts
         #        Make sure we set tag_namespace based on the context
         def perform_search():
-            return list(self.metadata.metadata(
-                self.search.search(
+            return list(self.metadata.with_caller(conn_id).metadata(
+                self.search.with_caller(conn_id).search(
                         jmap_request['terms'],
                         tag_namespace=jmap_request.get('tag_namespace', None),
                         mask_deleted=jmap_request.get('mask_deleted', True)
@@ -160,39 +171,43 @@ class AppCore:
         results = await async_run_in_thread(perform_search)
         return ResponseSearch(jmap_request, results)
 
-    async def api_jmap_counts(self, access, jmap_request):
+    async def api_jmap_counts(self, conn_id, access, jmap_request):
         # FIXME: Make sure access allows requested contexts
         #        Make sure we set tag_namespace based on the context
         # FIXME: Actually search/count! Async, in a thread, gathering the
         #        results may take time.
         return ResponseCounts(jmap_request, {})
 
-    async def api_jmap_email(self, access, jmap_request):
+    async def api_jmap_email(self, conn_id, access, jmap_request):
         # FIXME: Does this user have access to this email?
         #        How will that be determined? Probably a token that
         #        comes from viewing a search result or mailbox?
         #        Seems we should decide that before making any efforts
-        info = await async_run_in_thread(self.storage.email,
-            jmap_request['metadata'],
-            text=jmap_request.get('text', False),
-            data=jmap_request.get('data', False))
+        def get_email():
+            return self.storage.with_caller(conn_id).email(
+                jmap_request['metadata'],
+                text=jmap_request.get('text', False),
+                data=jmap_request.get('data', False))
+        info = await async_run_in_thread(get_email)
         return ResponseEmail(jmap_request, info)
 
-    async def api_jmap_contexts(self, access, jmap_request):
+    async def api_jmap_contexts(self, conn_id, access, jmap_request):
         # FIXME: Only return contexts this access level grants use of
         all_contexts = self.config.contexts
         contexts = [all_contexts[k].as_dict() for k in sorted(access.roles)]
         return ResponseContexts(jmap_request, contexts)
 
-    async def api_jmap_add_to_index(self, access, jmap_request):
+    async def api_jmap_add_to_index(self, conn_id, access, jmap_request):
         # FIXME: Access questions, context settings...
-        result = await async_run_in_thread(self.importer.import_search,
-            jmap_request['search'],
-            jmap_request.get('initial_tags', []),
-            force=jmap_request.get('force', False))
+        def import_search():
+            return self.importer.with_caller(conn_id).import_search(
+                jmap_request['search'],
+                jmap_request.get('initial_tags', []),
+                force=jmap_request.get('force', False))
+        result = await async_run_in_thread(import_search)
         return ResponsePing(jmap_request)  # FIXME
 
-    async def api_jmap(self, access, client_request):
+    async def api_jmap(self, conn_id, access, client_request):
         # The JMAP API sends multiple requests in a blob, and wants some magic
         # interpolation as well. Where do we implement that? Is there a lib we
         # should depend upon? DIY?
@@ -211,24 +226,24 @@ class AppCore:
         # FIXME: This is a hack
         result = None
         if type(jmap_request) == RequestMailbox:
-            result = await self.api_jmap_mailbox(access, jmap_request)
+            result = await self.api_jmap_mailbox(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestSearch:
-            result = await self.api_jmap_search(access, jmap_request)
+            result = await self.api_jmap_search(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestCounts:
-            result = await self.api_jmap_counts(access, jmap_request)
+            result = await self.api_jmap_counts(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestEmail:
-            result = await self.api_jmap_email(access, jmap_request)
+            result = await self.api_jmap_email(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestContexts:
-            result = await self.api_jmap_contexts(access, jmap_request)
+            result = await self.api_jmap_contexts(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestAddToIndex:
-            result = await self.api_jmap_add_to_index(access, jmap_request)
+            result = await self.api_jmap_add_to_index(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestPing:
             result = ResponsePing(jmap_request)
 
         if result is not None:
             code, json_result = 200, json.dumps(result, indent=2)
-            if type(jmap_request) != RequestPing:
-                logging.debug('<< %s' % json_result[:256])
+            #if type(jmap_request) != RequestPing:
+            #    logging.debug('<< %s' % json_result[:256])
         else:
             code = 400
             result = {'error': 'Unknown %s' % type(jmap_request)}
@@ -252,7 +267,14 @@ class AppCore:
     # Internal API
 
     async def rpc_notify(self, notification, **kwargs):
-        await self.worker.broadcast(ResponseNotification(notification))
+        only = None
+        if kwargs.get('caller'):
+            only = kwargs.get('caller')
+            if not isinstance(only, list):
+                only = [only]
+        await self.worker.broadcast(
+            ResponseNotification(notification),
+            only=only)
         self.worker.reply_json({'ok': 'thanks'})
 
     async def rpc_check_result(self, request_id, **kwargs):
@@ -260,7 +282,7 @@ class AppCore:
 
     async def rpc_jmap(self, request, **kwargs):
         try:
-            rv = await self.api_jmap(self.config.access_zero(), request)
+            rv = await self.api_jmap(None, self.config.access_zero(), request)
             self.worker.reply_json(rv['_result'])
         except:
             logging.exception('rpc_jmap failed %s' % (request,))

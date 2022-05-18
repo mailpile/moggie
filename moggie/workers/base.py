@@ -84,6 +84,8 @@ class BaseWorker(Process):
         self._want_host = host or self.LOCALHOST
         self._want_port = port or 0
         self._sock = None
+        self._caller = None
+        self._caller_lock = threading.Lock()
         self._client = None
         self._client_addrinfo = None
         self._client_peeked = None
@@ -153,9 +155,11 @@ class BaseWorker(Process):
                         self._client_headers = None
                         self.handler(str(method, 'latin-1'), args)
                     else:
+                        logging.warning('Invalid secret: %s' % secret)
                         self.status['requests_ignored'] += 1
                         client.send(secret and self.HTTP_403 or self.HTTP_400)
                 else:
+                    logging.warning('Bad method or data: %s' % peeked[:20])
                     self.status['requests_ignored'] += 1
                     client.send(self.HTTP_400)
             except OSError:
@@ -244,16 +248,21 @@ class BaseWorker(Process):
 
         return None
 
-    def notify(self, message, data=None):
-        logging.info(message)
+    def notify(self, message, data=None, caller=None):
+        logging.info('Notify%s%s: %s'
+            % (' ' if caller else '', caller or '', message))
         if self._notify:
             try:
                 notification = {'message': message}
                 if data is not None:
                     notification['data'] = data
+                if caller is not None:
+                    notification['caller'] = caller
                 self.call(self._notify, notification)
             except KeyboardInterrupt:
                 raise
+            except PermissionError:
+                logging.error('Failed to notify %s' % self._notify)
             except:
                 logging.exception('Failed to notify %s' % self._notify)
 
@@ -331,21 +340,40 @@ class BaseWorker(Process):
         else:
             self._auth_header = ''
 
+    def with_caller(self, caller):
+        if caller:
+            self._caller_lock.acquire()
+            self._caller = caller
+        return self
+
+    def get_caller(self):
+        if self._caller:
+            try:
+                return self._caller
+            finally:
+                self._caller = None
+                self._caller_lock.release()
+        return None
+
     # FIXME: We really would like this to be available as async, so
     #        we can multiplex things while our workers work.
     def call(self, fn, *args, qs=None, method='POST', upload=None):
+
         fn = fn.encode('latin-1') if isinstance(fn, str) else fn
         remote = fn[:6] in (b'http:/', b'https:')
         if remote:
             parts = list(url_parts(str(fn, 'latin-1'))[1:])
             path = parts[-1].strip('/')
+            caller = None
         else:
             # This will raise a KeyError if the function isn't defined
             argdecode, func = self.functions[fn]
             fn = str(fn, 'latin-1')
             path = fn
+            caller = self.get_caller()
 
         # Format positional arguments and query string
+        args = [caller] + list(args)
         if args:
             path += ('/' + '/'.join([dumb_encode_asc(a) for a in args]))
         if qs:
@@ -430,6 +458,8 @@ class BaseWorker(Process):
         return self._client
 
     def reply_json(self, data):
+        if self._caller and isinstance(data, dict):
+            data['_caller'] = self._caller
         self.reply(self.HTTP_JSON,
             json.dumps(data, indent=1).encode('utf-8') + b'\n')
 
@@ -501,6 +531,7 @@ class BaseWorker(Process):
                     (str(p[0], 'latin-1'), dumb_decode(p[1]))
                     for p in qs_pairs))
 
+                self._caller = dumb_decode(args.pop(0)) if args else None
                 if argdecode:
                     args = [dumb_decode(a) for a in args]
                 rv = func(*args, **kwargs)
@@ -514,17 +545,20 @@ class BaseWorker(Process):
                 stats['requests_ok'] += 1
                 return rv
             except TypeError:
-                logging.exception('Error in RPC handler %s %s' % (method, fn))
+                logging.exception('Error in RPC handler %s %s(%s, %s)'
+                    % (method, fn, args, kwargs))
                 if kwargs:
                     self.status['requests_ignored'] += 1
                     return self.reply(self.HTTP_400)  # This is a guess :-(
             except KeyboardInterrupt:
                 pass
             except:
-                logging.exception('Error in RPC handler %s %s' % (method, fn))
+                logging.exception('Error in RPC handler %s %s(%s, %s)'
+                    % (method, fn, args, kwargs))
             self.status['requests_failed'] += 1
             self.reply(self.HTTP_500)
         else:
+            logging.debug('Unknown method: %s' % (fn,))
             self.status['requests_ignored'] += 1
             self.reply(self.HTTP_404)
 
@@ -550,6 +584,7 @@ class BaseWorker(Process):
                     (str(p[0], 'latin-1'), dumb_decode(p[1]))
                     for p in qs_pairs))
 
+                self._caller = dumb_decode(args.pop(0)) if args else None
                 if argdecode:
                     args = [dumb_decode(a) for a in args]
                 rv = func(*args, **kwargs)
@@ -561,17 +596,20 @@ class BaseWorker(Process):
                 stats['requests_ok'] += 1
                 return rv
             except TypeError:
-                logging.exception('Error in RPC handler %s %s' % (method, fn))
+                logging.exception('Error in RPC handler %s %s(%s, %s)'
+                    % (method, fn, args, kwargs))
                 if kwargs:
                     self.status['requests_ignored'] += 1
                     return self.reply(self.HTTP_400)  # This is a guess :-(
             except KeyboardInterrupt:
                 pass
             except:
-                logging.exception('Error in RPC handler %s %s' % (method, fn))
+                logging.exception('Error in RPC handler %s %s(%s, %s)'
+                    % (method, fn, args, kwargs))
             self.status['requests_failed'] += 1
             self.reply(self.HTTP_500)
         else:
+            logging.debug('Unknown method: %s' % (fn,))
             self.status['requests_ignored'] += 1
             self.reply(self.HTTP_404)
 
