@@ -11,6 +11,25 @@ A fast, secure e-mail client? Someday!
 [Issue #1 tracks progress and gives a rough idea of what is planned](https://github.com/BjarniRunar/moggie/issues/1).
 
 
+## Architectural overview
+
+Moggie currently masquerades as a "TUI" (text-(G)UI) app, but behind the scenes
+it is a collection of microservices using HTTP-based RPC calls to talk to each
+other. There are microservices for the search engine, the metadata store,
+filesystem operations, a master "application logic" process and one or more
+user-facing client processes.
+
+The user-facing processes speak websocket to the "app" worker and I am
+evaluating whether JMAP is a suitable protocol for this channel. The plan is
+for Moggie to support a web user interface (like Mailpile), and integrate
+[PageKite](https://pagekite.net/) for easy remote access and collaboration.
+
+Data is stored on disk using binary records, most of which is AES encrypted.
+However, the keys are currently left in the clear in the config file until I've
+figured out the UX and integrated [Passcrow](https://passcrow.org/) for
+password recovery.
+
+
 ## Hacking Micro-Howto
 
 First, brace yourself for nothing working: see Project Status above.
@@ -39,7 +58,7 @@ Play with Moggie:
     # Read some mail using Moggie:
     python3 -m moggie -f /path/to/archive.mbox
 
-    # Start the Moggie background process
+    # Start the Moggie background process/server
     python3 -m moggie start
 
     # Import mail into Moggie:
@@ -50,8 +69,16 @@ Play with Moggie:
     # Stop the Moggie background process
     python3 -m moggie stop
 
-Moggie will by default write data to `~/.local/share/Moggie/default` - you
-will probably want to delete that folder now and then.
+Moggie will write data to **`~/.local/share/Moggie/default`**.
+
+You will probably want to delete that folder now and then, or at least
+the contents of the various subdirectories, since the format of Moggie's
+on-disk data structures is still in flux and obsolete data may cause
+weird issues.
+
+The data includes logs (in the subdirectory named `logs`) which may be
+useful for debugging. There is also a `config.rc`.
+
 
 
 ## Credits and License ##
