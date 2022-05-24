@@ -50,16 +50,16 @@ def Main(workdir, sys_args, tui_args, send_args):
     app_bridge = app_worker = None
     try:
         app_worker = AppWorker(workdir).connect()
-        screen = urwid.raw_display.Screen()
-        tui_frame = TuiFrame(screen)
-        aev_loop = asyncio.get_event_loop()
-        app_bridge = AsyncRPCBridge(aev_loop, 'app', app_worker, tui_frame)
 
         # Request "locked" status from the app.
         app_crypto_status = app_worker.call('rpc/crypto_status')
         app_is_locked = app_crypto_status.get('locked')
-
         logging.debug('APP IS%s LOCKED' % ('' if app_is_locked else ' NOT'))
+
+        screen = urwid.raw_display.Screen()
+        tui_frame = TuiFrame(screen, app_is_locked)
+        aev_loop = asyncio.get_event_loop()
+        app_bridge = AsyncRPCBridge(aev_loop, 'app', app_worker, tui_frame)
 
         if not app_is_locked:
             jsr = JMAPSessionResource(app_worker.call('rpc/jmap_session'))

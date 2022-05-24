@@ -14,3 +14,6 @@
 [submodule "submodules/upagekite"]
 	path = submodules/upagekite
 	url = https://github.com/pagekite/upagekite/
+[submodule "submodules/python-passcrow"]
+	path = submodules/python-passcrow
+	url = https://github.com/mailpile/python-passcrow

@@ -30,7 +30,7 @@ class WorkerPageKiteSettings(uPageKiteDefaults):
     info = logging.info
     error = logging.error
     debug = logging.debug
-    #trace = logging.debug
+    trace = logging.debug
 
     @classmethod
     async def network_send_sleep(uPK, sent):

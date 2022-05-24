@@ -87,6 +87,23 @@ class RequestContexts(RequestBase):
         }, req_id=req_id)
 
 
+class RequestUnlock(RequestBase):
+    def __init__(self, passphrase=None, req_id=None):
+        self.update({
+            'prototype': 'unlock',
+            'passphrase': passphrase
+        }, req_id=req_id)
+
+
+class RequestChangePassphrase(RequestBase):
+    def __init__(self, old_passphrase, new_passphrase, req_id=None):
+        self.update({
+            'prototype': 'change_passphrase',
+            'old_passphrase': old_passphrase,
+            'new_passphrase': new_passphrase
+        }, req_id=req_id)
+
+
 def to_jmap_request(_input):
     cls = {
          'ping': RequestPing,
@@ -96,6 +113,8 @@ def to_jmap_request(_input):
          'mailbox': RequestMailbox,
          'contexts': RequestContexts,
          'add_to_index': RequestAddToIndex,
+         'unlock': RequestUnlock,
+         'change_passphrase': RequestChangePassphrase,
          }.get(_input.get('prototype', ''))
     if cls:
         obj = cls()

@@ -19,6 +19,22 @@ class ResponseNotification(dict):
             'ts': int(time.time())})
 
 
+class ResponsePleaseUnlock(ResponseNotification):
+    def __init__(self, request):
+        super().__init__({
+            'message': 'App is locked. Please provide a passphrase to unlock.',
+            'please_unlock': True,
+            'postponed': request})
+
+
+class ResponseUnlocked(dict):
+    def __init__(self, request):
+        super().__init__({
+            'prototype': 'unlocked',
+            'message': 'App unlocked!',
+            'ts': int(time.time())})
+
+
 class ResponseAddToIndex(dict):
     def __init__(self, request, done, total):
         self.update({
@@ -26,8 +42,7 @@ class ResponseAddToIndex(dict):
             'context': request['context'],
             'req_id': request['req_id'],
             'total': total,
-            'done': done
-        })
+            'done': done})
 
 
 class ResponseMailbox(dict):

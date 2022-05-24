@@ -145,6 +145,8 @@ From: nobody <deleted@example.org>\r\n\
     DELETED_FILLER = b"                                                    \r\n"
 
     def __init__(self, *args, **kwargs):
+        # We will need this to inform the metadata index about changed
+        # locations for things on compact; FIXME: implement this!
         self.metadata = kwargs.get('metadata')
         if 'metadata' in kwargs:
             del kwargs['metadata']

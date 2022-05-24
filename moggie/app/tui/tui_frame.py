@@ -1,3 +1,5 @@
+import asyncio
+import datetime
 import json
 import logging
 import time
@@ -9,6 +11,7 @@ from ..suggestions import Suggestion, SuggestionWelcome
 
 from .contextlist import ContextList
 from .emaillist import EmailList
+from .unlockdialog import UnlockDialog
 from .searchdialog import SearchDialog
 from .suggestionbox import SuggestionBox
 from .widgets import *
@@ -22,10 +25,16 @@ class PopUpManager(urwid.PopUpLauncher):
     def __init__(self, tui_frame, content):
         super().__init__(content)
         self.tui_frame = tui_frame
-        self.target = SearchDialog
+        self.target = None
         self.target_args = []
 
+    def open_with(self, target, *target_args):
+        self.target = target
+        self.target_args = target_args
+        return self.open_pop_up()
+
     def create_pop_up(self):
+        target, args = self.target, self.target_args
         if self.target:
             pop_up = self.target(self.tui_frame, *self.target_args)
             urwid.connect_signal(pop_up, 'close', lambda b: self.close_pop_up())
@@ -44,8 +53,9 @@ class PopUpManager(urwid.PopUpLauncher):
 
 
 class TuiFrame(urwid.Frame):
-    def __init__(self, screen):
+    def __init__(self, screen, app_is_locked):
         self.screen = screen
+        self.is_locked = app_is_locked
         self.render_cols_rows = self.screen.get_cols_rows()
         self.app_bridge = None
 
@@ -59,13 +69,32 @@ class TuiFrame(urwid.Frame):
         self.notifications = []
         self.columns = urwid.Columns([self.filler1], dividechars=1)
         self.context_list = ContextList(self, [])
+
         self.all_columns = [self.context_list]
+        self.topbar_pile = urwid.Pile([])
+        self.topbar = PopUpManager(self, self.topbar_pile)
+
         self.update_topbar(update=False)
         self.update_columns(update=False, focus=False)
 
         urwid.Frame.__init__(self, self.columns, header=self.topbar)
+        self.contents['header'] = (self.topbar, None)
+
+        loop = asyncio.get_event_loop()
+        loop.create_task(self.topbar_clock())
 
     current_context = property(lambda s: s.context_list.active)
+
+    async def topbar_clock(self):
+        while True:
+            self.update_topbar()
+            if self.notifications:
+                await asyncio.sleep(0.25)
+            else:
+                await asyncio.sleep(1)
+            expired = time.time() - 20
+            self.notifications = [
+                n for n in self.notifications if n['ts'] > expired]
 
     def handle_bridge_message(self, bridge_name, message):
         try:
@@ -77,7 +106,9 @@ class TuiFrame(urwid.Frame):
                     except:
                         logging.exception('Incoming message asploded')
 
-            if message.get('prototype') == 'notification':
+            if message.get('prototype') in ('notification', 'unlocked'):
+                if message['prototype'] == 'unlocked':
+                    self.is_locked = False
                 self.notifications.append(message)
                 self.update_topbar()
             elif message.get('internal_websocket_error'):
@@ -114,6 +145,10 @@ class TuiFrame(urwid.Frame):
         self.col_show(self.all_columns[0],
             EmailList(self, RequestSearch(context, terms)))
 
+    def unlock(self, passphrase):
+        logging.info('Passphrase supplied, attempting unlock')
+        self.app_bridge.send_json(RequestUnlock(passphrase))
+
     def max_child_rows(self):
         return self.screen.get_cols_rows()[1] - 2
 
@@ -129,16 +164,19 @@ class TuiFrame(urwid.Frame):
             self.update_columns()
         return urwid.Frame.render(self, *args, **kwargs)
 
+    def locked_emoji(self):
+        return ' \U0001F512' if self.is_locked else ''
+
     def update_topbar(self, update=True):
         # FIXME: Calculate/hint hotkeys based on what our columns suggest?
+        now = time.time()
 
         maxwidth = self.render_cols_rows[0] - 2
-        if self.notifications and self.notifications[-1]['ts'] > time.time() - 60:
-            crumbtrail = self.notifications[-1]['message']
-        else:
-            crumbtrail = ' -> '.join(self.crumbs)
-            if len(crumbtrail) > maxwidth:
-                crumbtrail = '...' + crumbtrail[-(maxwidth-3):]
+        crumbtrail = ' -> '.join(self.crumbs)
+        if len(crumbtrail) > maxwidth:
+            crumbtrail = '...' + crumbtrail[-(maxwidth-3):]
+
+        pad = ' ' if maxwidth > 80 else ''
 
         global_hks = []
         column_hks = []
@@ -153,21 +191,70 @@ class TuiFrame(urwid.Frame):
             if hasattr(wdgt, 'selection_hks'):
                 selection_hks.extend(wdgt.selection_hks)
 
-        mv = ' %s v%s ' % (APPNAME, APPVER)
-        self.topbar = PopUpManager(self, urwid.Pile([
-            urwid.AttrMap(urwid.Columns([
-                ('fixed', len(mv), urwid.Text(mv, align='left')),
-                ('weight', 1, urwid.Text(
-                    global_hks + [
-                        ('top_hk', '/:'), 'Search ',
+        ntime = datetime.datetime.now()
+        if maxwidth > 150:
+            cfmt = '%s'
+            clock_a = clock_b = '  %A, %Y-%m-%d  %H:%M:%S'
+        elif maxwidth > 115:
+            cfmt = '%s'
+            clock_a = clock_b = ' %a %Y-%m-%d %H:%M:%S'
+        elif maxwidth > 84:
+            cfmt = '%14s'
+            clock_a = '%a %H:%M:%S'
+            clock_b = '%a %Y-%m-%d'
+        elif maxwidth > 74:
+            cfmt = '%10s'
+            clock_a = '%a %H:%M'
+            clock_b = '%Y-%m-%d'
+        else:
+            cfmt = '%5s'
+            clock_a = '%H:%M'
+            clock_b = '%a '
+        if (now // 8) % 3 == 1:
+            clock = cfmt % ntime.strftime(clock_b) + self.locked_emoji()
+        else:
+            clock = cfmt % ntime.strftime(clock_a) + self.locked_emoji()
+
+        hints = []
+        nage = 0
+        if self.notifications:
+            nage = now - self.notifications[-1]['ts']
+        if 0 < nage <= 30:
+            push = (' ' * int((30 - nage) * (30 - nage) // 120))
+            msg = self.notifications[-1]['message']
+            hints = [
+                ('weight', len(msg), urwid.Text(
+                    push + msg, align='left', wrap='clip'))]
+        else:
+            nage = 0
+            hints.append(
+                ('weight', len(clock), urwid.Text(('subtle', clock),
+                    align='center')))
+
+        if not nage or (maxwidth > 70 + 8*(3+len(global_hks))):
+            # FIXME: Calculate actual width and use that.
+            search = [] if self.is_locked else [('top_hk', '/:'), 'Search ']
+            unlock = [('top_hk', '/:'), 'Unlock '] if self.is_locked else []
+            hints.extend([
+                ('fixed', 23+6*len(global_hks), urwid.Text(
+                    global_hks + search + unlock + [
                         ('top_hk', '?:'), 'Help ',
-                        ('top_hk', 'q:'), 'Quit '],
-                    align='right', wrap='clip'))]), 'header'),
-            urwid.AttrMap(urwid.Columns([
+                        ('top_hk', 'q:'), 'Quit'+pad],
+                    align='right', wrap='clip'))])
+
+        mv = '%s%s v%s ' % (pad, APPNAME, APPVER)
+
+        _p = lambda w: (w, ('pack', None))
+        self.topbar_pile.contents = [
+            _p(urwid.AttrMap(urwid.Columns([
+                    ('fixed', len(mv), urwid.Text(mv, align='left')),
+                    ] + hints + [
+                ]), 'header')),
+            _p(urwid.AttrMap(urwid.Columns([
                 urwid.Text(crumbtrail, align='left'),
-                ]), 'crumbs')]))
-        if update:
-            self.contents['header'] = (self.topbar, None)
+                ]), 'crumbs'))]
+        #if update:
+        #    self.contents['header'] = (self.topbar, None)
 
     def focus_last_column(self):
         try:
@@ -202,7 +289,6 @@ class TuiFrame(urwid.Frame):
                 self.focus_last_column()
 
     def update_columns(self, update=True, focus=True):
-        self.notifications = []
         cols, rows = self.screen.get_cols_rows()
 
         self.hidden = 0
@@ -258,7 +344,10 @@ class TuiFrame(urwid.Frame):
 
             # FIXME: I am sure there must be a better way to do this.
             elif key == '/':
-                self.topbar.open_pop_up()
+                if self.is_locked:
+                    self.topbar.open_with(UnlockDialog)
+                else:
+                    self.topbar.open_with(SearchDialog)
             elif key == 'h':
                 if len(self.all_columns) > 1 and self.hidden:
                     self.col_remove(self.all_columns[-1])

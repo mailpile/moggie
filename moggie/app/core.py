@@ -6,6 +6,8 @@ import threading
 import traceback
 import time
 
+import passcrow
+
 from ..config import AppConfig
 from ..storage.files import MailboxFileStorage
 from ..workers.importer import ImportWorker
@@ -74,26 +76,96 @@ class AppCore:
             b'rpc/crypto_status':     (True, self.rpc_crypto_status),
             b'rpc/get_access_token':  (True, self.rpc_get_access_token)}
 
+        self._schedule = []
+        self.metadata = None
+        self.importer = None
+        self.storage = None
+        self.search = None
+        self.ticker = None
         self.jmap = {
             'session': self.api_jmap_session}
 
     # Lifecycle
 
-    def start_workers(self):
+    async def tick(self):
+        now = int(time.time())
+        await self.rpc_notify({
+            'message': 'Tick tock, the app is still alive at %d' % now,
+            'ts': now})
+        self.schedule(now + 120, self.tick())
+
+    def schedule(self, when, job):
+        self._schedule.append((when, job))
+        self._schedule.sort()
+
+    async def ticker_task(self):
+        while True:
+            now = time.time()
+            while self._schedule and self._schedule[0][0] <= now:
+                t, job = self._schedule.pop(0)
+                asyncio.create_task(job)
+            await asyncio.sleep(1)
+
+    def start_encrypting_workers(self):
+        try:
+            notify_url = self.worker.callback_url('rpc/notify')
+            aes_keys = self.config.get_aes_keys()
+        except:
+            return False
+
+        missing_metadata = self.metadata is None
+        if missing_metadata:
+            self.metadata = MetadataWorker(self.worker.worker_dir,
+                self.worker.profile_dir,
+                aes_keys,
+                notify=notify_url,
+                name='metadata').connect()
+
+        if self.search is None:
+            self.search = SearchWorker(self.worker.worker_dir,
+                self.worker.profile_dir,
+                self.metadata.info()['maxint'],
+                aes_keys,
+                notify=notify_url,
+                name='search').connect()
+
+        if self.importer is None:
+            self.importer = ImportWorker(self.worker.worker_dir,
+                fs_worker=self.storage,
+                app_worker=self.worker,
+                search_worker=self.search,
+                metadata_worker=self.metadata,
+                notify=notify_url,
+                name='importer').connect()
+
+        if missing_metadata and self.metadata and self.storage:
+            # Restart workers that want to know about our metadata store
+            self.storage.quit()
+            return self.start_workers(start_encrypted=False)
+
+        return True
+
+    def start_workers(self, start_encrypted=True):
         notify_url = self.worker.callback_url('rpc/notify')
 
-        self.metadata = MetadataWorker(self.worker.worker_dir,
-            self.worker.profile_dir,
-            self.config.get_aes_keys(),
-            notify=notify_url,
-            name='metadata').connect()
+        if self.ticker is None:
+            self._ticker = self.ticker_task()
+            loop = asyncio.get_event_loop()
+            loop.create_task(self._ticker)
+            loop.create_task(self.tick())
 
-        self.search = SearchWorker(self.worker.worker_dir,
-            self.worker.profile_dir,
-            self.metadata.info()['maxint'],
-            self.config.get_aes_keys(),
-            notify=notify_url,
-            name='search').connect()
+        if start_encrypted:
+            if not self.config.has_crypto_enabled:
+                from moggie.crypto.passphrases import generate_passcode
+                logging.info('Generating initial (unlocked) encryption keys.')
+                passphrase = generate_passcode(groups=5)
+                self.config[self.config.SECRETS]['passphrase'] = passphrase
+                self.config.provide_passphrase(passphrase)
+                self.config.generate_master_key()
+
+            if not self.start_encrypting_workers():
+                logging.warning(
+                    'Failed to start encrypting workers. Need login?')
 
         self.storage = StorageWorker(self.worker.worker_dir,
             MailboxFileStorage(
@@ -102,13 +174,7 @@ class AppCore:
             notify=notify_url,
             name='fs').connect()
 
-        self.importer = ImportWorker(self.worker.worker_dir,
-            fs_worker=self.storage,
-            app_worker=self.worker,
-            search_worker=self.search,
-            metadata_worker=self.metadata,
-            notify=notify_url,
-            name='importer').connect()
+        return True
 
     def stop_workers(self):
         # The order here may matter, we ask the "higher level" workers
@@ -141,6 +207,9 @@ class AppCore:
     def keep_result(self, rid, rv):
         self._results[rid] = (time.time(), rv)
 
+    def _is_locked(self):
+        return (self.config.has_crypto_enabled and not self.config.aes_key)
+
 
     # Public API
 
@@ -168,15 +237,22 @@ class AppCore:
                 sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
                 skip=jmap_request.get('skip', 0),
                 limit=jmap_request.get('limit', None)))
-        results = await async_run_in_thread(perform_search)
-        return ResponseSearch(jmap_request, results)
+
+        if self.metadata and self.search:
+            results = await async_run_in_thread(perform_search)
+            return ResponseSearch(jmap_request, results)
+        else:
+            return ResponsePleaseUnlock(jmap_request)
 
     async def api_jmap_counts(self, conn_id, access, jmap_request):
         # FIXME: Make sure access allows requested contexts
         #        Make sure we set tag_namespace based on the context
         # FIXME: Actually search/count! Async, in a thread, gathering the
         #        results may take time.
-        return ResponseCounts(jmap_request, {})
+        if self.metadata and self.search:
+            return ResponseCounts(jmap_request, {})
+        else:
+            return ResponsePleaseUnlock(jmap_request)
 
     async def api_jmap_email(self, conn_id, access, jmap_request):
         # FIXME: Does this user have access to this email?
@@ -197,6 +273,15 @@ class AppCore:
         contexts = [all_contexts[k].as_dict() for k in sorted(access.roles)]
         return ResponseContexts(jmap_request, contexts)
 
+    async def api_jmap_unlock(self, conn_id, access, jmap_request):
+        if self._is_locked() and jmap_request.get('passphrase'):
+            try:
+                self.config.provide_passphrase(jmap_request['passphrase'])
+                self.start_encrypting_workers()
+            except PermissionError:
+                return ResponsePleaseUnlock(jmap_request)
+        return ResponseUnlocked(jmap_request)
+
     async def api_jmap_add_to_index(self, conn_id, access, jmap_request):
         # FIXME: Access questions, context settings...
         def import_search():
@@ -204,8 +289,11 @@ class AppCore:
                 jmap_request['search'],
                 jmap_request.get('initial_tags', []),
                 force=jmap_request.get('force', False))
-        result = await async_run_in_thread(import_search)
-        return ResponsePing(jmap_request)  # FIXME
+        if self.metadata and self.search:
+            result = await async_run_in_thread(import_search)
+            return ResponsePing(jmap_request)  # FIXME
+        else:
+            return ResponsePleaseUnlock(jmap_request)
 
     async def api_jmap(self, conn_id, access, client_request):
         # The JMAP API sends multiple requests in a blob, and wants some magic
@@ -237,6 +325,8 @@ class AppCore:
             result = await self.api_jmap_contexts(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestAddToIndex:
             result = await self.api_jmap_add_to_index(conn_id, access, jmap_request)
+        elif type(jmap_request) == RequestUnlock:
+            result = await self.api_jmap_unlock(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestPing:
             result = ResponsePing(jmap_request)
 
@@ -293,10 +383,10 @@ class AppCore:
         self.worker.reply_json(jsr)
 
     def rpc_crypto_status(self, **kwargs):
-        locked = (self.config.has_crypto_enabled and not self.config.aes_key)
+        all_started = self.metadata and self.search and self.importer
         self.worker.reply_json({
             'encrypted': self.config.has_crypto_enabled,
-            'locked': locked})
+            'locked': self._is_locked()})
 
     def rpc_get_access_token(self, **kwargs):
         a0 = self.config.access_zero()

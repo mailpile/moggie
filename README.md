@@ -67,10 +67,6 @@ Play with Moggie:
     # The following commands run from the root of the git repo
     cd /path/to/moggie
 
-    # Hard-code a dummy passphrase for Moggie. Note this ends up written
-    # in the clear to the filesystem: don't use a real passphrase.
-    python3 -m moggie config set Secrets passphrase 'this-is-insecure'
-
     # Read some mail using Moggie:
     python3 -m moggie -f /path/to/archive.mbox
 
