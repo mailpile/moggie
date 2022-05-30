@@ -5,10 +5,9 @@ from .widgets import *
 
 class UnlockDialog(urwid.WidgetWrap):
     HELP_TEXT = """\
-
-Please enter your passphrase (or password) to unlock the app.
+Enter your passphrase (or password) to unlock the app.
 """
-    WANTED_HEIGHT = 6 + len(HELP_TEXT.splitlines())
+    WANTED_HEIGHT = 4 + len(HELP_TEXT.splitlines())
     WANTED_WIDTH = 60
 
     signals = ['close']
@@ -22,7 +21,6 @@ Please enter your passphrase (or password) to unlock the app.
 
     def __init__(self, tui_frame):
         self.tui_frame = tui_frame
-        close_button = CloseButton(on_select=lambda b: self._emit('close'))
 
         self.unlock_box = urwid.Edit('Passphrase: ',
             multiline=True, mask='*', allow_tab=False, wrap='clip')

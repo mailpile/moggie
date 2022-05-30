@@ -17,8 +17,6 @@ from ...jmap.requests import *
 from ...util.rpc import AsyncRPCBridge
 from ...workers.app import AppWorker
 
-from ..suggestions import Suggestion, SuggestionWelcome
-
 from .decorations import palette
 from .tui_frame import TuiFrame
 
@@ -54,7 +52,7 @@ def Main(workdir, sys_args, tui_args, send_args):
         # Request "locked" status from the app.
         app_crypto_status = app_worker.call('rpc/crypto_status')
         app_is_locked = app_crypto_status.get('locked')
-        logging.debug('APP IS%s LOCKED' % ('' if app_is_locked else ' NOT'))
+        logging.debug('crypto status: %s' % (app_crypto_status,))
 
         screen = urwid.raw_display.Screen()
         tui_frame = TuiFrame(screen, app_is_locked)
@@ -63,7 +61,7 @@ def Main(workdir, sys_args, tui_args, send_args):
 
         if not app_is_locked:
             jsr = JMAPSessionResource(app_worker.call('rpc/jmap_session'))
-            logging.debug(jsr)
+            logging.debug('jmap sessions: %s' % (jsr,))
             # Request list of available JMAP Sessions from the app.
             # Establish a websocket/JMAP connection to each remote Session.
             # Populate sidebar.

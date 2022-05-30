@@ -148,7 +148,7 @@ class EmailList(urwid.Pile):
         self.walker = EmailListWalker(self)
         self.emails = self.walker.emails
         self.listbox = urwid.ListBox(self.walker)
-        self.suggestions = SuggestionBox()
+        self.suggestions = SuggestionBox(self.tui_frame)
         self.widgets = []
 
         self.loading = 0

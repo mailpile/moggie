@@ -11,6 +11,7 @@ from ..suggestions import Suggestion, SuggestionWelcome
 
 from .contextlist import ContextList
 from .emaillist import EmailList
+from .changepassdialog import ChangePassDialog
 from .unlockdialog import UnlockDialog
 from .searchdialog import SearchDialog
 from .suggestionbox import SuggestionBox
@@ -56,10 +57,14 @@ class TuiFrame(urwid.Frame):
     def __init__(self, screen, app_is_locked):
         self.screen = screen
         self.is_locked = app_is_locked
+        self.was_locked = app_is_locked
         self.render_cols_rows = self.screen.get_cols_rows()
         self.app_bridge = None
 
-        suggestions = SuggestionBox(fallbacks=[SuggestionWelcome])
+        suggestions = SuggestionBox(self,
+            fallbacks=[SuggestionWelcome],
+            max_suggestions=5)
+
         self.filler1 = SplashCat(suggestions, 'Welcome to Moggie!')
         self.filler2 = SplashMoreWide()
         self.filler3 = SplashMoreNarrow()
@@ -145,9 +150,24 @@ class TuiFrame(urwid.Frame):
         self.col_show(self.all_columns[0],
             EmailList(self, RequestSearch(context, terms)))
 
+    def ui_quit(self):
+        raise urwid.ExitMainLoop()
+
     def unlock(self, passphrase):
         logging.info('Passphrase supplied, attempting unlock')
         self.app_bridge.send_json(RequestUnlock(passphrase))
+
+    def ui_change_passphrase(self):
+        self.topbar.open_with(ChangePassDialog)
+
+    def change_passphrase(self, old_passphrase, new_passphrase,
+            disconnect=False):
+        logging.info(
+            'New passphrase supplied, requesting change (disconnect=%s)'
+            % (disconnect,))
+        self.app_bridge.send_json(RequestChangePassphrase(
+            old_passphrase, new_passphrase,
+            disconnect=disconnect))
 
     def max_child_rows(self):
         return self.screen.get_cols_rows()[1] - 2
@@ -332,7 +352,7 @@ class TuiFrame(urwid.Frame):
         try:
             cols_rows = self.screen.get_cols_rows()
             if key == 'q':
-                raise urwid.ExitMainLoop()
+                self.ui_quit()
             elif key == 'esc':
                 if len(self.all_columns) > 1:
                     self.col_remove(self.all_columns[-1])
@@ -348,6 +368,8 @@ class TuiFrame(urwid.Frame):
                     self.topbar.open_with(UnlockDialog)
                 else:
                     self.topbar.open_with(SearchDialog)
+            elif key == 'C':
+                self.ui_change_passphrase()
             elif key == 'h':
                 if len(self.all_columns) > 1 and self.hidden:
                     self.col_remove(self.all_columns[-1])

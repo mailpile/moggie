@@ -89,9 +89,7 @@ class AppCore:
 
     async def tick(self):
         now = int(time.time())
-        await self.rpc_notify({
-            'message': 'Tick tock, the app is still alive at %d' % now,
-            'ts': now})
+        # FIXME: Is there something we should be doing here?
         self.schedule(now + 120, self.tick())
 
     def schedule(self, when, job):
@@ -197,6 +195,8 @@ class AppCore:
                     pass
             time.sleep(0.1)
 
+        self.importer = self.storage = self.search = self.metadata = None
+
     def startup_tasks(self):
         self.start_workers()
         self._stashed_results = {}
@@ -282,6 +282,34 @@ class AppCore:
                 return ResponsePleaseUnlock(jmap_request)
         return ResponseUnlocked(jmap_request)
 
+    async def api_jmap_changepass(self, conn_id, access, jmap_request):
+        newp = jmap_request.get('new_passphrase')
+        oldp = jmap_request.get('old_passphrase')
+        if not oldp:
+            oldp = self.config.get(
+                self.config.SECRETS, 'passphrase', fallback=None)
+
+        if (not self._is_locked()) and newp and oldp:
+            try:
+                self.config.provide_passphrase(oldp)
+                self.stop_workers()
+                # FIXME: Do something sensible about password recovery!
+                #        ... before or after we actually change keys?
+                self.config.change_config_key(newp)
+                self.config.change_master_key()
+                self.config.save()
+                return ResponseNotification({
+                    # FIXME: Add trigger for a recovery dialog?
+                    'message': 'Passphrase changed and keys rotated!'})
+            except PermissionError:
+                return ResponseNotification({
+                    'message': 'Passphrase incorrect or permission denied.'})
+            except:
+                logging.exception('Change Passphrase failed')
+            finally:
+                self.start_workers()
+        return None
+
     async def api_jmap_add_to_index(self, conn_id, access, jmap_request):
         # FIXME: Access questions, context settings...
         def import_search():
@@ -327,6 +355,8 @@ class AppCore:
             result = await self.api_jmap_add_to_index(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestUnlock:
             result = await self.api_jmap_unlock(conn_id, access, jmap_request)
+        elif type(jmap_request) == RequestChangePassphrase:
+            result = await self.api_jmap_changepass(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestPing:
             result = ResponsePing(jmap_request)
 
@@ -384,8 +414,11 @@ class AppCore:
 
     def rpc_crypto_status(self, **kwargs):
         all_started = self.metadata and self.search and self.importer
+        unlocked = self.config.get(
+            self.config.SECRETS, 'passphrase', fallback=False) and True
         self.worker.reply_json({
             'encrypted': self.config.has_crypto_enabled,
+            'unlocked': unlocked,
             'locked': self._is_locked()})
 
     def rpc_get_access_token(self, **kwargs):

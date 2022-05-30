@@ -96,11 +96,15 @@ class RequestUnlock(RequestBase):
 
 
 class RequestChangePassphrase(RequestBase):
-    def __init__(self, old_passphrase, new_passphrase, req_id=None):
+    def __init__(self,
+            old_passphrase=None,
+            new_passphrase=None,
+            disconnect=False, req_id=None):
         self.update({
             'prototype': 'change_passphrase',
             'old_passphrase': old_passphrase,
-            'new_passphrase': new_passphrase
+            'new_passphrase': new_passphrase,
+            'disconnect': disconnect
         }, req_id=req_id)
 
 

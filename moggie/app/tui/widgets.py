@@ -1,6 +1,14 @@
+import asyncio
 import urwid
 
 from .decorations import ENVELOPES, HELLO, HELLO_CREDITS
+
+
+def emit_soon(widget, signal, seconds=0.75):
+    async def emitter(sec, sig):
+        await asyncio.sleep(sec)
+        widget._emit(sig)
+    asyncio.create_task(emitter(seconds, signal))
 
 
 class Selectable(urwid.WidgetWrap):
