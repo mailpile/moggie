@@ -3,8 +3,8 @@ import hashlib
 import re
 import time
 
-from ..util.dumbcode import dumb_encode_asc, dumb_decode
-
+from ..storage.formats import tag_path, split_tagged_path
+from ..util.dumbcode import dumb_decode, dumb_encode_asc, dumb_encode_bin
 from .headers import parse_header
 
 
@@ -19,7 +19,7 @@ class Metadata(list):
 
     # These are the headers we want extracted and stored in metadata.
     # Note the Received headers are omitted, too big and too much noise.
-    HEADER_RE = re.compile(b'\n(' +
+    HEADER_RE = re.compile(b'(?:^|\n)(' +
             b'(?:Date|Message-ID|In-Reply-To|From|To|Cc|Subject):' +
             b'(?:[^\n]+\n\\s+)*[^\n]+' +
         b')',
@@ -41,43 +41,34 @@ class Metadata(list):
     def ghost(self, msgid, more=None):
         msgid = msgid if isinstance(msgid, bytes) else bytes(msgid, 'latin-1')
         return Metadata(0, 0,
-            Metadata.PTR(0, b'/dev/null', 0, 0, 0),
+            Metadata.PTR(0, b'/dev/null', 0),
             b'Message-Id: %s' % msgid,
             more=more)
 
     class PTR(list):
-        IS_MBOX = 0
-        IS_MAILDIR = 1
+        IS_FS = 0
         IS_REMOTE = 1000
 
         OFS_PTR_TYPE = 0
-        OFS_MAILBOX = 1
-        OFS_OFFSET = 2
-        OFS_HEADER_LENGTH = 3
-        OFS_MESSAGE_LENGTH = 4
-        _FIELDS = 5
+        OFS_PTR_PATH = 1
+        OFS_MESSAGE_LENGTH = 2
+        _FIELDS = 3
 
-        def __init__(self, ptr_type, mailbox, offset, hlen, mlen):
-            if isinstance(mailbox, bytes):
-                mailbox = dumb_encode_asc(mailbox)
-            list.__init__(self, [
-                int(ptr_type), mailbox, int(offset), int(hlen), int(mlen)])
+        def __init__(self, ptr_type, ptr_path, mlen):
+            if isinstance(ptr_path, bytes):
+                ptr_path = dumb_encode_asc(ptr_path)
+            list.__init__(self, [int(ptr_type), ptr_path, int(mlen)])
 
         is_local_file = property(
-            lambda s: s.ptr_type in (s.IS_MBOX, s.IS_MAILDIR))
+            lambda s: s.ptr_type in (s.IS_FS,))
 
         ptr_type = property(lambda s: s[s.OFS_PTR_TYPE])
-        mailbox = property(lambda s: s[s.OFS_MAILBOX])
-        offset =  property(lambda s: s[s.OFS_OFFSET])
-        header_length  = property(lambda s: s[s.OFS_HEADER_LENGTH])
+        ptr_path = property(lambda s: s[s.OFS_PTR_PATH])
         message_length = property(lambda s: s[s.OFS_MESSAGE_LENGTH])
         container = property(lambda s: s.get_container())
 
         def get_container(self):
-            mailbox = dumb_decode(self.mailbox)
-            if self.ptr_type == self.IS_MAILDIR:
-                return mailbox.rsplit(b'/', 1)[0]
-            return mailbox
+            return split_tagged_path(dumb_decode(self.ptr_path))[0]
 
     def __init__(self, ts, idx, ptrs, hdrs, more=None):
         # The encodings here are to make sure we are JSON serializable.
@@ -85,7 +76,7 @@ class Metadata(list):
             hdrs = str(hdrs, 'latin-1')
         if isinstance(ptrs, self.PTR):
             ptrs = [ptrs]
-        if not isinstance(ptrs, list) or len(ptrs) < 1:
+        if not isinstance(ptrs, list):
             raise ValueError('Invalid PTR')
         for ptr in ptrs:
             if not isinstance(ptr, list) or (len(ptr) != self.PTR._FIELDS):
@@ -167,39 +158,39 @@ class Metadata(list):
 
 if __name__ == "__main__":
     import json
-    from ..util.dumbcode import dumb_decode
 
-    # We are seeding the compression engine with known common strings,
-    # and this gets base64 encoded - groups of 3 chars become groups
-    # of four; thus the weird name. I may be overthinking it!
-    mbx_path = b'/home/varmaicurmbx'
+    mbx_path = [b'/home/varmaicur.mbx', (b'mx', b'?0-100')]
+    mdir_path = [b'/tmp', (b'md', b'/msgid')]
 
-    md1 = Metadata(0, 0, Metadata.PTR(0, mbx_path, 0, 100, 200), """\
+    print('%s' % tag_path(*mbx_path))
+    print('%s' % tag_path(*mdir_path))
+
+    md1 = Metadata(0, 0, Metadata.PTR(0, tag_path(*mbx_path), 200), """\
 From: Bjarni <bre@example.org>\r
 To: bre@example.org\r
 Subject: This is Great\r\n""", {'tags': 'inbox,unread,sent'})
-    md2 = Metadata(0, 0, [[1, b'/tmp/cur/test.mbx', 0, 100, 200]], """\
+
+    md2 = Metadata(0, 0, [[0, dumb_encode_asc(tag_path(*mdir_path)), 200]], """\
 To: bre@example.org
 From: Bjarni <bre@example.org>
 Subject: This is Great""")
 
-    #print('%s == %s' % (md1.uuid_asc, json.dumps(md1)))
-    #print('%s' % (md1.parsed(),))
+    for md in (md1, md2):
+        md_enc = dumb_encode_bin(md)
+        print('%s == [%d] %s' % (md.uuid_asc, len(md_enc), md_enc))
+        print('%s' % (md.parsed(),))
 
     assert(md1.uuid == md2.uuid)
-    assert(md1.pointers[0].container == dumb_decode(md1.pointers[0].mailbox))
-    assert(md2.pointers[0].container != md2.pointers[0].mailbox)
+    assert(md1.pointers[0].container == mbx_path[0])
+    assert(md2.pointers[0].container == mdir_path[0])
 
     # Make sure that adding pointers works sanely; the first should
     # be added, the second should merely update the pointer list.
-    assert(md1.pointers[0].header_length == 100)
-    md1.add_pointers([Metadata.PTR(0, b'/dev/null', 0, 200, 200)])
-    md1.add_pointers([Metadata.PTR(0, mbx_path, 0, 300, 300)])
+    md1.add_pointers([Metadata.PTR(0, b'/dev/null', 200)])
+    md1.add_pointers([Metadata.PTR(0, tag_path(*mbx_path), 300)])
     assert(len(md1.pointers) == 2)
-    assert(md1.pointers[0].header_length == 200)
-    assert(md1.pointers[1].header_length == 300)
-    assert(md1.pointers[1].container == mbx_path)
-    md1.add_pointers([(0, b'/dev/null', 0, 100, 200)])
+    assert(md1.pointers[1].container == mbx_path[0])
+    md1.add_pointers([(0, b'/dev/null', 200)])
     assert(len(md1.pointers) == 2)
 
     print("Tests passed OK")

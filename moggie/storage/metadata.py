@@ -20,12 +20,12 @@ from ..email.metadata import Metadata
 #
 METADATA_ZDICTS = [
     ('m', b'm',  b"""\
-[01234, 56789, [[0, "BL2hvbWUvdmFybWFpY3VybWJ4", 0, 4321, 9876], []],
-"From: <joe@gmail.com>\nTo: <anna@live.net>\nSubject:\nCc:\nDate:\nMessage-Id:",
-{"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],
-"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],
-"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],
-{"attachments": {}}]""")]
+[01234,56789,[[0,"BL2hvbWUvdmFybWFpY3VybWJ4",0123456789],[]],\
+"From: <joe@gmail.com>\nTo: <anna@live.net>\nSubject:\nCc:\nDate:\nMessage-Id:",\
+{"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
+"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
+"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
+{"attachments":{}}]""")]
 
 
 class IntColumn:
@@ -303,6 +303,7 @@ class MetadataStore(RecordStore):
 
 if __name__ == '__main__':
     import random, sys
+    from ..util.dumbcode import dumb_decode
 
     ms = MetadataStore('/home/bre/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
     ms.delete_everything(True, False, True)
@@ -312,20 +313,20 @@ if __name__ == '__main__':
     ms = MetadataStore('/home/bre/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
     t0 = time.time()
     tcount = count = 0
-    stop = 400000 if len(sys.argv) < 2 else int(sys.argv[1])
-    for dn in fs.info(b'b/home/bre/Mail', details=True)['contents']:
+    stop = 40000 if len(sys.argv) < 2 else int(sys.argv[1])
+    for dn in fs.info(b'/home/bre/Mail', details=True)['contents']:
       if tcount > stop:
         break
       for fn in fs.info(dn, details=True).get('contents', []):
         count = 0
-        for msg in fs.parse_mailbox(fn):
+        for msg in fs.iter_mailbox(fn):
           ms.update_or_add(msg)
           count += 1
         if count:
           tcount += count
           t1 = time.time()
           print(' * Added %d / %d messages to index in %.2fs (%d/s), %s'
-              % (count, tcount, t1-t0, tcount / (t1-t0), fn))
+              % (count, tcount, t1-t0, tcount / (t1-t0), dumb_decode(fn)))
           count = 0
           if tcount > stop:
             break
@@ -358,7 +359,7 @@ From: root@example.org (Cron Daemon)
 To: bre@example.org
 Subject: Sure, sure
 """
-    foo_ptr = Metadata.PTR(0, b'/tmp/foo', 0, 0, 0)
+    foo_ptr = Metadata.PTR(0, b'/tmp/foo', 0)
     n,i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, {'thing': 'stuff', 'a': 'b'}))
     n,i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, {'wink': 123, 'a': 'c'}))
     ms.append(Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net'))

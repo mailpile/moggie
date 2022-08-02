@@ -150,7 +150,7 @@ class StorageWorker(BaseWorker):
                 time.sleep(0.1)
             return self.reply_json(pm[beg:end])
 
-        parser = self.backend.parse_mailbox(key, skip=skip)
+        parser = self.backend.iter_mailbox(key, skip=skip)
         collect = []
         self.parsed_mailboxes[key] = (time.time(), collect)
 

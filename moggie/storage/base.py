@@ -1,5 +1,6 @@
 from ..util.dumbcode import dumb_encode_asc, dumb_encode_bin
 
+
 class BaseStorage:
     """
     Our basic Storage object: a partial Python dict with a couple of new

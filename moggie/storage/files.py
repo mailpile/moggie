@@ -1,15 +1,33 @@
-import email.utils
 import mmap
 import time
 import threading
 import os
-import re
+
+from collections import OrderedDict
 
 from ..email.metadata import Metadata
-from ..email.headers import parse_header
 from ..email.parsemime import parse_message as ep_parse_message
+from ..email.util import quick_msgparse, make_ts_and_Metadata
 from ..util.dumbcode import *
+
 from .base import BaseStorage
+from .formats import split_tagged_path, tag_path
+from .formats.base import FormatBytes
+from .formats.mbox import FormatMbox
+from .formats.maildir import FormatMaildir
+
+
+# These are the file types we understand how to parse. Note that the
+# order matters, the first match will be used in case there might be
+# multiple.
+FORMATS = OrderedDict()
+FORMATS[FormatMbox.TAG] = FormatMbox
+FORMATS[FormatMaildir.TAG] = FormatMaildir
+FORMATS[FormatBytes.TAG] = FormatBytes
+
+
+# Keep track globally of mailboxes which want us to compact them
+NEEDS_COMPACTING = set()
 
 
 class FileMap(mmap.mmap):
@@ -22,6 +40,10 @@ class FileStorage(BaseStorage):
         if 'relative_to' in kwargs:
             del kwargs['relative_to']
 
+        self.metadata = kwargs.get('metadata')
+        if 'metadata' in kwargs:
+            del kwargs['metadata']
+
         if isinstance(self.relative_to, str):
             self.relative_to = self.relative_to.encode('utf-8')
 
@@ -29,27 +51,57 @@ class FileStorage(BaseStorage):
 
         self.dict = None
 
+    @classmethod
+    def RegisterFormat(cls, fmt):
+        FORMATS[fmt.TAG] = fmt
+
     def relpath(self, path):
         if self.relative_to:
             return os.path.relpath(path, self.relative_to)
         else:
             return path
 
-    def key_to_path(self, key):
+    def key_to_paths(self, key):
         path = dumb_decode(key)
         if isinstance(path, str):
             path = path.encode('utf-8')
         if not isinstance(path, bytes):
             raise KeyError('Invalid key %s' % key)
         if self.relative_to and not path.startswith(self.relative_to):
-            return os.path.join(self.relative_to, path)
-        return path
+            path = os.path.join(self.relative_to, path)
+
+        return split_tagged_path(path)
+
+    def key_to_path(self, key):
+        return self.key_to_paths(key)[0]
 
     def __contains__(self, key):
-        return os.path.exists(self.key_to_path(key))
+        paths = self.key_to_paths(key)
+        filepath = paths.pop(0)
+        if not os.path.exists(filepath):
+            return False
+        if paths:
+            try:
+                val = self.__getitem__(key)
+            except:
+                return False
+        return True
 
     def __delitem__(self, key):
-        return os.remove(self.key_to_path(key))
+        paths = self.key_to_paths(key)
+        ptr = [paths.pop(0)]
+        if not paths:
+            return os.remove(ptr[0])
+        else:
+            try:
+                cc = self.get_filemap(ptr[0])
+            except IsADirectoryError:
+                cc = None
+            for sub_type, sub_path in paths:
+                cd = FORMATS[sub_type](self, ptr, cc)
+                cc = cd[sub_path]
+                ptr.append((sub_type, sub_path))
+            del cd[sub_path]
 
     def get_filemap(self, path, prefer_access=mmap.ACCESS_WRITE):
         try:
@@ -61,23 +113,61 @@ class FileStorage(BaseStorage):
 
     def __getitem__(self, key):
         try:
-            return self.get_filemap(self.key_to_path(key))
-        except IsADirectoryError:
-            raise
+            paths = self.key_to_paths(key)
+            ptr = [paths.pop(0)]
+            try:
+                cc = self.get_filemap(ptr[0])
+            except IsADirectoryError:
+                cc = None
+            for sub_type, sub_path in paths:
+                cc = FORMATS[sub_type](self, ptr, cc)[sub_path]
+                ptr.append((sub_type, sub_path))
+            return cc
         except OSError:
             pass
         raise KeyError('Not found or access denied for %s' % key)
 
     def __setitem__(self, key, value):
-        with open(self.key_to_path(key), 'wb') as fd:
-            fd.write(value)
+        paths = self.key_to_paths(key)
+        filepath = paths.pop(0)
+        ptr = [filepath]
+        if not paths:
+            with open(filepath, 'wb') as fd:
+                fd.write(value)
+        else:
+            try:
+                cc = self.get_filemap(ptr[0])
+            except IsADirectoryError:
+                cc = None
+            for sub_type, sub_path in paths:
+                cd = FORMATS[sub_type](self, ptr, cc)
+                cc = cd[sub_path]
+                ptr.append((sub_type, sub_path))
+            cd[sub_path] = value
 
     def append(self, key, value):
-        with open(self.key_to_path(key), 'ab') as fd:
-            fd.write(value)
+        paths = self.key_to_paths(key)
+        filepath = paths.pop(0)
+        if paths:
+            raise IndexError('Cannot append to subpaths')
+        else:
+            with open(filepath, 'ab') as fd:
+                fd.write(value)
+
+    def rename(self, src, dst):
+        sps, dps = self.key_to_paths(src), self.key_to_paths(dst)
+        src, dst = sps.pop(0), dps.pop(0)
+        if sps or dps:
+            raise ValueError('Can only rename untagged paths')
+        return os.rename(src, dst)
 
     def length(self, key):
-        return os.path.getsize(self.key_to_path(key))
+        paths = self.key_to_paths(key)
+        filepath = paths.pop(0)
+        if not paths:
+            return os.path.getsize(filepath)
+        else:
+            return len(self[key])
 
     def get(self, key, default=None):
         try:
@@ -91,11 +181,26 @@ class FileStorage(BaseStorage):
     def capabilities(self):
         return ['info', 'get', 'length', 'set', 'del']
 
-    def info(self, key=None, details=False, limit=None, skip=0):
-        path = self.key_to_path(key or b'B/')
+    def listdir(self, key):
         try:
-            stat = os.stat(path)
-        except OSError:
+            for p in os.listdir(self.key_to_path(key)):
+                if p not in (b'.', b'..'):
+                    yield p
+        except:
+            pass
+
+    def info(self, key=None, details=False, limit=None, skip=0):
+        paths = self.key_to_paths(key)
+        path = paths.pop(0)
+        try:
+            if paths:
+                return {
+                    'size': len(self[key]),
+                    'path': path,
+                    'sub_paths': paths}
+            else:
+                stat = os.stat(path)
+        except (OSError, KeyError, IndexError, ValueError):
             return {'exists': False}
 
         is_dir = os.path.isdir(path)
@@ -116,80 +221,39 @@ class FileStorage(BaseStorage):
         if is_dir:
             info['contents'] = c = []
             maildir = 0
-            for p in os.listdir(path):
-                if p not in (b'.', b'..'):
-                    c.append(dumb_encode_asc(os.path.join(path, p)))
-                if p in (b'new', b'cur', b'tmp'):
-                    maildir += 1
-            if maildir == 3:
-                info['magic'] = 'maildir'
-        elif os.path.isfile(path):
-            if self[key][:5] == b'From ':
-                info['magic'] = 'mbox'
+            relpath = self.relpath(path)
+            for p in self.listdir(key):
+                c.append(dumb_encode_asc(os.path.join(relpath, p)))
+
+        magic = []
+        for cls_type, cls in FORMATS.items():
+            if cls.Magic(self, path, is_dir=is_dir):
+                magic.append(cls.NAME)
+        if magic:
+            info['magic'] = magic
 
         return info
 
+    def need_compacting(self, path):
+        NEEDS_COMPACTING.add(path)
 
-class MailboxFileStorage(FileStorage):
-    """
-    This extends the basic FileStorage with mbox and Maildir handling
-    features.
-    """
-    EMAIL_PTR_TYPES = (Metadata.PTR.IS_MBOX, Metadata.PTR.IS_MAILDIR)
+    def get_mailbox(self, key):
+        paths = self.key_to_paths(key)
+        filepath = paths[0]
+        if len(paths) > 1:
+            raise ValueError('Cannot currently handle nested tagging')
+        for cls_type, cls in FORMATS.items():
+            if hasattr(cls, 'iter_email_metadata'):
+                if cls.Magic(self, filepath, is_dir=os.path.isdir(filepath)):
+                    return cls(self, paths, self[filepath])
+        return None
 
-    DELETED_MARKER = b"""\
-From DELETED\r\n\
-From: nobody <deleted@example.org>\r\n\
-\r\n\
-(deleted)\r\n"""
-    DELETED_FILLER = b"                                                    \r\n"
-
-    def __init__(self, *args, **kwargs):
-        # We will need this to inform the metadata index about changed
-        # locations for things on compact; FIXME: implement this!
-        self.metadata = kwargs.get('metadata')
-        if 'metadata' in kwargs:
-            del kwargs['metadata']
-
-        # FIXME: We should compact mboxes periodically, to reclaim space.
-        #        This is an operation we need to coordinate with the metadata
-        #        index, since it changes the pointers for such messages.
-        self.needs_compacting = set()
-
-        FileStorage.__init__(self, *args, **kwargs)
-
-    def capabilities(self):
-        return super().capabilities() + ['mailboxes']
-
-    def quick_msgparse(self, obj, beg):
-        sep = b'\r\n\r\n' if (b'\r\n' in obj[beg:beg+256]) else b'\n\n'
-
-        hend = obj.find(sep, beg, beg+102400)
-        if hend < 0:
-            return None
-        hend += len(sep)
-
-        # Note: This is fast! We deliberately do not sort, as the order of
-        #       headers is one of the things that makes messages unique.
-        hdrs = (b'\n'.join(
-                    h.strip()
-                    for h in re.findall(Metadata.HEADER_RE, obj[beg:hend]))
-            ).replace(b'\r', b'')
-
-        return hend, hdrs
-
-    def parse_mailbox(self, key, skip=0, limit=None):
-        path = self.key_to_path(key)
-
-        if (limit is not None) and limit <= 0:
-            parser = iter([])
-        elif os.path.isfile(path) and self[key][:5] == b'From ':
-            parser = self.parse_mbox(key, skip=skip)
-        elif os.path.isdir(os.path.join(path, b'cur')):
-            parser = self.parse_maildir(key, skip=skip)
-        else:
-            parser = iter([])
-
+    def iter_mailbox(self, key, skip=0, limit=None):
+        parser = iter([])
+        if (limit is None) or (limit > 0):
+            mailbox = self.get_mailbox(key)
+            if mailbox is not None:
+                parser = mailbox.iter_email_metadata(skip=skip)
         if limit is None:
             yield from parser
         else:
@@ -199,118 +263,6 @@ From: nobody <deleted@example.org>\r\n\
                 if limit <= 0:
                     break
 
-    def _ts_and_Metadata(self, now, lts, raw_headers, *args):
-        # Extract basic metadata. If we fail to find a plausible timestamp,
-        # try harder and then make one up that seems plausible, based on the
-        # assumption that messages are in chronological order in the mailbox.
-        md = Metadata(0, 0, *args)
-        if md.timestamp and (md.timestamp > lts/2) and (md.timestamp < now):
-            return (max(lts, md.timestamp), md)
-
-        md[md.OFS_TIMESTAMP] = lts
-
-        # Could not parse Date - do we have a From line with a date?
-        raw_headers = str(raw_headers, 'latin-1')
-        if raw_headers[:5] == 'From ':
-            dt = raw_headers.split('\n', 1)[0].split('  ', 1)[-1].strip()
-            try:
-                ts = int(time.mktime(email.utils.parsedate(dt)))
-                md[md.OFS_TIMESTAMP] = ts
-                return (max(lts, md.timestamp), md)
-            except (ValueError, TypeError):
-                pass
-
-        # Fall back to scanning the Received headers
-        rcvd_ts = []
-        for rcvd in parse_header(raw_headers).get('received', []):
-            try:
-                tail = rcvd.split(';')[-1].strip()
-                rcvd_ts.append(int(time.mktime(email.utils.parsedate(tail))))
-            except (ValueError, TypeError):
-                pass
-        if rcvd_ts:
-            rcvd_ts.sort()
-            md[md.OFS_TIMESTAMP] = rcvd_ts[len(rcvd_ts) // 2]
-
-        return (max(lts, md.timestamp), md)
-
-    def parse_mbox(self, key, skip=0):
-        path = self.key_to_path(key)
-        relpath = self.relpath(path)
-        obj = self.get_filemap(path, prefer_access=mmap.ACCESS_READ)
-        beg = 0
-        end = 0
-        lts = 0
-        now = int(time.time())
-        delmark = self.DELETED_MARKER
-        needs_compacting = 0
-        try:
-            while end < len(obj):
-                hend, hdrs = self.quick_msgparse(obj, beg)
-
-                end = obj.find(b'\nFrom ', hend-1)
-                if end < 0:
-                    end = len(obj)
-
-                if skip > 0:
-                    skip -= 1
-                else:
-                    hl, ml = hend-beg, end-beg
-                    if obj[beg:beg+len(delmark)] == delmark:
-                        needs_compacting += 1
-                    else:
-                        lts, md = self._ts_and_Metadata(
-                            now, lts, obj[beg:hend],
-                            [Metadata.PTR(
-                                Metadata.PTR.IS_MBOX, relpath, beg, hl, ml)],
-                            hdrs)
-                        yield(md)
-
-                beg = end+1
-        except (ValueError, TypeError):
-            return
-        finally:
-            if needs_compacting:
-                self.needs_compacting.add(relpath)
-
-    def parse_maildir(self, key, skip=0):
-        path = self.key_to_path(key or b'b/')
-        lts = 0
-        now = int(time.time())
-        for sd in (b'new', b'cur'):
-            sd = os.path.join(path, sd)
-
-            # FIXME: For very large maildirs, this os.listdir() call can
-            #        be quite costly. We *might* want to cache the result.
-            for fn in sorted(os.listdir(sd)):
-                if fn.startswith(b'.'):
-                    continue
-                if skip > 0:
-                    skip -= 1
-                    continue
-
-                fn = os.path.join(sd, fn)
-                with open(fn, 'rb') as fd:
-                  with FileMap(fd.fileno(), 0, access=mmap.ACCESS_READ) as fm:
-                    try:
-                        hend, hdrs = self.quick_msgparse(fm, 0)
-                        end = os.path.getsize(fn)
-
-                        lts, md = self._ts_and_Metadata(
-                            now, lts, fm[:hend],
-                            [Metadata.PTR(Metadata.PTR.IS_MAILDIR,
-                                          self.relpath(fn), 0, hend, end)],
-                            hdrs)
-                        yield(md)
-                    except (ValueError, TypeError):
-                        pass
-
-    def add_message(self, mailbox, message):
-        """
-        Add a message to a mailbox.
-        """
-        raise Exception('FIXME')
-
     def delete_message(self, metadata=None, ptrs=None):
         """
         Delete the message from one or more locations.
@@ -318,18 +270,11 @@ From: nobody <deleted@example.org>\r\n\
         """
         failed = []
         for ptr in (ptrs if (ptrs is not None) else metadata.pointers):
-            if ptr.ptr_type == Metadata.PTR.IS_MBOX:
-                length = ptr.message_length
-                beg = ptr.offset
-                end = ptr.offset + length
-                fill = (
-                    self.DELETED_MARKER +
-                    self.DELETED_FILLER * (1 + length // len(self.DELETED_FILLER))
-                    )[:length-2] + b'\r\n'
-                self[ptr.mailbox][beg:end] = fill
-                self.needs_compacting.add(ptr.mailbox)
-            elif ptr.ptr_type == Metadata.PTR.IS_MAILDIR:
-                del self[ptr.mailbox]
+            if ptr.ptr_type == Metadata.PTR.IS_FS:
+                try:
+                    del self[ptr.ptr_path]
+                except (KeyError, OSError):
+                    failed.append(ptr)
             else:
                 failed.append(ptr)
         return failed
@@ -340,10 +285,8 @@ From: nobody <deleted@example.org>\r\n\
         Works for both maildir and mbox messages.
         """
         ptr = metadata.pointers[0]  # Filesystem pointers are always first
-        if ptr.ptr_type not in self.EMAIL_PTR_TYPES:
+        if ptr.ptr_type != Metadata.PTR.IS_FS:
             raise KeyError('Not a filesystem pointer: %s' % ptr)
-        beg = ptr.offset
-        end = ptr.offset + ptr.message_length
 
         # FIXME: We need to check whether this is actually the right message, or
         #        whether the mailbox has changed from under us. If it has, we
@@ -352,47 +295,66 @@ From: nobody <deleted@example.org>\r\n\
         #        Maildir: Maildir files may get renamed if other apps change
         #        read/unread status or assign tags. For mbox, messages can move
         #        around within the file.
+        for ptr in metadata.pointers:
+            if ptr.ptr_type == Metadata.PTR.IS_FS:
+                try:
+                    if with_ptr:
+                        return ptr, self[ptr.ptr_path]
+                    else:
+                        return self[ptr.ptr_path]
+                except (KeyError, OSError) as e:
+                    print('%s' % e)
+                    pass
 
-        data = self[ptr.mailbox][beg:end]
-        if with_ptr:
-            return ptr, data
-        else:
-            return data
+        raise KeyError('Not found: %s' % dumb_decode(ptr.ptr_path))
 
     def parse_message(self, metadata):
-        ptr, msg = self.message(metadata, with_ptr=True)
-        return ep_parse_message(msg,
-            fix_mbox_from=(ptr.ptr_type == Metadata.PTR.IS_MBOX))
+        msg = self.message(metadata)
+        return ep_parse_message(msg, fix_mbox_from=(msg[:5] == b'From '))
 
 
 if __name__ == "__main__":
     import sys
 
-    fs = MailboxFileStorage(relative_to=b'/home/bre')
+    tags = [b'/hello/world', (b'csv', b'@1,2')]
+    tpath = tag_path(*tags)
+    assert(tpath == b'/hello/world@1,2[csv:4]')
+    assert(split_tagged_path(tpath) == tags)
+    assert(split_tagged_path(b'/ohai[:0]') == [b'/ohai'])
+    assert(tag_path(b'/a[]') == b'/a[][:0]')
+    assert(tag_path(b'/a[]b') == b'/a[]b')
+    assert(split_tagged_path(tag_path(b'/a[]'))[0] == b'/a[]')
+    assert(split_tagged_path(tag_path(b'/a[]b'))[0] == b'/a[]b')
+
+    fs = FileStorage(relative_to=b'/home/bre')
+    assert(fs.key_to_paths('b/tmp/test.txt') == [b'/tmp/test.txt'])
+    assert(fs.key_to_paths('b/tmp/test.txt>1-2[b:4]')
+        == [b'/tmp/test.txt', (b'b', b'>1-2')])
+
     fn = dumb_encode_asc(__file__)
     assert(fs.length(fn) == len(fs[fn]))
 
-    fs['B/tmp/test.txt'] = b'123456'
-    fs.append('B/tmp/test.txt', b'12345')
-    assert(bytes(fs['B/tmp/test.txt']) == b'12345612345')
-    del fs['B/tmp/test.txt']
+    fs['b/tmp/test.txt'] = b'123456'
+    fs.append('b/tmp/test.txt', b'12345')
+    assert(bytes(fs['b/tmp/test.txt']) == b'12345612345')
+    del fs['b/tmp/test.txt']
 
     print('Tests passed OK')
     if 'more' in sys.argv:
         tmbox = '/tmp/test.mbx'
         os.system('cp /home/bre/Mail/mailpile/2013-08.mbx '+tmbox)
-        print('%s\n\n' % fs.info('b/home/bre/Mail/GMaildir/[Gmail].All Mail', details=True))
-        print('%s\n\n' % fs.info('b'+tmbox, details=True))
+        print('%s\n' % fs.info(b'/home/bre/Mail/GMaildir/[Gmail].All Mail', details=True))
+        print('%s\n' % fs.info(tmbox, details=True))
 
-        msgs1 = sorted(list(fs.parse_mbox('b'+tmbox)))
+        msgs1 = sorted(list(fs.iter_mailbox('b'+tmbox)))
         assert([] == fs.delete_message(msgs1[0]))
-        msgs2 = sorted(list(fs.parse_mbox('b'+tmbox)))
+        msgs2 = sorted(list(fs.iter_mailbox('b'+tmbox)))
         assert(len(msgs1) == len(msgs2)+1)
         os.remove(tmbox)
 
         big = 'b/home/bre/Mail/klaki/gmail-2011-11-26.mbx'
         print('%s\n\n' % fs.info(big, details=True))
-        msgs = sorted(list(fs.parse_mailbox(big)))
+        msgs = sorted(list(fs.iter_mailbox(big)))
         print('Found %d messages in %s' % (len(msgs), big))
         for msg in msgs[:5] + msgs[-5:]:
             m = msg.parsed()
