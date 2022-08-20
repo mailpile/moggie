@@ -34,9 +34,10 @@ class SearchWorker(BaseWorker):
         'SUB': IntSet.Sub}
 
     def __init__(self, status_dir, engine_dir, maxint, encryption_keys,
-            name=KIND, defaults=None, notify=None):
+            name=KIND, defaults=None, notify=None, log_level=logging.ERROR):
 
-        BaseWorker.__init__(self, status_dir, name=name, notify=notify)
+        BaseWorker.__init__(self, status_dir,
+            name=name, notify=notify, log_level=log_level)
         self.functions.update({
             b'add_results':  (True, self.api_add_results),
             b'del_results':  (True, self.api_del_results),

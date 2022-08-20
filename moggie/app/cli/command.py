@@ -55,8 +55,9 @@ class CLICommand:
     async def await_messages(self, *prototypes, timeout=10):
         sleeptime, deadline = 0, (time.time() + timeout)
         while time.time() < deadline:
-            sleeptime = min(sleeptime + 0.01, 0.1)
-            await asyncio.sleep(sleeptime)
+            if not self.messages:
+                sleeptime = min(sleeptime + 0.01, 0.1)
+                await asyncio.sleep(sleeptime)
             while self.messages:
                 msg = self.messages.pop(0)
                 if msg.get('prototype') in prototypes:

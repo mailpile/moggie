@@ -118,13 +118,17 @@ main app worker. Hints:
         except:
             return False
 
+        log_level = int(self.config.get(
+            self.config.GENERAL, 'log_level', fallback=logging.ERROR))
+
         missing_metadata = self.metadata is None
         if missing_metadata:
             self.metadata = MetadataWorker(self.worker.worker_dir,
                 self.worker.profile_dir,
                 aes_keys,
                 notify=notify_url,
-                name='metadata').connect()
+                name='metadata',
+                log_level=log_level).connect()
 
         if self.search is None:
             self.search = SearchWorker(self.worker.worker_dir,
@@ -132,7 +136,8 @@ main app worker. Hints:
                 self.metadata.info()['maxint'],
                 aes_keys,
                 notify=notify_url,
-                name='search').connect()
+                name='search',
+                log_level=log_level).connect()
 
         if missing_metadata and self.metadata and self.storage:
             # Restart workers that want to know about our metadata store
@@ -146,12 +151,15 @@ main app worker. Hints:
                 search_worker=self.search,
                 metadata_worker=self.metadata,
                 notify=notify_url,
-                name='importer').connect()
+                name='importer',
+                log_level=log_level).connect()
 
         return True
 
     def start_workers(self, start_encrypted=True):
         notify_url = self.worker.callback_url('rpc/notify')
+        log_level = int(self.config.get(
+            self.config.GENERAL, 'log_level', fallback=logging.ERROR))
 
         if self.ticker is None:
             self._ticker = self.ticker_task()
@@ -177,7 +185,8 @@ main app worker. Hints:
                 relative_to=os.path.expanduser('~'),
                 metadata=self.metadata),
             notify=notify_url,
-            name='fs').connect()
+            name='fs',
+            log_level=log_level).connect()
 
         return True
 
@@ -394,9 +403,7 @@ main app worker. Hints:
             result = ResponsePing(jmap_request)
 
         if result is not None:
-            code, json_result = 200, json.dumps(result, indent=2)
-            #if type(jmap_request) != RequestPing:
-            #    logging.debug('<< %s' % json_result[:256])
+            code, json_result = 200, json.dumps(result)
         else:
             code = 400
             result = {'error': 'Unknown %s' % type(jmap_request)}

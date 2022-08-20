@@ -149,14 +149,16 @@ class PublicWorker(BaseWorker):
     CONFIG_SECTION = None
 
     def __init__(self, profile_dir,
-            host=None, port=None, kite_name=None, kite_secret=None, name=None):
+            host=None, port=None, kite_name=None, kite_secret=None, name=None,
+            log_level=logging.ERROR):
 
         self.profile_dir = profile_dir
         self.worker_dir = os.path.join(profile_dir, 'workers')
         if not os.path.exists(self.worker_dir):
             os.mkdir(self.worker_dir, 0o700)
 
-        BaseWorker.__init__(self, self.worker_dir, host=host, port=port, name=name)
+        BaseWorker.__init__(self, self.worker_dir,
+            host=host, port=port, name=name, log_level=log_level)
 
         self.httpd = None
         self.kite = None
@@ -180,9 +182,11 @@ class PublicWorker(BaseWorker):
     def FromArgs(cls, workdir, args):
         port = 0
         kite_name = kite_secret = None
+        cfg = AppConfig(workdir)
+
+        log_level = cfg.get(cfg.GENERAL, 'log_level', fallback=logging.ERROR)
 
         if cls.CONFIG_SECTION:
-            cfg = AppConfig(workdir)
             port = int(cfg.get(cls.CONFIG_SECTION, 'port', fallback=port))
             kite_name = cfg.get(cls.CONFIG_SECTION, 'kite_name', fallback=kite_name)
             kite_secret = cfg.get(cls.CONFIG_SECTION, 'kite_secret', fallback=kite_secret)
@@ -194,7 +198,8 @@ class PublicWorker(BaseWorker):
             kite_secret = args.pop(0)
 
         return cls(workdir,
-            port=port, kite_name=kite_name, kite_secret=kite_secret)
+            port=port, kite_name=kite_name, kite_secret=kite_secret,
+            log_level=int(log_level))
 
     def get_app(self):
         return None

@@ -29,9 +29,11 @@ class ImportWorker(BaseWorker):
             search_worker=None,
             metadata_worker=None,
             notify=None,
-            name=KIND):
+            name=KIND,
+            log_level=logging.ERROR):
 
-        BaseWorker.__init__(self, status_dir, name=name, notify=notify)
+        BaseWorker.__init__(self, status_dir,
+            name=name, notify=notify, log_level=log_level)
         self.functions.update({
             b'import_search': (True, self.api_import_search)})
 

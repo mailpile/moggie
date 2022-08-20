@@ -57,8 +57,10 @@ class StorageWorker(BaseWorker):
 
     PARSE_CACHE_TTL = 180
 
-    def __init__(self, status_dir, backend, name=KIND, notify=None):
-        BaseWorker.__init__(self, status_dir, name=name, notify=notify)
+    def __init__(self, status_dir, backend,
+            name=KIND, notify=None, log_level=logging.ERROR):
+        BaseWorker.__init__(self, status_dir,
+            name=name, notify=notify, log_level=log_level)
         self.backend = backend
         self.functions.update({
             b'capabilities': (True,  self.api_capabilities),

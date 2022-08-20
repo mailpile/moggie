@@ -116,7 +116,7 @@ COMMANDS = {
 
 def Main(args):
     from ..config.paths import DEFAULT_WORKDIR
-    from ..config import configure_logging
+    from ..config import configure_logging, AppConfig
     wd = DEFAULT_WORKDIR()
 
     command = 'default'
@@ -128,7 +128,11 @@ def Main(args):
         COMMANDS.update(CLI_COMMANDS)
         CLI_COMMANDS.update(COMMANDS)  # So moggie help can find things
 
-    configure_logging(profile_dir=wd, level=logging.DEBUG)
+    configure_logging(
+        profile_dir=wd,
+        level=int(AppConfig(wd).get(
+            AppConfig.GENERAL, 'log_level', fallback=logging.DEBUG)))
+
     command = COMMANDS.get(command)
     if command is not None:
         if hasattr(command, 'Command'):

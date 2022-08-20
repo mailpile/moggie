@@ -9,6 +9,11 @@ import threading
 import traceback
 
 try:
+    import signal
+except ImportError:
+    signal = None
+
+try:
     from setproctitle import getproctitle, setproctitle
 except ImportError:
     setproctitle = None
@@ -16,7 +21,7 @@ except ImportError:
 from base64 import b64encode
 from multiprocessing import Process
 
-from ..config import APPNAME, configure_logging
+from ..config import APPNAME, AppConfig, configure_logging
 from ..util.dumbcode import *
 from ..util.http import url_parts, http1x_connect
 
@@ -59,7 +64,9 @@ class BaseWorker(Process):
     HTTP_JSON = HTTP_200 + b'Content-Type: application/json\r\n'
     HTTP_OK   = HTTP_JSON + b'Content-Length: 17\r\n\r\n{"result": true}\n'
 
-    def __init__(self, status_dir, host=None, port=None, name=None, notify=None):
+    def __init__(self, status_dir,
+            host=None, port=None, name=None, notify=None,
+            log_level=logging.ERROR):
         Process.__init__(self)
 
         self.name = name or self.KIND
@@ -77,6 +84,7 @@ class BaseWorker(Process):
             b'noop':   (True,  self.api_noop),
             b'status': (False, self.api_status)}
 
+        self._log_level = log_level
         self._notify = notify
         self._secret = b64encode(os.urandom(18), b'-_').strip()
         self._auth_header = ''
@@ -94,8 +102,20 @@ class BaseWorker(Process):
         self._background_threads = {}
         self._background_job_lock = threading.Lock()
 
+    def log_more(self, *ignored_args):
+        if self._log_level <= logging.DEBUG:
+            return
+        self._log_level -= 10
+        configure_logging(
+            type(self).__name__, stdout=self.LOG_STDOUT, level=self._log_level)
+        logging.log(self._log_level,
+            'Lowered log threshold to %d' % self._log_level)
+
     def run(self):
-        configure_logging(type(self).__name__, stdout=self.LOG_STDOUT)
+        if signal is not None:
+            signal.signal(signal.SIGUSR2, self.log_more)
+        configure_logging(
+            type(self).__name__, stdout=self.LOG_STDOUT, level=self._log_level)
         logging.info('Started %s(%s), pid=%d'
             % (type(self).__name__, self.name, os.getpid()))
         try:
@@ -155,7 +175,8 @@ class BaseWorker(Process):
                         self._client_headers = None
                         self.handler(str(method, 'latin-1'), args)
                     else:
-                        logging.warning('Invalid secret: %s' % secret)
+                        logging.debug(
+                            'Invalid secret (for %s): %s' % (args, secret))
                         self.status['requests_ignored'] += 1
                         client.send(secret and self.HTTP_403 or self.HTTP_400)
                 else:
