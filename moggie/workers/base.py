@@ -215,13 +215,15 @@ class BaseWorker(Process):
         return http1x_connect(host, port, url_secret + path,
             method=method, timeout=timeout, more=more, headers=headers)
 
-    def _ping(self):
+    def _ping(self, timeout=1):
         try:
-            conn = self._conn('ping', timeout=1, secret='-')
+            conn = self._conn('ping', timeout=timeout, secret='-')
             result = conn.recv(len(self.HTTP_403))
         except Exception as e:
             logging.debug('PING failed (%s)' % e)
             result = None
+        if (result != self.HTTP_403):
+            logging.debug('Unexpected PING response: %s' % result)
         return (result == self.HTTP_403)
 
     def connect(self, autostart=True):

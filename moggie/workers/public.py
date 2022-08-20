@@ -205,15 +205,20 @@ class PublicWorker(BaseWorker):
         else:
             return super().quit()
 
-    def _ping(self):
+    def _ping(self, timeout=None):
         pong = b'HTTP/1.0 200 PONG'
+        if not timeout:
+            timeout = 60 if self._is_public() else 1
         try:
             host_hdr = 'Host: %s\r\n' % self.kite_name
-            conn = self._conn('ping', timeout=1, headers=host_hdr)
+            conn = self._conn('ping', timeout=timeout, headers=host_hdr)
             conn.shutdown(socket.SHUT_WR)
             result = conn.recv(len(pong))
-        except:
+        except Exception as e:
+            logging.debug('PING failed: %s' % e)
             result = None
+        if result and (result != pong):
+            logging.debug('Unexpected PING response: %s' % result)
         return (result == pong)
 
     def startup_tasks(self):
@@ -246,6 +251,9 @@ class PublicWorker(BaseWorker):
                 lambda: req_env.payload)
             return self._rpc_response
 
+    def _is_public(self):
+        return (self.kite_name and self.kite_secret and True)
+
     def _main_httpd_loop(self):
         self.startup_tasks()
         try:
@@ -263,7 +271,7 @@ class PublicWorker(BaseWorker):
 
             self.pk_manager = uPageKite([self.kite],
                 socks=[self.kite],
-                public=(self.kite_name and self.kite_secret),
+                public=self._is_public(),
                 uPK=uPK)
 
             self.pk_manager.run()

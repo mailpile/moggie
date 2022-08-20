@@ -240,6 +240,9 @@ main app worker. Hints:
 
     # Public API
 
+    async def api_webroot(self, req_env):
+        return 'FIXME: Hello world'
+
     async def api_jmap_mailbox(self, conn_id, access, jmap_request):
         # FIXME: Make sure access grants right to read mailboxes directly
         def load_mailbox():

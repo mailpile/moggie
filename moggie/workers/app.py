@@ -30,9 +30,12 @@ from .public import PublicWorker, RequestTimer
 async def web_root(req_env):
     with RequestTimer('web_root', req_env):
         try:
-            return self.app_root()
-        except:
-            return {'code': 500, 'body': 'Sorry\n'}
+            return {
+                'body': await req_env['app'].api_webroot(req_env),
+                'mimetype': 'text/html; charset="utf-8"'}
+        except Exception as e:
+            logging.exception('web_root failed: %s' % e)
+            return {'code': 500, 'msg': 'Failed', 'body': 'Sorry\n'}
 
 
 def websocket_auth_check(req_env):
@@ -43,6 +46,8 @@ def websocket_auth_check(req_env):
 
 
 @async_url('/pile', '/pile/*')
+@http_require(secure_transport=True, csrf=False)
+@process_post(max_bytes=204800, _async=True)
 async def web_treeview(req_env):
     # The idea here would be to expose search results, tags and the outbox
     # as virtual Maildirs over HTTP. And pretty much anything else we want
@@ -60,9 +65,20 @@ async def web_treeview(req_env):
     #   /pile/contacts/user@foo.vcard          -> individual contact
     #   ...?as=json                            -> change output format?
     #
-    return {
-        'code': 200,
-        'body': 'Hello world\n'}
+    code, msg, status = 500, 'Oops', 'err'
+    with RequestTimer('web_pile', req_env, status='rej') as timer:
+        try:
+            auth = req_env['worker'].get_auth(req_env)
+            timer.status = 'ok'
+            return await req_env['app'].api_treeview(None, auth)
+        except PermissionError as e:
+            code, msg, status = 403, str(e), 'rej'
+        except:
+            logging.exception('web_pile failed')
+
+        # If we get this far, we had an internal error of some sort.
+        timer.status = status
+        return {'code': code, 'msg': msg, 'body': 'Sorry\n'}
 
 
 @async_url('/ws')
@@ -99,11 +115,11 @@ async def web_jmap_session(req_env):
     code, msg, status = 500, 'Oops', 'err'
     with RequestTimer('web_jmap_session', req_env, status='rej') as timer:
         try:
-            auth = req_env['worker'].get_auth(req_env, post=False, secure=True)
+            auth = req_env['worker'].get_auth(req_env, post=False, secure_transport=True)
             timer.status = 'ok'
             return await req_env['app'].api_jmap_session(auth)
-        except PermissionError:
-            code, msg, status = 403, 'Access Denied', 'rej'
+        except PermissionError as e:
+            code, msg, status = 403, str(e), 'rej'
         except:
             logging.exception('web_jmap_session failed')
 
@@ -120,7 +136,7 @@ async def web_jmap(req_env):
     code, msg, status = 500, 'Oops', 'err'
     with RequestTimer('web_jmap', req_env, status='rej') as timer:
         try:
-            auth = req_env['worker'].get_auth(req_env, secure=True)
+            auth = req_env['worker'].get_auth(req_env, secure_transport=True)
             timer.status = 'ok'
             # FIXME: Do we want more granularity on our timers? If so, we need
             #        to change the timer name to match the method(s) called.
@@ -128,8 +144,8 @@ async def web_jmap(req_env):
             if req_env.post_data:
                 return await req_env['app'].api_jmap(
                     None, auth, req_env.post_data)
-        except PermissionError:
-            code, msg, status = 403, 'Access Denied', 'rej'
+        except PermissionError as e:
+            code, msg, status = 403, str(e), 'rej'
         except:
             logging.exception('web_jmap failed')
 
@@ -146,8 +162,8 @@ class AppWorker(PublicWorker):
     """
 
     KIND = 'app'
-    PUBLIC_PATHS = ['/']
-    PUBLIC_PREFIXES = []
+    PUBLIC_PATHS = ['/', '/ws']
+    PUBLIC_PREFIXES = ['/pile', '/.well-known/']
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -165,7 +181,7 @@ class AppWorker(PublicWorker):
         obj = super().FromArgs(workdir, args)
         if '--cli' in opts:
             obj.want_cli = True
-            args.append('wait')
+            args.append('--wait')
         return obj
 
     def connect(self, *args, **kwargs):
