@@ -11,7 +11,7 @@ import traceback
 from upagekite import uPageKite, LocalHTTPKite
 from upagekite.httpd import HTTPD, url, async_url
 from upagekite.proto import uPageKiteDefaults
-from upagekite.web import process_post
+from upagekite.web import process_post, http_require
 
 from ..config import APPNAME as MAIN_APPNAME
 from ..config import APPURL as MAIN_APPURL
@@ -58,27 +58,9 @@ class RequestTimer:
         self.stats[k] = (0.95*self.stats.get(k, t)) + (0.05*t)
 
 
-def require(req_env, post=True, local=False, secure=True):
-    if post and not (req_env.http_method == 'POST'):
-        raise PermissionError('Unsupported method')
-    if (local or secure) and not (
-            req_env.remote_ip.startswith('127.') or
-            req_env.remote_ip.startswith('::ffff:127.') or
-            req_env.remote_ip == '::1'):
-        if local:
-            raise PermissionError('Method is localhost-only, got %s' % req_env.remote_ip)
-        if secure and not req_env.frame.tls:
-            raise PermissionError('Method requires TLS or localhost')
-    info = {}
-    if 'Authorization' in req_env.http_headers:
-        meth, data = req_env.http_headers['Authorization'].split(' ', 1)
-        info['auth_%s' % meth.strip().lower()] = data.strip()
-    return info
-
-
 @url('/ping', '/ping/*')
+@http_require(methods=('POST',), csrf=False, secure_transport=False)
 def web_ping(req_env):
-    require(req_env, post=True, secure=False)
     return {
         'ttl': 30,
         'msg': 'PONG',
@@ -87,8 +69,8 @@ def web_ping(req_env):
 
 
 @url('/quit', '/quit/*')
+@http_require(methods=('POST',), csrf=False, local=True)
 def web_quit(req_env):
-    require(req_env, post=True, local=True)
     req_env['postpone_action'](lambda: req_env['worker'].quit())
     return {
         'ttl': 30,
@@ -97,8 +79,8 @@ def web_quit(req_env):
 
 
 @url('/status', '/status/*')
+@http_require(methods=('POST',), csrf=False, local=True)
 def web_status(req_env):
-    require(req_env, post=True, local=True)
     return {
         'ttl': 30,
         'mimetype': 'application/json',
@@ -106,9 +88,9 @@ def web_status(req_env):
 
 
 @async_url('/rpc/*')
+@http_require(methods=('POST',), csrf=False, local=True)
 @process_post(max_bytes=WorkerPageKiteSettings.MAX_POST_BYTES, _async=True)
 async def web_rpc(req_env):
-    require(req_env, post=True, local=True)
     return await req_env['worker'].handle_web_rpc(req_env)
 
 

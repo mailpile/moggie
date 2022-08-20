@@ -18,17 +18,17 @@ import sys
 import traceback
 
 from upagekite.httpd import HTTPD, url, async_url
-from upagekite.web import process_post
+from upagekite.web import process_post, http_require, access_requires
 from upagekite.websocket import websocket, ws_broadcast
 
 from ..app.core import AppCore
-from .public import PublicWorker, RequestTimer, require
+from .public import PublicWorker, RequestTimer
 
 
 @async_url('/')
+@http_require(secure_transport=True, csrf=False)
 async def web_root(req_env):
     with RequestTimer('web_root', req_env):
-        require(req_env, post=False, secure=True)
         try:
             return self.app_root()
         except:
@@ -36,10 +36,33 @@ async def web_root(req_env):
 
 
 def websocket_auth_check(req_env):
-    auth = req_env['worker'].get_auth(req_env, post=False, secure=True)
+    auth = req_env['worker'].get_auth(req_env, secure_transport=True)
     if not auth:
         raise PermissionError('Access Denied')
     req_env['auth'] = auth
+
+
+@async_url('/pile', '/pile/*')
+async def web_treeview(req_env):
+    # The idea here would be to expose search results, tags and the outbox
+    # as virtual Maildirs over HTTP. And pretty much anything else we want
+    # the user to have access to... As a read-only resource (plus outbox),
+    # this is simple. If we want to support writes, things get weird fast
+    # if we want to support only normal filesystem semantics and HTTP verbs.
+    #
+    # URL ideas:
+    #   /pile/mail/                            -> list of tags / searches
+    #   /pile/mail/search term/search-term.zip -> dump of all matching mail
+    #   /pile/mail/search term/cur/            -> results
+    #   /pile/mail/search term/cur/12345       -> individual message
+    #   /pile/mail/search term/cur/12345/3     -> message part (attachment?)
+    #   /pile/contacts/all-contacts.zip        -> dump of all contacts
+    #   /pile/contacts/user@foo.vcard          -> individual contact
+    #   ...?as=json                            -> change output format?
+    #
+    return {
+        'code': 200,
+        'body': 'Hello world\n'}
 
 
 @async_url('/ws')
@@ -54,6 +77,7 @@ async def web_websocket(opcode, msg, conn, ws,
 
     if msg:
         code = 500
+        result = {}
         web_auth = conn.env['auth']
         conn_uid = conn.uid
         try:
@@ -65,10 +89,11 @@ async def web_websocket(opcode, msg, conn, ws,
                 return
         except:
             logging.exception('websocket failed: %s' % (msg,))
-        await conn.send(json.dumps({'error': code}))  #FIXME
+        await conn.send(json.dumps({'error': code, 'result': result}))  #FIXME
 
 
 @async_url('/.well-known/jmap')
+@http_require(csrf=False)
 @process_post(max_bytes=20480, _async=True)
 async def web_jmap_session(req_env):
     code, msg, status = 500, 'Oops', 'err'
@@ -88,6 +113,7 @@ async def web_jmap_session(req_env):
 
 
 @async_url('/jmap')
+@http_require(csrf=False)
 @process_post(max_bytes=204800, _async=True)
 # FIXME: Should this also be a websocket? How do JMAP websockets work?
 async def web_jmap(req_env):
@@ -128,6 +154,19 @@ class AppWorker(PublicWorker):
         self.functions.update(self.app.rpc_functions)
         self.sessions = {}
         self.auth_token = None
+        self.want_cli = False
+
+    @classmethod
+    def FromArgs(cls, workdir, args):
+        opts = [a for a in args if a[:2] == '--']
+        for opt in opts:
+            args.remove(opt)
+
+        obj = super().FromArgs(workdir, args)
+        if '--cli' in opts:
+            obj.want_cli = True
+            args.append('wait')
+        return obj
 
     def connect(self, *args, **kwargs):
         conn = super().connect(*args, **kwargs)
@@ -147,6 +186,8 @@ class AppWorker(PublicWorker):
 
     def startup_tasks(self):
         self.app.startup_tasks()
+        if self.want_cli:
+            self.app.start_pycli()
 
     def shutdown_tasks(self):
         self.app.shutdown_tasks()
@@ -161,14 +202,14 @@ class AppWorker(PublicWorker):
         await ws_broadcast('app', json.dumps(message), only=ofunc)
 
     def get_auth(self, req_env, **req_kwargs):
-        req_info = require(req_env, **req_kwargs)
-        # If cookie is in session list, we know who this is
-        # If we have a username and password, yay
-        logging.debug('req_info = %s' % (req_info,))
-        if 'auth_basic' in req_info:
+        # Set req_env[auth_*], or raise PermissionError
+        access_requires(req_env, **req_kwargs)
+        if 'auth_basic' in req_env:
+            # FIXME: If we have a username and password, yay
+            username, password = req_env['auth_basic']
             logging.warning('FIXME: BASIC AUTH')
-        elif 'auth_bearer' in req_info:
-            acl = self.app.config.access_from_token(req_info['auth_bearer'])
+        elif 'auth_bearer' in req_env:
+            acl = self.app.config.access_from_token(req_env['auth_bearer'])
             logging.debug('Access: %s = %s' % (acl.config_key, acl))
             return acl
         raise PermissionError('Please login')

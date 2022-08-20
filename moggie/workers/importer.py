@@ -69,7 +69,8 @@ class ImportWorker(BaseWorker):
                 return self.fs.email(metadata, text=True, data=False)
             else:
                 return self.app.jmap(RequestEmail(metadata=metadata, text=True)).get('email')
-        except:
+        except Exception as e:
+            logging.debug('Failed to load %s: %s' % (metadata, e))
             return None
 
     def _notify_progress(self, progress):
