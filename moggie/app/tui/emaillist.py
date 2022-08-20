@@ -25,6 +25,8 @@ class EmailListWalker(urwid.ListWalker):
         return len(self.emails)
 
     def add_emails(self, skip, emails):
+        if not emails:
+            return
         self.emails[skip:] = emails
         self.emails.sort()
         self.emails.reverse()

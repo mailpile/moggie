@@ -21,7 +21,7 @@ from .decorations import palette
 from .tui_frame import TuiFrame
 
 
-DEFAULT_LOG_LEVEL = 5  # FIXME: Should be 2
+DEFAULT_LOG_LEVEL = 2
 
 
 def Main(workdir, sys_args, tui_args, send_args):

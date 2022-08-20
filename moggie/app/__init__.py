@@ -8,15 +8,16 @@ class Nonsense(Exception):
 
 
 def CommandStart(wd, args):
-    wait = 'wait' in args
+    args = list(args)
+    wait = '--wait' in args
     if wait:
-        args.remove('wait')
+        args.remove('--wait')
 
     from ..workers.app import AppWorker
-    worker = AppWorker.FromArgs(wd, args[0:])
+    worker = AppWorker.FromArgs(wd, args)
 
     if worker.connect():
-        if wait:
+        if wait or ('--wait' in args):
             worker.join()
         else:
             sys.stderr.write('Running %s in the background.\n' % worker.KIND)
@@ -125,10 +126,14 @@ def Main(args):
     if command not in COMMANDS:
         from .cli import CLI_COMMANDS
         COMMANDS.update(CLI_COMMANDS)
+        CLI_COMMANDS.update(COMMANDS)  # So moggie help can find things
 
     configure_logging(profile_dir=wd, level=logging.DEBUG)
     command = COMMANDS.get(command)
     if command is not None:
-        command(wd, args)
+        if hasattr(command, 'Command'):
+            command.Command(wd, args)
+        else:
+            command(wd, args)
     else:
         COMMANDS['help'](wd, args)

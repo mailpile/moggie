@@ -5,11 +5,10 @@ import os
 import threading
 import traceback
 import time
+import sys
 
-import passcrow
-
-from ..config import AppConfig
-from ..storage.files import MailboxFileStorage
+from ..config import APPNAME_UC, APPVER, AppConfig
+from ..storage.files import FileStorage
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorker
@@ -62,6 +61,14 @@ class AppSessionResource(JMAPSessionResource):
 
 
 class AppCore:
+    PYCLI_BANNER = ("""
+%s %s / Python %s
+
+Welcome the interactive Moggie debug console! This is a thread of the
+main app worker. Hints:
+
+        """).strip() % (APPNAME_UC, APPVER, sys.version.splitlines()[0])
+
     def __init__(self, app_worker):
         self.work_dir = os.path.normpath(# FIXME: This seems a bit off
             os.path.join(app_worker.worker_dir, '..'))
@@ -94,7 +101,7 @@ class AppCore:
 
     def schedule(self, when, job):
         self._schedule.append((when, job))
-        self._schedule.sort()
+        self._schedule.sort(key=lambda i: (i[0], repr(i[1])))
 
     async def ticker_task(self):
         while True:
@@ -127,6 +134,11 @@ class AppCore:
                 notify=notify_url,
                 name='search').connect()
 
+        if missing_metadata and self.metadata and self.storage:
+            # Restart workers that want to know about our metadata store
+            self.storage.quit()
+            self.start_workers(start_encrypted=False)
+
         if self.importer is None:
             self.importer = ImportWorker(self.worker.worker_dir,
                 fs_worker=self.storage,
@@ -135,11 +147,6 @@ class AppCore:
                 metadata_worker=self.metadata,
                 notify=notify_url,
                 name='importer').connect()
-
-        if missing_metadata and self.metadata and self.storage:
-            # Restart workers that want to know about our metadata store
-            self.storage.quit()
-            return self.start_workers(start_encrypted=False)
 
         return True
 
@@ -166,7 +173,7 @@ class AppCore:
                     'Failed to start encrypting workers. Need login?')
 
         self.storage = StorageWorker(self.worker.worker_dir,
-            MailboxFileStorage(
+            FileStorage(
                 relative_to=os.path.expanduser('~'),
                 metadata=self.metadata),
             notify=notify_url,
@@ -200,6 +207,26 @@ class AppCore:
     def startup_tasks(self):
         self.start_workers()
         self._stashed_results = {}
+
+    def start_pycli(self):
+        def RunCLI():
+            import readline
+            import code
+            import io
+
+            # Reopen stdin, since multiprocessing.Process closes it
+            sys.stdin = io.TextIOWrapper(io.BufferedReader(os.fdopen(0)))
+
+            env = globals()
+            env['moggie'] = self
+            code.InteractiveConsole(locals=env).interact(self.PYCLI_BANNER)
+
+            print('Shutting down %s, good-bye!' % APPNAME_UC)
+            self.worker.quit()
+
+        pycli = threading.Thread(target=RunCLI)
+        pycli.daemon = True
+        pycli.start()
 
     def shutdown_tasks(self):
         self.stop_workers()
@@ -235,9 +262,11 @@ class AppCore:
                         mask_deleted=jmap_request.get('mask_deleted', True)
                     )['hits'],
                 sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
-                skip=jmap_request.get('skip', 0),
-                limit=jmap_request.get('limit', None)))
+                skip=jmap_request['skip'],
+                limit=jmap_request['limit']))
 
+        jmap_request['skip'] = jmap_request.get('skip') or 0
+        jmap_request['limit'] = jmap_request.get('limit', None)
         if self.metadata and self.search:
             results = await async_run_in_thread(perform_search)
             return ResponseSearch(jmap_request, results)
@@ -297,6 +326,7 @@ class AppCore:
                 #        ... before or after we actually change keys?
                 self.config.change_config_key(newp)
                 self.config.change_master_key()
+                # FIXME: Check if user requested closing sessions
                 self.config.save()
                 return ResponseNotification({
                     # FIXME: Add trigger for a recovery dialog?
