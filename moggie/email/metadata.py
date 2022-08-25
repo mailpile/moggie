@@ -14,8 +14,10 @@ class Metadata(list):
     OFS_IDX = 1
     OFS_POINTERS = 2
     OFS_HEADERS = 3
-    OFS_MORE = 4
-    _FIELDS = 5
+    OFS_PARENT_ID = 4
+    OFS_THREAD_ID = 5
+    OFS_MORE = 6
+    _FIELDS = 7
 
     # These are the headers we want extracted and stored in metadata.
     # Note the Received headers are omitted, too big and too much noise.
@@ -43,6 +45,8 @@ class Metadata(list):
         return Metadata(0, 0,
             Metadata.PTR(0, b'/dev/null', 0),
             b'Message-Id: %s' % msgid,
+            parent_id=0,
+            thread_id=0,
             more=more)
 
     class PTR(list):
@@ -70,7 +74,7 @@ class Metadata(list):
         def get_container(self):
             return split_tagged_path(dumb_decode(self.ptr_path))[0]
 
-    def __init__(self, ts, idx, ptrs, hdrs, more=None):
+    def __init__(self, ts, idx, ptrs, hdrs, parent_id=None, thread_id=None, more=None):
         # The encodings here are to make sure we are JSON serializable.
         if isinstance(hdrs, bytes):
             hdrs = str(hdrs, 'latin-1')
@@ -84,11 +88,10 @@ class Metadata(list):
 
         list.__init__(self, [
             ts or 0, idx or 0, ptrs, hdrs.replace('\r', ''),
-            more or {}])
+            parent_id, thread_id, more or {}])
 
         self._raw_headers = {}
         self._parsed = None
-        self.thread_id = None
         self.mtime = 0
 
         if not ts:
@@ -102,6 +105,12 @@ class Metadata(list):
     timestamp      = property(lambda s: s[s.OFS_TIMESTAMP])
     idx            = property(lambda s: s[s.OFS_IDX])
     pointers       = property(lambda s: [Metadata.PTR(*p) for p in sorted(s[s.OFS_POINTERS])])
+    parent_id      = property(
+                         lambda s: s[s.OFS_PARENT_ID] or s[s.OFS_IDX],
+                         lambda s, v: s.__setitem__(s.OFS_PARENT_ID, v))
+    thread_id      = property(
+                         lambda s: s[s.OFS_THREAD_ID] or s[s.OFS_IDX],
+                         lambda s, v: s.__setitem__(s.OFS_THREAD_ID, v))
     more           = property(lambda s: s[s.OFS_MORE])
     headers        = property(lambda s: s[s.OFS_HEADERS])
     uuid_asc       = property(lambda s: dumb_encode_asc(s.uuid))
@@ -110,11 +119,13 @@ class Metadata(list):
         ).digest())
 
     def __str__(self):
-        return ('%d=%s@%s %d %s\n%s\n' % (
+        return ('%d=%s@%s %d %d/%d %s\n%s\n' % (
             self.idx,
             self.uuid_asc,
             self.pointers,
             self.timestamp,
+            self.parent_id,
+            self.thread_id,
             self.more,
             self.headers))
 
@@ -149,8 +160,11 @@ class Metadata(list):
         if force or self._parsed is None:
             self._parsed = {
                 'ts': self.timestamp,
+                'idx': self.idx,
+                'parent_id': self.parent_id,
+                'thread_id': self.thread_id,
                 'ptrs': self.pointers,
-                'uuid': self.uuid}
+                'uuid': self.uuid_asc}
             self._parsed.update(parse_header(self.headers))
             self._parsed.update(self.more)
         return self._parsed
@@ -168,7 +182,7 @@ if __name__ == "__main__":
     md1 = Metadata(0, 0, Metadata.PTR(0, tag_path(*mbx_path), 200), """\
 From: Bjarni <bre@example.org>\r
 To: bre@example.org\r
-Subject: This is Great\r\n""", {'tags': 'inbox,unread,sent'})
+Subject: This is Great\r\n""", 0, 0, {'tags': 'inbox,unread,sent'})
 
     md2 = Metadata(0, 0, [[0, dumb_encode_asc(tag_path(*mdir_path)), 200]], """\
 To: bre@example.org

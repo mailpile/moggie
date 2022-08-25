@@ -247,8 +247,8 @@ class BaseWorker(Process):
             logging.debug('Unexpected PING response: %s' % result)
         return (result == self.HTTP_403)
 
-    def connect(self, autostart=True):
-        if (self.url or self._load_url()) and self._ping():
+    def connect(self, autostart=True, quick=False):
+        if (self.url or self._load_url()) and (quick or self._ping()):
             logging.debug('Connected running %s(%s) at %s'
                 % (type(self).__name__, self.name, self.url))
             return self

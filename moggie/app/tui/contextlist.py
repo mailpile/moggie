@@ -134,14 +134,16 @@ class ContextList(urwid.ListBox):
         pass  # FIXME
 
     def request_counts(self):
-        self.counts_obj['terms_list'] = count_terms = []
+        # FIXME: Need to update listener logic to listen for any and all
+        #        count results...
         for i, ctx in enumerate(self.contexts):
+            self.counts_obj['context'] = ctx['key']
+            self.counts_obj['terms_list'] = count_terms = []
             if i == self.expanded:
                 for tag in ctx.get('tags', []):
                     count_terms.append('in:%s' % tag)
                     count_terms.append('in:%s is:unread' % tag)
-        # FIXME: What about contexts?
-        self.tui_frame.app_bridge.send_json(self.counts_obj)
+            self.tui_frame.app_bridge.send_json(self.counts_obj)
 
     def incoming_message(self, message):
         if self.waiting:
@@ -152,6 +154,7 @@ class ContextList(urwid.ListBox):
             self.update_content()
             self.request_counts()
         elif (message.get('prototype') == self.counts_obj['prototype']):
+            # FIXME: Do something with the counts!
             self.update_content()
 
         # FIXME: The backend should broadcast updates...

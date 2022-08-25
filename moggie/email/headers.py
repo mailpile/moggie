@@ -30,7 +30,7 @@ TEXT_HEADERS = ('subject',)
 
 ADDRESS_HEADERS = (
     'apparently-to',
-    'bcc'
+    'bcc',
     'cc',
     'errors-to',
     'from',

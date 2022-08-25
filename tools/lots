@@ -1,0 +1,9 @@
+#!/bin/bash
+APP=$1
+shift
+(for ARG in "$@"; do
+    echo -n $ARG
+    echo -n -e '\0'
+done) \
+|curl -fN -F 'argz=<-' \
+    $(cat ~/.local/share/Moggie/default/workers/app.url)/cli/$APP

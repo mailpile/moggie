@@ -1,9 +1,28 @@
+# IDEA:  Instead of dropping really short/common terms like "a" and "of",
+#        include them as prefixes or suffixes of the surrounding words.
+#        Doing a full n-gram search would really bloat
+#        the index for limited gain, but just turning the little words into
+#        n-gram equivalents will start to capture some of the sentence
+#        structure at relatively low cost?
+#
+# So searching for "orange in my bag" can expand to:
+#
+#    (orange in-my bag) OR (orange-in my-bag)
+#
+# But... how does that interact with partial word searches? If we only do
+# the prefixed form, "in-my" and "my-bag", it will work fine?
+#
+# Other thoughts:
+#   - what do we need to start providing search suggestions?
+#   - what do we need to start providing autosuggested canned replies??
+#
 import copy
 import logging
 import os
 import struct
 import re
 import threading
+import time
 
 from ..util.dumbcode import dumb_decode, dumb_encode_bin
 from ..util.intset import IntSet
@@ -127,7 +146,7 @@ class SearchEngine:
         self.records = RecordStore(os.path.join(workdir, name), name,
             salt=None, # FIXME: This must be set, OR ELSE
             aes_keys=encryption_keys or None,
-            compress=64,
+            compress=96,
             sparse=True,
             est_rec_size=128,
             target_file_size=64*1024*1024)
@@ -150,7 +169,10 @@ class SearchEngine:
         self.l2_begin = self.l1_begin + self.config['l1_keywords']
         self.maxint = maxint
         self.deleted = IntSet()
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
+
+        # Profiling...
+        self.profile1 = self.profile2 = self.profile3 = 0
 
         # Someday, these might be configurable/pluggable?
 
@@ -207,8 +229,9 @@ class SearchEngine:
             longest=self.config['partial_longest'],
             maxlen=self.config['partial_list_len'],
             lru=True)
-        self.records[self.IDX_PART_SPACE] = self.part_spaces[0]
-        return self.part_spaces[0]
+        with self.lock:
+            self.records[self.IDX_PART_SPACE] = self.part_spaces[0]
+            return self.part_spaces[0]
 
     def update_terms(self, terms, min_hits=0, ignore_re=IGNORE_NONLATIN_RE):
         adding = set()
@@ -284,23 +307,27 @@ class SearchEngine:
                 return idx
         raise None
 
-    def keyword_index(self, kw, prefer_l1=False):
-        kw_hash = self.records.hash_key(kw)
+    def keyword_index(self, kw, prefer_l1=None, create=False):
+        with self.lock:
+            kw_hash = self.records.hash_key(kw)
 
-        # This duplicates logic from records.py, but we want to avoid
-        # hashing the key twice.
-        kw_pos_idx = self.records.keys.get(kw_hash)
-        if kw_pos_idx is not None:
-            return kw_pos_idx[1]
-        elif prefer_l1:
-            with self.lock:
+            if (prefer_l1 is None) and (kw[:3] == 'in:'):
+                prefer_l1 = True
+
+            # This duplicates logic from records.py, but we want to avoid
+            # hashing the key twice.
+            kw_pos_idx = self.records.keys.get(kw_hash)
+            if kw_pos_idx is not None:
+                return kw_pos_idx[1]
+            elif prefer_l1 and create:
                 idx = self._empty_l1_idx()
                 self.records.set_key(kw, idx)
                 self.records[idx] = IntSet()
                 return idx
 
-        kw_hash_int = struct.unpack('I', kw_hash[:4])[0] % self.config['l2_buckets']
-        return kw_hash_int + self.l2_begin
+            kw_hash_int = struct.unpack('I', kw_hash[:4])[0]
+            kw_hash_int %= self.config['l2_buckets']
+            return kw_hash_int + self.l2_begin
 
     def _prep_results(self, results, prefer_l1, tag_ns):
         keywords = {}
@@ -320,20 +347,20 @@ class SearchEngine:
                     self.maxint = r_id
                 for kw in kw_list + extra_kws:
                     kw = kw.replace('*', '')  # Otherwise partial search breaks..
-                    if tag_ns and kw[:3] == 'in:':
+                    if tag_ns and (kw[:3] == 'in:'):
                         kw = '%s@%s' % (kw, tag_ns)
                     keywords[kw] = keywords.get(kw, []) + [r_id]
                 if kw_list:
                     hits.append(r_id)
 
         kw_idx_list = [
-            (self.keyword_index(kw, prefer_l1=prefer_l1), kw)
+            (self.keyword_index(kw, prefer_l1=prefer_l1, create=True), kw)
             for kw in keywords]
 
         return kw_idx_list, keywords, hits
 
     def _ns(self, k, ns):
-        if ns and k[:3] == 'in:':
+        if ns and (k[:3] == 'in:'):
             return '%s@%s' % (k, ns)
         return k
 
@@ -341,12 +368,13 @@ class SearchEngine:
         kw = self._ns(kw, tag_namespace)
         new_kw = self._ns(new_kw, tag_namespace)
         kw_pos_idx = self.records.keys[self.records.hash_key(kw)]
-        self.records.set_key(new_kw, kw_pos_idx[1])
-        self.records.del_key(kw)
+        with self.lock:
+            self.records.set_key(new_kw, kw_pos_idx[1])
+            self.records.del_key(kw)
 
     def mutate(self, mset, op_kw_list, tag_namespace=''):
         op_idx_kw_list = [
-            (op, self.keyword_index(self._ns(kw, tag_namespace)))
+            (op, self.keyword_index(self._ns(kw, tag_namespace), create=True))
             for op, kw in op_kw_list]
 
         for op, idx in op_idx_kw_list:
@@ -360,18 +388,35 @@ class SearchEngine:
 
         return {'mutations': len(op_idx_kw_list)}
 
+    def profile_updates(self, which, t0, t1, t2, t3):
+        p1 = int((t1 - t0) * 1000)
+        p2 = int((t2 - t1) * 1000)
+        p3 = int((t3 - t2) * 1000)
+        self.profile1 += p1
+        self.profile2 += p2
+        self.profile3 += p3
+        logging.debug(
+            'Profiling(%s): prep/write/update .. now(%d/%d/%d) total(%d/%d/%d)'
+            % (which, p1, p2, p3, self.profile1, self.profile2, self.profile3))
+
     def del_results(self, results, tag_namespace=''):
+        t0 = time.time()
         (kw_idx_list, keywords, hits
             ) = self._prep_results(results, False, tag_namespace)
+        t1 = time.time()
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 if idx < self.l2_begin:
                     # These are instances of IntSet, de/serialization is done
                     # automatically by dumbcode.
+                  try:
                     iset = self.records[idx]
                     iset -= keywords[kw]
                     iset -= self.deleted
                     self.records[idx] = iset
+                  except:
+                    logging.exception('Ugh, kw=%s idx=%s iset=%s' % (kw, idx, iset))
+                    raise
                 else:
                     # These are instances of PostingList
                     plb = PostingListBucket(self.records.get(idx) or b'')
@@ -379,28 +424,38 @@ class SearchEngine:
                     plb.deleted |= keywords[kw]
                     plb.add(kw)
                     self.records[idx] = plb.blob
+        t2 = time.time()
         self.update_terms(keywords)
+        self.profile_updates('-%d' % len(kw_idx_list), t0, t1, t2, time.time())
         return {'keywords': len(keywords), 'hits': hits}
 
-    def add_results(self, results, prefer_l1=False, tag_namespace=''):
+    def add_results(self, results, prefer_l1=None, tag_namespace=''):
+        t0 = time.time()
         (kw_idx_list, keywords, hits
             ) = self._prep_results(results, prefer_l1, tag_namespace)
+        t1 = time.time()
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 if idx < self.l2_begin:
+                  try:
                     # These are instances of IntSet, de/serialization is done
                     # automatically by dumbcode.
                     iset = self.records[idx]
                     iset |= keywords[kw]
                     iset -= self.deleted
                     self.records[idx] = iset
+                  except:
+                    logging.exception('Ugh, kw=%s idx=%s iset=%s' % (kw, idx, iset))
+                    raise
                 else:
                     # These are instances of PostingList
                     plb = PostingListBucket(self.records.get(idx) or b'')
                     plb.deleted = self.deleted
                     plb.add(kw, *keywords[kw])
                     self.records[idx] = plb.blob
+        t2 = time.time()
         self.update_terms(keywords)
+        self.profile_updates('+%d' % len(kw_idx_list), t0, t1, t2, time.time())
         return {'keywords': len(keywords), 'hits': hits}
 
     def __getitem__(self, keyword):
@@ -473,6 +528,8 @@ class SearchEngine:
             return magic(term)
 
         # FIXME: Convert to:me, from:me into e-mail searches
+        # FIXME: Also: thread:<id> mid:<mid> and id:<mid>
+        #        Notmuch's thread-subqueries are kinda neat, implement them?
 
         return term
 
@@ -519,14 +576,18 @@ if __name__ == '__main__':
         (3, ['please', 'remove', 'the', 'politeness']),
         (2, ['ell', 'hello', 'iceland', 'e*vil'])])
     se.add_results([
-        (4, ['in:inbox', 'in:testing', 'in:bjarni'])],
-        prefer_l1=True)
+        (4, ['in:inbox', 'in:testing', 'in:testempty', 'in:bjarni'])])
     se.add_results([
         (5, ['in:inbox', 'please'])],
         tag_namespace='work')
 
     se.deleted |= 0
     assert(list(se.search(IntSet.All)) == [1, 2, 3, 4, 5])
+
+    # Make sure tags go to l1, others to l2.
+    assert(se.keyword_index('in:bjarni') < se.l2_begin)
+    assert(se.keyword_index('in:inbox') < se.l2_begin)
+    assert(se.keyword_index('please') >= se.l2_begin)
 
     assert(3 in se.search('please'))
     assert(5 in se.search('please'))
@@ -556,6 +617,14 @@ if __name__ == '__main__':
         assert(not 'reached')
     except KeyError:
         pass
+
+    # Test reducing a set to empty and then adding back to it
+    se.del_results([(4, ['in:testempty'])])
+    assert(4 not in se.search('in:testempty'))
+    se.add_results([(4, ['in:testempty'])])
+    assert(4 in se.search('in:testempty'))
+
+    print('Tests pass OK (1/3)')
 
     for round in range(0, 2):
         se.close()
@@ -602,7 +671,7 @@ if __name__ == '__main__':
         assert('additional' in se.candidates('addit*', 20))
 
         se.records.compact()
-        print('Tests pass OK (%d/2)' % (round+1,))
+        print('Tests pass OK (%d/3)' % (round+2,))
 
     #import time
     #time.sleep(10)

@@ -5,6 +5,9 @@ import time
 import traceback
 import threading
 
+if __name__ == '__main__':
+    from .. import sys_path_helper
+
 from ..email.metadata import Metadata
 from ..util.dumbcode import dumb_encode_asc, dumb_decode
 from ..util.intset import IntSet
@@ -19,6 +22,10 @@ class MetadataWorker(BaseWorker):
     SORT_NONE = 0
     SORT_DATE_ASC = 1
     SORT_DATE_DEC = 2
+
+    @classmethod
+    def Connect(cls, status_dir):
+        return cls(status_dir, None, None).connect(autostart=False)
 
     def __init__(self, status_dir, metadata_dir, encryption_keys,
             name=KIND, notify=None, log_level=logging.ERROR):
@@ -36,6 +43,10 @@ class MetadataWorker(BaseWorker):
         self.metadata_dir = metadata_dir
         self._metadata = None
 
+    def quit(self, *args, **kwargs):
+        with self.change_lock:
+            super().quit(*args, **kwargs)
+
     def _main_httpd_loop(self):
         from ..storage.metadata import MetadataStore
         self._metadata = MetadataStore(
@@ -45,15 +56,28 @@ class MetadataWorker(BaseWorker):
         del self.encryption_keys
         return super()._main_httpd_loop()
 
-    def compact(self, compact, full=False):
-        return self.call('compact', full)
+    def compact(self, full=False, callback_chain=None):
+        return self.call('compact', full, callback_chain)
 
     def add_metadata(self, metadata, update=True):
         return self.call('add_metadata', update, metadata)
 
-    def metadata(self, hits, sort=SORT_NONE, skip=0, limit=None):
-        return (Metadata(*m) for m in
-            self.call('metadata', hits, sort, skip, limit))
+    def metadata(self, hits,
+            threads=False,
+            only_ids=False,
+            sort=SORT_NONE,
+            skip=0,
+            limit=None,
+            raw=False):
+        res = self.call('metadata', hits, threads, only_ids, sort, skip, limit)
+        if only_ids or raw:
+            return res
+        if threads:
+            for grp in res:
+                grp['messages'] = [Metadata(*m) for m in grp['messages']]
+            return res
+        else:
+            return (Metadata(*m) for m in res)
 
     def info(self):
         return self.call('info')
@@ -89,19 +113,68 @@ class MetadataWorker(BaseWorker):
                     updated.append(idx)
         self.reply_json({'added': added, 'updated': updated})
 
-    def api_metadata(self, hits, sort_order, skip, limit, **kwargs):
+    def _md_threaded(self, hits, only_ids, sort_order):
+        hits = [self._metadata.thread_sorting_keyfunc(h) for h in hits]
+        hits.sort()
+        if sort_order == self.SORT_DATE_DEC:
+            hits.reverse()
+
+        groups = []
+        last_tid = 0
+        for tid, ts, idx in hits:
+            if tid != last_tid:
+                groups.append({'hits': [idx], '_ts': ts, 'thread': tid})
+                last_tid = tid
+            else:
+                groups[-1]['_ts'] = min(groups[-1]['_ts'], ts)
+                groups[-1]['hits'].append(idx)
+
+        if sort_order != self.SORT_NONE:
+            groups.sort(key=lambda g: g['_ts'])
+        if sort_order == self.SORT_DATE_DEC:
+            groups.reverse()
+
+        return groups
+
+    def _md_messages(self, hits, only_ids, sort_order):
+        if sort_order != self.SORT_NONE:
+            hits.sort(key=self._metadata.date_sorting_keyfunc)
+        if sort_order == self.SORT_DATE_DEC:
+            hits.reverse()
+
+        return hits
+
+    def api_metadata(self, hits, threads, only_ids, sort_order, skip, limit,
+            **kwargs):
         if not isinstance(hits, (list, IntSet)):
             hits = list(dumb_decode(hits))
-        if sort_order == self.SORT_DATE_ASC:
-            hits.sort(key=self._metadata.date_sorting_keyfunc)
-        elif sort_order == self.SORT_DATE_DEC:
-            hits.sort(key=self._metadata.date_sorting_keyfunc)
-            hits.reverse()
+        if not hits:
+            self.reply_json([])
+
+        if threads:
+            result = self._md_threaded(hits, only_ids, sort_order)
+        else:
+            result = self._md_messages(hits, only_ids, sort_order)
+
         if not limit:
-            limit = len(hits) - skip
-        self.reply_json([r for r in (
-            self._metadata.get(i, default=None) for i in hits[skip:skip+limit]
-            ) if r is not None])
+            limit = len(result) - skip
+        result = [r for r in result[skip:skip+limit]]
+
+        if threads:
+            if only_ids:
+                for grp in result:
+                    del grp['_ts']
+                    grp['messages'] = [i
+                        for i,t in self._metadata.get_thread_idxs(grp['thread'])]
+            else:
+                for grp in result:
+                    del grp['_ts']
+                    grp['messages'] = [self._metadata.get(i, default=i)
+                        for i,t in self._metadata.get_thread_idxs(grp['thread'])]
+        elif not only_ids:
+            result = [self._metadata.get(i, default=i) for i in result]
+
+        self.reply_json(result)
 
 
 if __name__ == '__main__':

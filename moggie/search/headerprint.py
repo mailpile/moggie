@@ -6,6 +6,7 @@
 #
 import re
 import hashlib
+import logging
 
 
 # These are headers we just note the presence of, to differentiate between
@@ -47,8 +48,12 @@ HP_DOM_AT_DOM = re.compile(r'^(\S+)@\1\.')
 
 
 def _md5ish(data, length=32):
-    data = data if isinstance(data, bytes) else bytes(data, 'latin-1')
+  try:
+    data = data if isinstance(data, bytes) else bytes(data, 'utf-8')
     return hashlib.md5(data).hexdigest()[:length]
+  except Exception as e:
+    logging.debug('_md5ish(%s): %s' % (data, e))
+    raise
 
 
 def HeaderPrintMTADetails(parsed_message):

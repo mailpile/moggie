@@ -1,4 +1,5 @@
 import binascii
+import copy
 import hashlib
 import io
 import logging
@@ -39,13 +40,28 @@ class RecordFile:
             aes_keys=None,
             encoding_kwargs=None,
             decoding_kwargs=None,
-            create=False):
+            create=False,
+            derive=True):
 
-        first_aes_key = aes_keys[0] if aes_keys else None
         self.file_id = file_id
         fid = (file_id.encode('utf-8') if isinstance(file_id, str) else file_id)
-        self.prefix = b'RecordFile: %s, cr=%d, encrypted=%s\r\n\r\n' % (
-            fid, chunk_records, encryption_id(fid, first_aes_key))
+        self.aes_keys = None
+        self.aes_key = None
+        self.aes_ctr = 0
+        self.aes_keys = aes_keys or []
+        if derive:
+            # We derive our AES key(s) from those provided, instead of using
+            # directly. This reduces the odds of collisions (IV reuse etc.)
+            # between different storage files using the same master key.
+            if aes_keys and aes_keys[0] is not None:
+                self.aes_keys = [make_aes_key(fid, k) for k in aes_keys]
+
+        self.aes_key = self.aes_keys[-1] if self.aes_keys else None
+
+        all_prefixes = [b'RecordFile: %s, cr=%d, encrypted=%s\r\n\r\n' % (
+            fid, chunk_records, encryption_id(fid, aes_key))
+            for aes_key in (self.aes_keys or [None])]
+        self.prefix = all_prefixes[0]
 
         self.chunk_records = chunk_records
         self.int_size = len(struct.pack('I', 0))
@@ -54,19 +70,15 @@ class RecordFile:
         self.header_size += (len(self.prefix) + self.int_size + self.long_size)
         self.compress = compress
         self.padding = b' ' * padding
+        self.empties = []
 
-        self.encoding_kwargs = encoding_kwargs or (lambda: {})
-        self.decoding_kwargs = decoding_kwargs or (lambda: {})
+        self.encoding_kwargs = encoding_kwargs
+        if self.encoding_kwargs is None:
+            self.encoding_kwargs = lambda: {}
 
-        # We derive our AES key(s) from those provided, instead of using
-        # directly. This reduces the odds of collisions (IV reuse etc.)
-        # between different storage files using the same master key.
-        self.aes_keys = None
-        self.aes_key = None
-        self.aes_ctr = 0
-        if aes_keys and aes_keys[0] is not None:
-            self.aes_keys = [make_aes_key(self.prefix, k) for k in aes_keys]
-            self.aes_key = self.aes_keys[-1]
+        self.decoding_kwargs = decoding_kwargs
+        if self.decoding_kwargs is None:
+            self.decoding_kwargs = lambda: {}
 
         self.path = path
         if not os.path.exists(path):
@@ -78,9 +90,9 @@ class RecordFile:
 
         self.fd = open(path, 'rb+', buffering=0)
         file_prefix = self.fd.read(len(self.prefix))
-        if (file_prefix != self.prefix):
+        if (file_prefix not in all_prefixes):
             self.fd.close()
-            raise ConfigMismatch('Config mismatch in %s' % path)
+            raise ConfigMismatch('Config mismatch in %s' % (path,))
         self.fd.seek(0, io.SEEK_END)
         self.mmap = mmap(self.fd.fileno(), 0, access=ACCESS_WRITE)
 
@@ -121,10 +133,14 @@ class RecordFile:
         self.mmap.close()
         self.fd.flush()
         self.mmap = mmap(self.fd.fileno(), 0, access=ACCESS_WRITE)
+        return self.mmap
 
     def safe_mmap(self, end):
-        if end > len(self.mmap):
-            self.flush()
+        try:
+            if end > len(self.mmap):
+                return self.flush()
+        except ValueError:
+            return self.flush()
         return self.mmap
 
     def __delitem__(self, idx):
@@ -205,18 +221,29 @@ class RecordFile:
             encoded = value
 
         enc_len = len(encoded)
-        append = (ofs < 1) or (enc_len > cur_len)
+        moved = append = (ofs < 1) or (enc_len > cur_len)
+        pad_len = min(16*1024, max(int(0.15 * enc_len), len(self.padding)))
+        if append:
+            if ofs > 0:
+                self.empties.append((cur_len, ofs))
+            target_len = enc_len + pad_len
+            for pair in self.empties:
+                _ln, _ofs = pair
+                if target_len <= _ln < enc_len*2:
+                    cur_len, ofs, append = _ln, _ofs, False
+                    break
+            if not append:
+                self.empties.remove(pair)
 
+        padding = b''
         if encode:
-            if enc_len <= cur_len:
+            if append and self.padding:
+                # Always waste a bit of space, to facilitate overwrites later
+                padding = b' ' * pad_len
+            else:
                 # Pad to the previous length, to increase the odds we will be
                 # able to reuse this slot later.
                 padding = b' ' * (cur_len - enc_len)
-            else:
-                # Always waste a bit of space, to facilitate overwrites later
-                padding = self.padding
-        else:
-            padding = b''
 
         encoded = padding + encoded
         enc_len = len(encoded)
@@ -234,11 +261,13 @@ class RecordFile:
         else:
             self.fd.write(enc_iofs + enc_ilen + encoded)
 
+        if moved:
             # Unsafe mmap usage follows, this is just the index
             beg = idx * self.int_size + len(self.prefix)
             end = beg + self.int_size
             self.mmap[beg:end] = struct.pack('I', ofs)
             self.offsets[idx] = ofs
+        if append:
             # Record how long the chunk file should be; if this does not
             # match we know we died mid-operation and may be corrupt.
             beg = self.int_size * self.chunk_records + len(self.prefix)
@@ -268,7 +297,6 @@ class RecordFile:
 
     def compact(self,
             new_aes_key=None, target=None, padding=None, force=False):
-
         tempfile = self.path + '.tmp'
         if os.path.exists(tempfile):
             os.remove(tempfile)
@@ -281,13 +309,20 @@ class RecordFile:
             logging.info('compact: No changes, doing nothing')
             return self
 
+        aes_keys = copy.copy(self.aes_keys)
+        if new_aes_key and (new_aes_key != self.aes_key):
+            fid = self.file_id
+            fid = (fid.encode('utf-8') if isinstance(fid, str) else fid)
+            aes_keys.append(make_aes_key(fid, new_aes_key))
+
         compacted = RecordFile(tempfile, self.file_id, self.chunk_records,
             compress=self.compress,
             encoding_kwargs=self.encoding_kwargs,
             decoding_kwargs=self.decoding_kwargs,
             padding=len(self.padding) if (padding is None) else padding,
-            aes_keys=[new_aes_key],
-            create=True)
+            aes_keys=aes_keys,
+            create=True,
+            derive=False)
         for i in range(0, self.chunk_records):
             if i in self:
                 compacted[i] = self[i]
@@ -334,8 +369,13 @@ class RecordStoreReadOnly:
         if not os.path.exists(workdir):
             os.mkdir(workdir, 0o700)
 
-        self.encoding_kwargs = encoding_kwargs or (lambda: {})
-        self.decoding_kwargs = decoding_kwargs or (lambda: {})
+        self.encoding_kwargs = encoding_kwargs
+        if self.encoding_kwargs is None:
+            self.encoding_kwargs = lambda: {}
+
+        self.decoding_kwargs = decoding_kwargs
+        if self.decoding_kwargs is None:
+            self.decoding_kwargs = lambda: {}
 
         # Derive new keys, so we don't keep the masters sitting around.
         self.aes_keys = []
@@ -576,8 +616,6 @@ class RecordStore(RecordStoreReadOnly):
     def compact(self,
             new_aes_key=False, force=False, partial=False,
             progress_callback=None):
-        aes_key = self.aes_key if (new_aes_key is False) else new_aes_key
-
         last_chunk_idx = self.next_idx // self.chunk_records
         done = []
         progress = {'compacting': None, 'done': done, 'total': last_chunk_idx+1}
@@ -593,7 +631,8 @@ class RecordStore(RecordStoreReadOnly):
                     progress_callback(progress)
 
                 (_, chunk_obj) = self.get_chunk(idx)
-                chunk_obj = chunk_obj.compact(new_aes_key=aes_key, force=force)
+                chunk_obj = chunk_obj.compact(
+                    new_aes_key=new_aes_key, force=force)
                 self.chunks[chunk_idx] = chunk_obj
                 done.append(chunk_idx)
             if which is not None:
@@ -665,6 +704,7 @@ if __name__ == "__main__":
     assert(len(rs) == 3)
     assert(rs[2] == 'ohai')
 
+    print('Starting load test')
     import random
     load = 10000
     t0 = time.time()

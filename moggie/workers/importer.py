@@ -20,8 +20,7 @@ class ImportWorker(BaseWorker):
     NICE = 20
     BACKGROUND_TASK_SLEEP = 0
 
-    COMPACT_INTERVAL = 5000  # Keeps us from growing without bounds
-    BATCH_SIZE = 250
+    BATCH_SIZE = 500
 
     def __init__(self, status_dir,
             app_worker=None,
@@ -42,7 +41,6 @@ class ImportWorker(BaseWorker):
         self.search = search_worker
         self.metadata = metadata_worker
         self.imported = 0
-        self.compacted = 0
 
         self.kwe = KeywordExtractor()  # FIXME: Configurable? Plugins?
 
@@ -84,6 +82,7 @@ class ImportWorker(BaseWorker):
         self.notify(
             '[import] Adding %d new messages, updating %d, %d unchanged.%s'
                 % (add, upd, old, ' Done!' if done else '..'),
+            data=progress,
             caller=progress['caller'])
 
     def _index_full_messages(self,
@@ -121,9 +120,6 @@ class ImportWorker(BaseWorker):
         # FIXME: Make this a callback action when add_results completes
         self.search.del_results(
             [[list(keywords.keys()), 'in:incoming']], wait=False)
-        if self.imported > self.compacted + self.COMPACT_INTERVAL:
-            self.search.with_caller(progress['caller']).compact(full=False)
-            self.compacted = self.imported
 
         # 6. Report progress
         # FIXME: Make this a callback action when del_results completes
@@ -160,7 +156,7 @@ class ImportWorker(BaseWorker):
             response = self.app.jmap(request_obj.update({
                 'skip': progress['emails'],
                 'limit': self.BATCH_SIZE}))
-            emails = response['emails']
+            emails = response['emails'] or []
             progress['emails'] += len(emails)
             done = (len(emails) < self.BATCH_SIZE)
 
@@ -217,9 +213,9 @@ if __name__ == '__main__':
             return {}
 
     iw = ImportWorker('/tmp',
-             app_worker=MockAppWorker(),
-             search_worker=MockSearchWorker(),
-             name='moggie-imp-test').connect()
+            app_worker=MockAppWorker(),
+            search_worker=MockSearchWorker(),
+            name='moggie-imp-test').connect()
     if iw:
         print('URL: %s' % iw.url)
         try:

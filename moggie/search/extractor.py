@@ -218,7 +218,7 @@ if __name__ == '__main__':
 From: bre@example.org
 To: bre3@example.org, <bre4@example.org> Bjarnzor
 Content-Type: text/plain; charset=utf-8
-Subject: =?utf-8?B?TWFnaWNhbA==?= subject line
+Subject: PCR =?utf-8?B?TWFnaWNhbA==?= subject line
 Date: Tue, 29 Mar 2022 14:17:00 +0000
 
 Halló heimur, þetta er íslenskur texti því stundum þarf að flækja
@@ -240,6 +240,8 @@ líka https://www.example.org/foo/bar/baz?bonk vefsíða.
             assert('day:29' in keywords)
             assert('date:2022-3-29' in keywords)
             assert('subject:magical' in keywords)
+            assert('subject:subject' in keywords)
+            assert('pcr' in keywords)
             assert('from:bre' in keywords)
             assert('email:bre@example.org' in keywords)
             assert('email:bre3@example.org' in keywords)

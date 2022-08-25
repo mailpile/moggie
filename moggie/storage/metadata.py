@@ -1,4 +1,6 @@
+import copy
 import io
+import logging
 import os
 import struct
 import time
@@ -20,12 +22,20 @@ from ..email.metadata import Metadata
 #
 METADATA_ZDICTS = [
     ('m', b'm',  b"""\
-[01234,56789,[[0,"BL2hvbWUvdmFybWFpY3VybWJ4",0123456789],[]],\
-"From: <joe@gmail.com>\nTo: <anna@live.net>\nSubject:\nCc:\nDate:\nMessage-Id:",\
+[01234,56789,[[0,"BL2hvbWUvdmFybWFpY3VybWJ4",0123456789],[]],"\
+\nFrom: Facebook <noreply@gmail.com>\
+\nTo: pay bank <anna@live.net.org.co.uk>\
+\nSubject: =?UTF-8?B? =?UTF-8?Q? =?utf-8?B? =?utf-8?Q? pay here this from \
+You you and for share a change new New is on post update invoice free request \
+\nCc:\nDate: Mon, Tue, Wed, Fri, Sun, Sat, Sun, 1 2 3 4 5 6 7 8 9 10 11 12 13 \
+14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30 31 Jan 20 Feb 20 Mar 20 \
+Apr 20 May 20 Jun 20 Jul 20 Aug 20 Sep 20 Oct 20 Nov 20 Des 20 \
++0000 -0000 +0800 +0200 -0700 (CST) (PDT) (BST) (EST) (UTC) (IST)\
+\nMessage-Id:",\
 {"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
 "tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
 "tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
-{"attachments":{}}]""")]
+{"attachments":{},"thread":[]}]""")]
 
 
 class IntColumn:
@@ -105,8 +115,8 @@ class IntColumn:
 
 
 def _make_cfuncs(zdict):
-    comp = zlib.compressobj(level=9, zdict=zdict)
-    deco = zlib.decompressobj(zdict=zdict)
+    comp = zlib.compressobj(level=9, zdict=(zdict*10))
+    deco = zlib.decompressobj(zdict=(zdict*10))
 
     def compress_func(data):
         cobj = comp.copy()
@@ -121,27 +131,30 @@ def _make_cfuncs(zdict):
 
 class MetadataStore(RecordStore):
 
-    # Dividing by 30 lets us not care about 32-bit timestamp rollover
-    TS_RESOLUTION = 30
+    # Dividing by 16 lets us not care about 32-bit timestamp rollover
+    TS_RESOLUTION = 16
 
     def __init__(self, workdir, store_id, aes_keys):
+        decompressors = []
+        encoding_kwargs = None
+        for ma, mb, zdict in METADATA_ZDICTS:
+            compress_func, decompress_func = _make_cfuncs(zdict)
+            decompressors.append((ma, mb, decompress_func))
+            # Last one wins
+            encoding_kwargs = lambda: copy.copy(
+                {'comp_bin': (mb, compress_func)})
+        decoding_kwargs = lambda: copy.copy({'decomp_bin': decompressors})
+
         super().__init__(workdir, store_id,
             sparse=True,
             compress=64,
             aes_keys=aes_keys,
             est_rec_size=400,
-            target_file_size=64*1024*1024)
+            target_file_size=64*1024*1024,
+            decoding_kwargs=decoding_kwargs,
+            encoding_kwargs=encoding_kwargs)
 
         self.thread_cache = {}
-
-        decompressors = []
-        for ma, mb, zdict in METADATA_ZDICTS:
-            compress_func, decompress_func = _make_cfuncs(zdict)
-            decompressors.append((ma, mb, decompress_func))
-            # Last one wins
-            self.encoding_kwargs = lambda: {'comp_bin': (mb, compress_func)}
-        self.decoding_kwargs = lambda: {'decomp_bin': decompressors}
-
         if 0 not in self:
             self[0] = Metadata.ghost('<internal-ghost-zero@moggie>')
         self.rank_by_date = IntColumn(os.path.join(workdir, 'timestamps'))
@@ -166,51 +179,104 @@ class MetadataStore(RecordStore):
         self.thread_ids.close()
         self.mtimes.close()
 
-    def _add_to_thread(self, idx, metadata):
+    def _get_parent_id(self, idx, metadata):
         in_reply_to = metadata.get_raw_header('In-Reply-To')
-        if in_reply_to is not None:
+        if not in_reply_to:
+            return idx
+        try:
+            return self.key_to_index(in_reply_to)
+        except KeyError:
+            return self.append(
+                Metadata.ghost(in_reply_to, {'missing': True}),
+                keys=[in_reply_to])
+
+    def _add_to_thread(self, idx, metadata):
+        tid, root = idx, metadata
+
+        # Find root of thread...
+        thread = []
+        while root.parent_id != tid:
+            if tid != idx:
+                thread.append(tid)
+            tid = root.parent_id
+            root = self[tid]
+        metadata.thread_id = tid
+
+        # Are we done?
+        if tid == idx:
+            return False
+
+        # Nope, housekeeping is needed.
+        kids = metadata.more.get('thread', [])
+        if 'thread' in metadata:
+            del metadata.more['thread']
+
+        root.more['thread'] = sorted(list(set(
+            root.more.get('thread', []) + [idx] + thread + kids)))
+        self.set(tid, root, rerank=False)
+
+        for kid in set(kids + thread):
             try:
-                pidx = self.key_to_index(in_reply_to)
-                return self.thread_ids[pidx]
+                km = self[kid]
+                if 'thread' in km.more:
+                    del km.more['thread']
+                self.set(kid, km, rerank=False)
+                self.thread_ids[kid] = self.thread_id = tid
             except KeyError:
-                pidx = self.append(
-                    Metadata.ghost(in_reply_to, {'missing': True}),
-                    keys=[in_reply_to])
-                return self.thread_ids[pidx]
-#
+                pass
+
+        return True
+
 # The strategy here, is to record for each message which thread it belongs to;
 # thread IDs are simply the index of the first message in the thread.
 #
 # Collapsing threads in search results can be efficiently done using the following
 # algorithm:
 #    1. Sort by (thread-id, date)
-#    2. Deduplicate by thread-id
+#    2. Deduplicate/group by thread-id
 #    3. Sort by date
 #
         return idx
 
-    def _rank(self, idx, metadata):
+    def _rank(self, idx, metadata, mtime=True, threading=True):
         if idx <= 0:
             return
-        metadata.mtime = int(time.time())
-        self.mtimes[idx] = (metadata.mtime // self.TS_RESOLUTION)
-        self.rank_by_date[idx] = max(1,
-            int(metadata.timestamp) // self.TS_RESOLUTION)
-        if metadata.thread_id is None:
-            metadata.thread_id = self._add_to_thread(idx, metadata)
-        self.thread_ids[idx] = metadata.thread_id
-        self.thread_cache = {}
+
+        changed = False
+        if mtime:
+            metadata.mtime = mtime = int(time.time())
+            self.mtimes[idx] = (metadata.mtime // self.TS_RESOLUTION)
+            self.rank_by_date[idx] = max(
+                1, min(mtime, int(metadata.timestamp) // self.TS_RESOLUTION))
+            changed = True
+
+        if threading:
+            if metadata[metadata.OFS_PARENT_ID] in (None, 0, idx):
+                metadata.parent_id = self._get_parent_id(idx, metadata)
+                changed = True
+            if metadata[metadata.OFS_THREAD_ID] in (None, 0, idx):
+                changed = self._add_to_thread(idx, metadata) or changed
+
+            self.thread_ids[idx] = metadata.thread_id
+            self.thread_cache = {}
+
+        return changed
 
     def set(self, key, metadata, **kwargs):
         if not isinstance(metadata, Metadata):
             raise ValueError('Need instance of Metadata')
-        # FIXME:
-        #   If we are updating an existing entry, we might be upgrading a
-        #   ghost to a real message and might need to adjust thread IDs,
-        #   if we ourselves have a parent.
-        idx = super().set(key, metadata, **kwargs)
-        self._rank(idx, metadata)
-        return idx
+        try:
+            idx = self.key_to_index(key)
+        except KeyError:
+            return self.append(metadata, keys=[key], **kwargs)
+
+        rerank = True
+        if 'rerank' in kwargs:
+            rerank = kwargs.get('rerank')
+            del kwargs['rerank']
+        if rerank:
+            self._rank(idx, metadata)
+        return super().set(idx, metadata, **kwargs)
 
     def update_or_add(self, metadata):
         """
@@ -245,8 +311,13 @@ class MetadataStore(RecordStore):
         if kwargs.get('keys') is None:
             msgid = metadata.get_raw_header('Message-Id')
             kwargs['keys'] = [msgid] if msgid else None
+
+        # FIXME: This almost always writes twice, because of the ranking.
+        #        It would be nice if that were not the case!
         idx = super().append(metadata, **kwargs)
-        self._rank(idx, metadata)
+        if self._rank(idx, metadata):
+            super().set(idx, metadata)
+
         return idx
 
     def get(self, key, **kwargs):
@@ -300,6 +371,20 @@ class MetadataStore(RecordStore):
         except (IndexError, KeyError):
             return (0, idx)
 
+    def thread_sorting_keyfunc(self, key):
+        """
+        For use with [].sort(key=...)
+        """
+        idx = 0
+        try:
+            idx = self.key_to_index(key)
+            return (self.thread_ids[idx], self.rank_by_date[idx], idx)
+        except (IndexError, KeyError):
+            try:
+                return (idx, self.rank_by_date[idx], idx)
+            except (IndexError, KeyError):
+                return (idx, idx, idx)
+
 
 if __name__ == '__main__':
     import random, sys
@@ -313,7 +398,7 @@ if __name__ == '__main__':
     ms = MetadataStore('/home/bre/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
     t0 = time.time()
     tcount = count = 0
-    stop = 40000 if len(sys.argv) < 2 else int(sys.argv[1])
+    stop = 4000 if len(sys.argv) < 2 else int(sys.argv[1])
     for dn in fs.info(b'/home/bre/Mail', details=True)['contents']:
       if tcount > stop:
         break
@@ -331,16 +416,19 @@ if __name__ == '__main__':
           if tcount > stop:
             break
 
-    t0 = time.time()
-    which = ms[random.randint(0, len(ms))]
-    #print('%s' % which)
-    print(' * %d: %s' % (which.idx, which.get_raw_header('Subject')))
-    print(' * thread_id=%d mtime=%d' % (which.thread_id, which.mtime))
-    t1 = time.time()
-    for (i, tid) in ms.get_thread_idxs(which.thread_id):
-        print('%d/%d: %s' % (i, tid, ms[i].get_raw_header('Subject')))
-    t2 = time.time()
-    print(' * Navigated thread in %.4fs (%.4f, %.4f)' % (t2-t0, t1-t0, t2-t1))
+    while True:
+        t0 = time.time()
+        which = ms[random.randint(0, len(ms))]
+        print(' * %d: %s' % (which.idx, which.get_raw_header('Subject')))
+        print('   * thread_id=%d mtime=%d siblings=%s'
+            % (which.thread_id, which.mtime, ms[which.thread_id].more.get('thread')))
+        t1 = time.time()
+        for (i, tid) in ms.get_thread_idxs(which.thread_id):
+            print('%d/%d: %s' % (i, tid, ms[i].get_raw_header('Subject')))
+        t2 = time.time()
+        print('   * Navigated thread in %.4fs (%.4f, %.4f)' % (t2-t0, t1-t0, t2-t1))
+        if which.thread_id != which.idx:
+            break
 
     ms = MetadataStore('/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
     ms.delete_everything(True, False, True)
@@ -360,8 +448,8 @@ To: bre@example.org
 Subject: Sure, sure
 """
     foo_ptr = Metadata.PTR(0, b'/tmp/foo', 0)
-    n,i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, {'thing': 'stuff', 'a': 'b'}))
-    n,i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, {'wink': 123, 'a': 'c'}))
+    n,i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, 0, 0, {'thing': 'stuff', 'a': 'b'}))
+    n,i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, 0, 0, {'wink': 123, 'a': 'c'}))
     ms.append(Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net'))
     ms.append(Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net'))
     ms[100000] = Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net')
@@ -374,10 +462,10 @@ Subject: Sure, sure
     assert(ms[i1].more['a'] == 'c')
     assert('<202109010003.181031O6020234@example.org>' in ms)
     assert('<202109010003.181031O6020234@example.com>' not in ms)
-    assert(ms.rank_by_date[1000000] == (t1M // 30))
+    assert(ms.rank_by_date[1000000] == (t1M // MetadataStore.TS_RESOLUTION))
     assert(len(list(ms.rank_by_date.keys())) == 6)  # Including ghost for i1
 
-    times = set([t1M // 30])
+    times = set([t1M //  MetadataStore.TS_RESOLUTION])
     assert(len(list(ms.rank_by_date.items(grep=times.__contains__))) == 1)
 
     del ms[100000]

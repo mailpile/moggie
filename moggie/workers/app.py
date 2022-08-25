@@ -17,12 +17,43 @@ import os
 import sys
 import traceback
 
+from upagekite.proto import asyncio, fuzzy_sleep_ms
 from upagekite.httpd import HTTPD, url, async_url
 from upagekite.web import process_post, http_require, access_requires
 from upagekite.websocket import websocket, ws_broadcast
 
+from ..app.cli import CLI_COMMANDS
 from ..app.core import AppCore
 from .public import PublicWorker, RequestTimer
+
+
+@async_url('/cli/*')
+@http_require(secure_transport=True, csrf=False)
+@process_post(max_bytes=2048000, _async=True)
+async def web_cli(req_env):
+     conn = req_env['conn']
+     frame = req_env['frame']
+
+     args = req_env.request_path.split('/')
+     while args.pop(0) != 'cli':
+         pass
+     if not args or (args == ['']):
+         args = ['help']
+
+     command = CLI_COMMANDS.get(args.pop(0))
+     if not hasattr(command, 'WebRunnable'):
+         return {'code': 404, 'msg': 'No such command'}
+
+     if 'argz' in req_env.post_vars:
+         argz = req_env.post_vars.get('argz')
+         if isinstance(argz, dict):
+             argz = argz['value']
+         if argz:
+             args.extend(argz.split('\0')[:-1])
+
+     cmd = await command.WebRunnable(req_env['worker'], frame, conn, args)
+     asyncio.get_event_loop().create_task(cmd.web_run())
+     return {'mimetype': cmd.mimetype, 'eof': False}
 
 
 @async_url('/')
@@ -190,6 +221,14 @@ class AppWorker(PublicWorker):
             self.auth_token = self.call('rpc/get_access_token')['token']
             self.set_rpc_authorization('Bearer %s' % self.auth_token)
         return conn
+
+    async def async_jmap(self, request_obj):
+        if self._sock:
+            return await self.app.api_jmap(
+                None, None, request_obj, internal=True)
+
+        # FIXME: It would be nice if this were async too...
+        return self.call('rpc/jmap', request_obj)
 
     def jmap(self, request_obj):
         return self.call('rpc/jmap', request_obj)

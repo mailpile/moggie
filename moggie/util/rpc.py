@@ -95,7 +95,7 @@ class BridgeWorker:
         self.pending.append(message)
 
     def send_json(self, data):
-        self.pending.append(json.dumps(data))
+        self.pending.append(json.dumps(data, indent=None, separators=(',',':')))
 
     async def on_close(self, exc):
         # FIXME: OSError probably means our backend went away and is

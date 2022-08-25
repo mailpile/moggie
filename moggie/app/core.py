@@ -8,14 +8,15 @@ import time
 import sys
 
 from ..config import APPNAME_UC, APPVER, AppConfig
+from ..jmap.core import JMAPSessionResource
+from ..jmap.requests import *
+from ..jmap.responses import *
 from ..storage.files import FileStorage
+from ..util.dumbcode import dumb_decode
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorker
 from ..workers.search import SearchWorker
-from ..jmap.core import JMAPSessionResource
-from ..jmap.requests import *
-from ..jmap.responses import *
 
 
 async def async_run_in_thread(method, *m_args, **m_kwargs):
@@ -265,17 +266,24 @@ main app worker. Hints:
 
     async def api_jmap_search(self, conn_id, access, jmap_request):
         # FIXME: Make sure access allows requested contexts
-        #        Make sure we set tag_namespace based on the context
+        ctx = jmap_request['context']
+        if ctx not in self.config.contexts:
+            raise ValueError('Invalid context: %s' % ctx)
+        tag_namespace = self.config.get(ctx, 'tag_namespace', fallback=None)
+
         def perform_search():
             return list(self.metadata.with_caller(conn_id).metadata(
                 self.search.with_caller(conn_id).search(
                         jmap_request['terms'],
-                        tag_namespace=jmap_request.get('tag_namespace', None),
+                        tag_namespace=tag_namespace,
                         mask_deleted=jmap_request.get('mask_deleted', True)
                     )['hits'],
                 sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
+                only_ids=jmap_request.get('only_ids', False),
+                threads=jmap_request.get('threads', False),
                 skip=jmap_request['skip'],
-                limit=jmap_request['limit']))
+                limit=jmap_request['limit'],
+                raw=True))
 
         jmap_request['skip'] = jmap_request.get('skip') or 0
         jmap_request['limit'] = jmap_request.get('limit', None)
@@ -287,11 +295,23 @@ main app worker. Hints:
 
     async def api_jmap_counts(self, conn_id, access, jmap_request):
         # FIXME: Make sure access allows requested contexts
-        #        Make sure we set tag_namespace based on the context
-        # FIXME: Actually search/count! Async, in a thread, gathering the
-        #        results may take time.
-        if self.metadata and self.search:
-            return ResponseCounts(jmap_request, {})
+        ctx = jmap_request['context']
+        if ctx not in self.config.contexts:
+            raise ValueError('Invalid context: %s' % ctx)
+        tag_namespace = self.config.get(ctx, 'tag_namespace', fallback=None)
+
+        def perform_counts():
+            counts = {}
+            for terms in jmap_request['terms_list']:
+                result = self.search.with_caller(conn_id).search(terms,
+                    tag_namespace=tag_namespace,
+                    mask_deleted=jmap_request.get('mask_deleted', True))
+                counts[terms] = dumb_decode(result['hits']).count()
+            return counts
+
+        if self.search:
+            counts = await async_run_in_thread(perform_counts)
+            return ResponseCounts(jmap_request, counts)
         else:
             return ResponsePleaseUnlock(jmap_request)
 
@@ -365,7 +385,7 @@ main app worker. Hints:
         else:
             return ResponsePleaseUnlock(jmap_request)
 
-    async def api_jmap(self, conn_id, access, client_request):
+    async def api_jmap(self, conn_id, access, client_request, internal=False):
         # The JMAP API sends multiple requests in a blob, and wants some magic
         # interpolation as well. Where do we implement that? Is there a lib we
         # should depend upon? DIY?
@@ -401,6 +421,9 @@ main app worker. Hints:
             result = await self.api_jmap_changepass(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestPing:
             result = ResponsePing(jmap_request)
+
+        if internal:
+            return result
 
         if result is not None:
             code, json_result = 200, json.dumps(result)

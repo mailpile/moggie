@@ -33,6 +33,10 @@ class SearchWorker(BaseWorker):
         'AND': IntSet.And,
         'SUB': IntSet.Sub}
 
+    @classmethod
+    def Connect(cls, status_dir):
+        return cls(status_dir, None, None, None).connect(autostart=False)
+
     def __init__(self, status_dir, engine_dir, maxint, encryption_keys,
             name=KIND, defaults=None, notify=None, log_level=logging.ERROR):
 
@@ -54,6 +58,11 @@ class SearchWorker(BaseWorker):
         self.defaults = defaults
         self.maxint = maxint
         self._engine = None
+
+    def quit(self, *args, **kwargs):
+        with self.change_lock:
+            with self._engine.lock:
+                super().quit(*args, **kwarg)
 
     def _main_httpd_loop(self):
         from ..search.engine import SearchEngine, explain_ops
@@ -86,8 +95,8 @@ class SearchWorker(BaseWorker):
         strop_kw_list = [[self._OP_STR_MAP(op), kw] for op, kw in op_kw_list]
         return self.call('mutate', mset, strop_kw_list)
 
-    def compact(self, full=False):
-        return self.call('compact', full, None)
+    def compact(self, full=False, callback_chain=None):
+        return self.call('compact', full, callback_chain)
 
     def update_terms(self, terms):
         return self.call('update_terms', terms)

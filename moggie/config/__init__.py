@@ -198,6 +198,7 @@ class AppConfig(ConfigParser):
 
     INITIAL_SETTINGS = [
        (GENERAL, 'config_backups', '10'),
+       (GENERAL, 'default_cli_context', 'Context 0'),
        (GENERAL, 'log_level', '40')]
 
     PREAMBLE = """\
@@ -229,6 +230,7 @@ class AppConfig(ConfigParser):
         global LOGDIR
         LOGDIR = os.path.join(profile_dir, 'logs')
 
+        self.profile_dir = profile_dir
         self.filepath = os.path.join(profile_dir, 'config.rc')
         self.backups = os.path.join(profile_dir, 'backups')
         super().__init__(
@@ -537,15 +539,14 @@ class AppConfig(ConfigParser):
         section_items = sorted(list(section_items), key=sort_key)
         return super()._write_section(fp, section_name, section_items, delimiter)
 
-    def set_private(self, section, option, value=None, save=True):
-        if value is not None:
-            value = '::' + dumb_encode_asc(value, aes_key_iv=self._aes_key_iv())
+    def set_private(self, section, option, value=None, save=True, delete=True):
         if self.key_desc(section, option) not in self.keep_private:
             self.keep_private.add(self.key_desc(section, option))
-        if value is None:
+        if value is not None:
+            encoded = '::' + dumb_encode_asc(value, aes_key_iv=self._aes_key_iv())
+            super().set(section, option, value=encoded)
+        elif delete and option in self[section]:
             del self[section][option]
-        else:
-            super().set(section, option, value=value)
         if save:
             self.save()
 

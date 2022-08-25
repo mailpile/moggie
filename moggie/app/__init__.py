@@ -1,6 +1,7 @@
 import logging
 import os
 import sys
+import time
 
 
 class Nonsense(Exception):
@@ -26,7 +27,7 @@ def CommandStart(wd, args):
         sys.exit(1)
 
 
-def CommandStop(wd, args):
+def CommandStop(wd, args, exit=True):
     from ..workers.app import AppWorker
     worker = AppWorker.FromArgs(wd, args[0:])
 
@@ -34,9 +35,21 @@ def CommandStop(wd, args):
         result = worker.quit()
         if result and result.get('quitting'):
             sys.stderr.write('Shutting down %s.\n' % worker.KIND)
-            sys.exit(0)
+            if exit:
+                sys.exit(0)
+            else:
+                return
     sys.stderr.write('Not running? (%s)\n' % worker.KIND)
     sys.exit(1)
+
+
+def CommandRestart(wd, args):
+    try:
+        CommandStop(wd, args, exit=False)
+        time.sleep(1)
+    except:
+        pass
+    CommandStart(wd, args)
 
 
 def CommandTUI(wd, sys_args, tui_args, send_args):
@@ -109,6 +122,7 @@ def CommandMuttalike(wd, args):
 
 COMMANDS = {
     'default': CommandMuttalike,
+    'restart': CommandRestart,
     'start': CommandStart,
     'stop': CommandStop,
     'tui': CommandTUI}
@@ -136,8 +150,10 @@ def Main(args):
     command = COMMANDS.get(command)
     if command is not None:
         if hasattr(command, 'Command'):
-            command.Command(wd, args)
+            result = command.Command(wd, args)
         else:
-            command(wd, args)
+            result = command(wd, args)
+        if result is False:
+            sys.exit(1)
     else:
         COMMANDS['help'](wd, args)

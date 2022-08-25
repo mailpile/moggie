@@ -1,6 +1,9 @@
 # TODO: add a status command, to check what is live?
 
+import asyncio
+import logging
 import os
+import sys
 
 from .command import Nonsense, CLICommand
 
@@ -29,33 +32,98 @@ class CommandUnlock(CLICommand):
 
         from ...jmap.requests import RequestUnlock
         self.app.send_json(RequestUnlock(self.get_passphrase()))
-        msg = await self.await_messages('unlocked', 'notification')
-        if msg and msg.get('message'):
-            print(msg['message'])
-            return (msg['prototype'] == 'unlocked')
-        else:
-            print('Unknown error (%s) or timed out.' % msg)
-            return False
+        while True:
+            msg = await self.await_messages('unlocked', 'notification')
+            if msg and msg.get('message'):
+                print(msg['message'])
+                return (msg['prototype'] == 'unlocked')
+            else:
+                print('Unknown error (%s) or timed out.' % msg)
+                return False
 
 
 class CommandImport(CLICommand):
+    """# moggie import [options] </path/to/mailbox1> [</path/to/mbx2> [...]]
+
+    Scan the named mailboxes for e-mail, adding any found messages to the
+    search engine. Re-importing a mailbox will check for updates/changes to
+    the contents.
+
+    Options:
+      --context=ctx  Specify the context for the imported messages
+      --ifnewer=ts   Ignore folders and files unchanged since the timestamp
+      --recurse      Search the named paths recursively for mailboxes
+      --compact      Compact the search engine after importing
+      --watch        Add these to our list of locations to watch for mail
+      --old          Treat messages as "old": do not add to inbox etc.
+
+    """
     SEARCH = ('in:incoming',)
+    OPTIONS = {
+        '--context=':  ['default'],
+        '--ifnewer=':  [],
+        '--ignore=':   ['.', '..', 'cur', 'new', 'tmp', '.notmuch'],
+        '--recurse':   [],
+        '--compact':   [],
+        '--watch':     [],
+        '--dryrun':    [],
+        '--old':       []}
 
     def configure(self, args):
+        self.newest = 0
         self.paths = []
-        while args and ((args[-1] in self.SEARCH) or os.path.exists(args[-1])):
-            self.paths.append(os.path.abspath(args.pop(-1)))
-        self.paths.reverse()
-        if not self.paths:
-            raise Nonsense('No valid paths found!')
-        return args
+        args = self.strip_options(args)
+        recurse = bool(self.options['--recurse'])
+
+        newer = 0
+        if self.options['--ifnewer=']:
+            newer = max(int(i) for i in self.options['--ifnewer='])
+        def _is_new(path):
+            if not newer:
+                return True
+            for suffix in ('', os.path.sep + 'cur', os.path.sep + 'new'):
+                try:
+                    ts = int(os.path.getmtime(path+suffix))
+                    self.newest = max(self.newest, ts)
+                    if ts > newer:
+                        return True
+                except (OSError, FileNotFoundError):
+                    pass
+            return False
+
+        def _recurse(path):
+            yield os.path.abspath(path)
+            if os.path.isdir(path):
+                for p in os.listdir(path):
+                    if p not in self.options['--ignore=']:
+                        yield from _recurse(os.path.join(path, p))
+
+        for arg in args:
+            if arg in self.SEARCH:
+                self.paths.append(arg)
+            else:
+                if not os.path.exists(arg):
+                    raise Nonsense('File or path not found: %s' % arg)
+                if not os.path.sep in arg:
+                    arg = os.path.join('.', arg)
+                if recurse:
+                    for path in _recurse(arg):
+                        if _is_new(path):
+                            self.paths.append(path)
+                else:
+                    fullpath = os.path.abspath(arg)
+                    if _is_new(fullpath):
+                        self.paths.append(fullpath)
+
+        self.paths.sort()
+        return []
 
     async def run(self):
         from ...config import AppConfig
         from ...jmap.requests import RequestMailbox, RequestSearch, RequestAddToIndex
 
+        requests = []
         for path in self.paths:
-            print('Adding %s' % path)
             if path in self.SEARCH:
                 request_obj = RequestSearch(
                     context=AppConfig.CONTEXT_ZERO,
@@ -64,10 +132,54 @@ class CommandImport(CLICommand):
                 request_obj = RequestMailbox(
                     context=AppConfig.CONTEXT_ZERO,
                     mailbox=path)
-            self.worker.jmap(RequestAddToIndex(
+
+            requests.append((path, RequestAddToIndex(
                 context=AppConfig.CONTEXT_ZERO,
                 search=request_obj,
-                force=(path in self.SEARCH)))
+                force=(path in self.SEARCH))))
+
+        if not requests:
+            return True
+
+        if self.options['--dryrun']:
+            for r in requests:
+                print('import %s' % (r[0],))
+            return True
+
+        def _next():
+            path, request_obj = requests.pop(0)
+            sys.stdout.write('[import] Processing %s\n' % path)
+            self.worker.jmap(request_obj)
+
+        _next()
+        while True:
+            try:
+                msg = await self.await_messages('notification', timeout=120)
+                if msg and msg.get('message'):
+                    sys.stdout.write('\33[2K\r' + msg['message'])
+                    if msg.get('data', {}).get('pending') == 0:
+                        sys.stdout.write('\n')
+                        if requests:
+                            _next()
+                        else:
+                            if self.options['--compact']:
+                                self.metadata_worker().compact(full=True)
+                                self.search_worker().compact(full=True)
+                            return True
+                else:
+                    print('\nUnknown error (%s) or timed out.' % msg)
+                    return False
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                if requests:
+                    print('\n[CTRL+C] Will exit after this import. Interrupt again to force quit.')
+                    requests = []
+                else:
+                    print('\n[CTRL+C] Exiting. Running imports may complete in the background.')
+                    return False
+            except:
+                logging.exception('Woops')
+                raise
+        return True
 
 
 def CommandEnableEncryption(wd, args):

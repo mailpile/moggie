@@ -224,6 +224,9 @@ class IntSet:
                     if (u64 & (1 << j)):
                         yield (i * self.bits) + j
 
+    def count(self):
+        return sum(1 for hit in self)
+
 
 register_dumb_decoder(IntSet.ENC_ASC, IntSet.DumbDecode)
 
