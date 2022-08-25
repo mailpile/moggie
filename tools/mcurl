@@ -1,5 +1,12 @@
 #!/bin/bash
 APP=${APP:-app}
+if [ $APP = "public" ]; then
+    APP=app
+    URL=$(cut -f1-3 -d/ ~/.local/share/Moggie/default/workers/$APP.url)
+else
+    URL=$(cat ~/.local/share/Moggie/default/workers/$APP.url)
+fi
+
 CTYPE=${CTYPE:-application/json}
 if [ "$2" != "" ]; then
     FUNC="$1"
@@ -12,5 +19,5 @@ shift
 
 curl -s "$@" -d "$JSON" \
     -H "Content-Type: $CTYPE" \
-    "$(cat ~/.local/share/Moggie/default/workers/$APP.url)/$FUNC"
+    "$URL/$FUNC"
 echo
