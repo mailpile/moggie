@@ -98,7 +98,7 @@ class MessagePart(dict):
             return self
         self['_PARTS'] = parts = []
 
-        ct, ctp = self.get('content-type', ['text/plain', {}])
+        ct, ctp = (self.get('content-type') or ('text/plain', {}))
         body_beg = self.hend + 2*len(self.eol)
         body_end = len(self.msg_bin)
         parts.append({
@@ -107,7 +107,7 @@ class MessagePart(dict):
             '_BYTES': [0, body_beg, body_end],
             '_DEPTH': 0})
 
-        if ct.startswith('multipart/'):
+        if (ct and ct.startswith('multipart/')) and ('boundary' in ctp):
             parts[0]['_PARTS'] = 0
             begs, ends = self._find_parts(ctp['boundary'])
             for i, (beg, end) in enumerate(zip(begs, ends)):
@@ -139,7 +139,7 @@ class MessagePart(dict):
                 else:
                     part['content-type'] = ['message/x-mime-part', {}]
 
-        elif ct == 'text/plain':
+        elif ct in ('text/plain', '', None):
             # FIXME: Search text/plain parts for:
             #   - Quoted content
             #   - Forwarded messages
