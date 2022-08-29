@@ -154,12 +154,12 @@ class MetadataStore(RecordStore):
             decoding_kwargs=decoding_kwargs,
             encoding_kwargs=encoding_kwargs)
 
-        self.thread_cache = {}
         if 0 not in self:
             self[0] = Metadata.ghost('<internal-ghost-zero@moggie>')
         self.rank_by_date = IntColumn(os.path.join(workdir, 'timestamps'))
         self.thread_ids = IntColumn(os.path.join(workdir, 'threads'))
         self.mtimes = IntColumn(os.path.join(workdir, 'mtimes'))
+        self.thread_cache = None
 
     def delete_everything(self, *args):
         super().delete_everything(*args)
@@ -258,7 +258,7 @@ class MetadataStore(RecordStore):
                 changed = self._add_to_thread(idx, metadata) or changed
 
             self.thread_ids[idx] = metadata.thread_id
-            self.thread_cache = {}
+            self.thread_cache = None
 
         return changed
 
@@ -352,13 +352,27 @@ class MetadataStore(RecordStore):
         del self.rank_by_date[idx]
         del self.thread_ids[idx]
         del self.mtimes[idx]
+        self.thread_cache = None
+
+    def _make_thread_cache(self):
+        pairs = [(t, i) for i, t in self.thread_ids.items()]
+        pairs.sort()
+        cur = [-1]
         self.thread_cache = {}
+        for t, i in pairs:
+            if t != cur[0]:
+                if len(cur) > 1:
+                    self.thread_cache[cur[0]] = cur
+                cur = [t]
+            if i != t:
+                cur.append(i)
+        if len(cur) > 1:
+            self.thread_cache[cur[0]] = cur
 
     def get_thread_idxs(self, thread_id):
-        if thread_id not in self.thread_cache:
-            self.thread_cache[thread_id] = list(
-                self.thread_ids.items(grep=thread_id.__eq__))
-        return self.thread_cache[thread_id]
+        if self.thread_cache is None:
+            self._make_thread_cache()
+        return self.thread_cache.get(thread_id, [thread_id])
 
     def date_sorting_keyfunc(self, key):
         """
@@ -423,8 +437,8 @@ if __name__ == '__main__':
         print('   * thread_id=%d mtime=%d siblings=%s'
             % (which.thread_id, which.mtime, ms[which.thread_id].more.get('thread')))
         t1 = time.time()
-        for (i, tid) in ms.get_thread_idxs(which.thread_id):
-            print('%d/%d: %s' % (i, tid, ms[i].get_raw_header('Subject')))
+        for i in ms.get_thread_idxs(which.thread_id):
+            print('%d/%d: %s' % (i, which.thread_id, ms[i].get_raw_header('Subject')))
         t2 = time.time()
         print('   * Navigated thread in %.4fs (%.4f, %.4f)' % (t2-t0, t1-t0, t2-t1))
         if which.thread_id != which.idx:

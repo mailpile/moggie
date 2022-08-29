@@ -38,7 +38,7 @@ class CLICommand:
     @classmethod
     async def WebRunnable(cls, app, frame, conn, args):
         def reply(msg, eof=False):
-            conn.sync_reply(frame, bytes(msg, 'utf-8'), eof=eof)
+            return conn.sync_reply(frame, bytes(msg, 'utf-8'), eof=eof)
         try:
             cmd_obj = cls(app.profile_dir, args, appworker=app, connect=False)
             cmd_obj.write_reply = reply

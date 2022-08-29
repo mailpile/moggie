@@ -56,6 +56,10 @@ class CommandSearch(CLICommand):
         if md is not None:
             yield ('%s', Metadata(*md).parsed())
 
+    def as_threads(self, thread):
+        if thread is not None:
+            yield ('%s', 'thread:%8.8d' % thread['thread'])
+
     def as_summary(self, thread):
         if thread is not None and thread['hits']:
             msgs = dict((i[1], Metadata(*i).parsed())
@@ -96,10 +100,6 @@ class CommandSearch(CLICommand):
             md = Metadata(*md)
             yield ('%s', 'id:%8.8d' % md.idx)
 
-    def as_threads(self, md):
-        if md is not None:
-            yield ('%s', 'thread:%8.8d' % Metadata(*md).thread_id)
-
     def as_tags(self, md):
         if md is not None:
             if False:
@@ -139,7 +139,7 @@ class CommandSearch(CLICommand):
             ']' if last else ',']))
 
     def get_formatter(self):
-        output = self.options['--output='][-1]
+        output = (self.options['--output='] or ['summary'])[-1]
         if output == 'summary':
             return self.as_summary
         elif output == 'threads':
@@ -164,12 +164,8 @@ class CommandSearch(CLICommand):
             return self.emit_result_text
         raise Nonsense('Unknown output format: %s' % fmt)
 
-    async def run(self):
-        from ...config import AppConfig
+    def get_query(self):
         from ...jmap.requests import RequestSearch
-
-        formatter = self.get_formatter()
-        emitter = self.get_emitter()
 
         query = RequestSearch(
             context=self.context(),
@@ -179,12 +175,27 @@ class CommandSearch(CLICommand):
             query['skip'] = int(self.options['--offset='][-1])
         else:
             query['skip'] = 0
+
+        if self.options['--output='][-1] == 'summary':
+            query['threads'] = True
+            query['only_ids'] = False
+            self.batch = 2000
+        elif self.options['--output='][-1] == 'threads':
+            query['threads'] = True
+            query['only_ids'] = True
+
+        return query
+
+    async def run(self):
+        from ...config import AppConfig
+
+        formatter = self.get_formatter()
+        emitter = self.get_emitter()
+        query = self.get_query()
+
         limit = None
         if self.options.get('--limit=', [None])[-1]:
             limit = int(self.options['--limit='][-1])
-        if self.options['--output='][-1] == 'summary':
-            query['threads'] = True
-            self.batch = 250
 
         prev = None
         first = True
@@ -195,20 +206,25 @@ class CommandSearch(CLICommand):
             prev = result
         await emitter(prev, first=first, last=True)
 
-    async def results(self, query, limit, formatter):
-        while limit is None or limit > 0:
-            query['limit'] = min(self.batch, limit or self.batch)
-            msg = await self.worker.async_jmap(query)
-            if 'emails' not in msg:
-                raise Nonsense('Search failed. Is the app locked?')
+    async def perform_query(self, query, batch, limit):
+        query['limit'] = min(batch, limit or batch)
+        msg = await self.worker.async_jmap(query)
+        if 'emails' not in msg:
+            raise Nonsense('Search failed. Is the app locked?')
 
-            emails = msg.get('emails') or []
-            count = len(emails)
+        return msg.get('emails') or []
+
+    async def results(self, query, limit, formatter):
+        batch = self.batch // 10
+        while limit is None or limit > 0:
+            results = await self.perform_query(query, batch, limit)
+            batch = min(self.batch, int(batch * 1.2))
+            count = len(results)
             if limit is not None:
                 limit -= count
 
-            for e in emails:
-                for fd in formatter(e):
+            for r in results:
+                for fd in formatter(r):
                     yield fd
 
             query['skip'] += count

@@ -1,3 +1,4 @@
+import copy
 import json
 import logging
 import os
@@ -149,7 +150,7 @@ class MetadataWorker(BaseWorker):
         if not isinstance(hits, (list, IntSet)):
             hits = list(dumb_decode(hits))
         if not hits:
-            self.reply_json([])
+            return self.reply_json([])
 
         if threads:
             result = self._md_threaded(hits, only_ids, sort_order)
@@ -164,13 +165,13 @@ class MetadataWorker(BaseWorker):
             if only_ids:
                 for grp in result:
                     del grp['_ts']
-                    grp['messages'] = [i
-                        for i,t in self._metadata.get_thread_idxs(grp['thread'])]
+                    tid = grp['thread']
+                    grp['messages'] = self._metadata.get_thread_idxs(tid)
             else:
                 for grp in result:
                     del grp['_ts']
                     grp['messages'] = [self._metadata.get(i, default=i)
-                        for i,t in self._metadata.get_thread_idxs(grp['thread'])]
+                        for i in self._metadata.get_thread_idxs(grp['thread'])]
         elif not only_ids:
             result = [self._metadata.get(i, default=i) for i in result]
 
