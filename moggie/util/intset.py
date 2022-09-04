@@ -224,6 +224,13 @@ class IntSet:
                     if (u64 & (1 << j)):
                         yield (i * self.bits) + j
 
+    def __bool__(self):
+        for i in range(0, len(self.npa)):
+            u64 = int(self.npa[i])
+            if u64:
+                return True
+        return False
+
     def count(self):
         return sum(1 for hit in self)
 
@@ -258,6 +265,7 @@ if __name__ == "__main__":
     assert(len(is1.tobytes()) == (is1.DEF_INIT * is1.bits // 8))
 
     a100 = IntSet.All(100)
+    assert(bool(a100))
     assert(99 in a100)
     assert(100 not in a100)
     assert(len(list(a100)) == 100)

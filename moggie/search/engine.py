@@ -50,7 +50,7 @@ def explain_ops(ops):
 class PostingListBucket:
     """
     A PostingListBucket is an unsorted sequence of binary packed
-    (keyword, IntSet) pairs.
+    (keyword, comment, IntSet) tuples.
     """
     def __init__(self, blob, deleted=None, compress=None):
         self.blob = blob
@@ -60,40 +60,57 @@ class PostingListBucket:
     def __iter__(self):
         beg = 0
         while beg < len(self.blob):
-            kw_len, iset_len = struct.unpack('II', self.blob[beg:beg+8])
-            end = beg + 8 + kw_len + iset_len
-            kw = self.blob[beg+8:beg+8+kw_len]
+            kw_ln, c_ln, iset_ln = struct.unpack('<HHI', self.blob[beg:beg+8])
+            yield self.blob[beg+8:beg+8+kw_ln]
+            beg += 8 + kw_ln + c_ln + iset_ln
+
+    def items(self, decode=True):
+        beg = 0
+        decode = dumb_decode if decode else (lambda b: b)
+        while beg < len(self.blob):
+            kw_ln, c_ln, iset_ln = struct.unpack('<HHI', self.blob[beg:beg+8])
+            cbeg = beg + 8 + kw_ln
+            end = cbeg + c_ln + iset_ln
+
+            kw = self.blob[beg+8:cbeg]
+            bcomment = self.blob[cbeg:cbeg+c_ln]
+            iset_blob = self.blob[cbeg+c_ln:end]
+            yield (kw, bcomment, decode(iset_blob))
+
             beg = end
-            yield kw
 
     def _find_iset(self, kw):
         bkeyword = kw if isinstance(kw, bytes) else bytes(kw, 'utf-8')
 
         beg = 0
         iset = None
+        bcomment = b''
         chunks = []
         while beg < len(self.blob):
-            kw_len, iset_len = struct.unpack('II', self.blob[beg:beg+8])
-            end = beg + 8 + kw_len + iset_len
+            kw_ln, c_ln, iset_ln = struct.unpack('<HHI', self.blob[beg:beg+8])
+            cbeg = beg + 8 + kw_ln
+            end = cbeg + c_ln + iset_ln
 
-            kw = self.blob[beg+8:beg+8+kw_len]
+            kw = self.blob[beg+8:cbeg]
             if kw != bkeyword:
                 chunks.append(self.blob[beg:end])
             else:
-                iset_blob = self.blob[beg+8+kw_len:end]
+                bcomment = self.blob[cbeg:cbeg+c_ln]
+                iset_blob = self.blob[cbeg+c_ln:end]
                 iset = dumb_decode(iset_blob)
 
             beg = end
 
-        return chunks, bkeyword, iset
+        return chunks, bkeyword, bcomment, iset
 
     def remove(self, keyword):
-        chunks, bkeyword, iset = self._find_iset(keyword)
+        chunks, bkeyword, bcomment, iset = self._find_iset(keyword)
         if iset is not None:
             self.blob = b''.join(chunks)
+        return bcomment, iset
 
-    def add(self, keyword, *ints):
-        chunks, bkeyword, iset = self._find_iset(keyword)
+    def add(self, keyword, ints, comment=b''):
+        chunks, bkeyword, bcomment, iset = self._find_iset(keyword)
 
         if iset is None:
             iset = IntSet()
@@ -101,16 +118,37 @@ class PostingListBucket:
             iset |= ints
         if self.deleted is not None:
             iset -= self.deleted
+
+        self.set(keyword, iset, bcomment, bkeyword, chunks)
+
+    def set_comment(self, keyword, comment):
+        bcomment = comment
+        if not isinstance(bcomment, bytes):
+            bcomment = bytes(bcomment, 'utf-8')
+        chunks, bkeyword, ocomment, iset = self._find_iset(keyword)
+        self.set(keyword, iset, bcomment, bkeyword, chunks)
+
+    def set(self, keyword, iset, comment=b'', bkeyword=None, chunks=None):
+        bcomment = b''
+        if not (bkeyword and chunks):
+            chunks, bkeyword, bcomment, _ = self._find_iset(keyword)
+
+        bcomment = comment or bcomment or b''
+        if not isinstance(bcomment, bytes):
+            bcomment = bytes(bcomment, 'utf-8')
+
         iset_blob = dumb_encode_bin(iset, compress=self.compress)
-
-        chunks.append(struct.pack('II', len(bkeyword), len(iset_blob)))
+        chunks.append(
+            struct.pack('<HHI', len(bkeyword), len(bcomment), len(iset_blob)))
         chunks.append(bkeyword)
+        chunks.append(bcomment)
         chunks.append(iset_blob)
-
         self.blob = b''.join(chunks)
 
-    def get(self, keyword):
-        chunks, bkeyword, iset = self._find_iset(keyword)
+    def get(self, keyword, with_comment=False):
+        chunks, bkeyword, bcomment, iset = self._find_iset(keyword)
+        if with_comment:
+            return (bcomment, iset)
         return iset
 
 
@@ -199,6 +237,27 @@ class SearchEngine:
     def close(self):
         with self.lock:
             return self.records.close()
+
+    def iter_tags(self, tag_namespace=''):
+        if tag_namespace:
+            tag_namespace = '@' + tag_namespace
+        for idx in range(self.l1_begin, self.l2_begin):
+            with self.lock:
+                if idx not in self.records:
+                    return
+                plb = PostingListBucket(self.records[idx])
+                if not tag_namespace:
+                    for kw, comment, iset in plb.items(decode=False):
+                        kw = str(kw, 'utf-8')
+                        if (kw[:3] == 'in:') and (kw[3] != '@'):
+                            yield (kw, (comment, dumb_decode(iset)))
+                else:
+                    for kw, comment, iset in plb.items(decode=False):
+                        kw = str(kw, 'utf-8')
+                        if ((kw[:3] == 'in:') and (kw[3] != '@')
+                               and kw.endswith(tag_namespace)):
+                            kw = kw.split('@')[0]
+                            yield (kw, (comment, dumb_decode(iset)))
 
     def iter_byte_keywords(self, min_hits=1, ignore_re=None):
         for i in range(self.l2_begin, len(self.records)):
@@ -322,10 +381,10 @@ class SearchEngine:
             elif prefer_l1 and create:
                 idx = self._empty_l1_idx()
                 self.records.set_key(kw, idx)
-                self.records[idx] = IntSet()
+                self.records[idx] = b''
                 return idx
 
-            kw_hash_int = struct.unpack('I', kw_hash[:4])[0]
+            kw_hash_int = struct.unpack('<I', kw_hash[:4])[0]
             kw_hash_int %= self.config['l2_buckets']
             return kw_hash_int + self.l2_begin
 
@@ -367,26 +426,51 @@ class SearchEngine:
     def rename_l1(self, kw, new_kw, tag_namespace=''):
         kw = self._ns(kw, tag_namespace)
         new_kw = self._ns(new_kw, tag_namespace)
-        kw_pos_idx = self.records.keys[self.records.hash_key(kw)]
+        kw_pos, kw_idx = self.records.keys[self.records.hash_key(kw)]
         with self.lock:
-            self.records.set_key(new_kw, kw_pos_idx[1])
+            plb = PostingListBucket(self.records.get(kw_idx) or b'')
+            bcom, iset = plb.remove(kw)
+            plb.set(new_kw, iset, comment=bcom)
+            self.records[kw_idx] = plb.blob
+            self.records.set_key(new_kw, kw_idx)
             self.records.del_key(kw)
+
+    def rename_tag(self, tag, new_tag, tag_namespace=''):
+        return self.rename_l1(tag, new_tag, tag_namespace)
+
+    def set_tag_comment(self, tag, comment, tag_namespace=''):
+        tag = self._ns(tag, tag_namespace)
+        with self.lock:
+            idx = self.keyword_index(tag)
+            plb = PostingListBucket(self.records.get(idx) or b'')
+            plb.set_comment(tag, comment)
+            self.records[idx] = plb.blob
+
+    def get_tag(self, tag, tag_namespace=''):
+        tag = self._ns(tag, tag_namespace)
+        with self.lock:
+            idx = self.keyword_index(tag)
+            plb = PostingListBucket(self.records.get(idx) or b'')
+        return plb.get(tag, with_comment=True)
 
     def mutate(self, mset, op_kw_list, tag_namespace=''):
         op_idx_kw_list = [
-            (op, self.keyword_index(self._ns(kw, tag_namespace), create=True))
+            (op, kw, self.keyword_index(self._ns(kw, tag_namespace), create=True))
             for op, kw in op_kw_list]
 
-        for op, idx in op_idx_kw_list:
-            if idx >= self.l2_begin:
-                raise KeyError('Mutations not supported in l2')
-
+        changes = []
         with self.lock:
-            for op, idx in op_idx_kw_list:
-                iset = self.records[idx]
-                self.records[idx] = op(iset, mset)
+            for op, kw, idx in op_idx_kw_list:
+                plb = PostingListBucket(self.records.get(idx) or b'')
 
-        return {'mutations': len(op_idx_kw_list)}
+                iset = plb.get(kw)
+                oset = op(iset, mset)
+
+                plb.set(kw, oset)
+                self.records[idx] = plb.blob
+                changes.append((idx, iset, oset))
+
+        return {'mutations': len(op_idx_kw_list), 'changes': changes}
 
     def profile_updates(self, which, t0, t1, t2, t3):
         p1 = int((t1 - t0) * 1000)
@@ -406,24 +490,11 @@ class SearchEngine:
         t1 = time.time()
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
-                if idx < self.l2_begin:
-                    # These are instances of IntSet, de/serialization is done
-                    # automatically by dumbcode.
-                  try:
-                    iset = self.records[idx]
-                    iset -= keywords[kw]
-                    iset -= self.deleted
-                    self.records[idx] = iset
-                  except:
-                    logging.exception('Ugh, kw=%s idx=%s iset=%s' % (kw, idx, iset))
-                    raise
-                else:
-                    # These are instances of PostingList
-                    plb = PostingListBucket(self.records.get(idx) or b'')
-                    plb.deleted = IntSet(copy=self.deleted)
-                    plb.deleted |= keywords[kw]
-                    plb.add(kw)
-                    self.records[idx] = plb.blob
+                plb = PostingListBucket(self.records.get(idx) or b'')
+                plb.deleted = IntSet(copy=self.deleted)
+                plb.deleted |= keywords[kw]
+                plb.add(kw, [])
+                self.records[idx] = plb.blob
         t2 = time.time()
         self.update_terms(keywords)
         self.profile_updates('-%d' % len(kw_idx_list), t0, t1, t2, time.time())
@@ -436,35 +507,20 @@ class SearchEngine:
         t1 = time.time()
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
-                if idx < self.l2_begin:
-                  try:
-                    # These are instances of IntSet, de/serialization is done
-                    # automatically by dumbcode.
-                    iset = self.records[idx]
-                    iset |= keywords[kw]
-                    iset -= self.deleted
-                    self.records[idx] = iset
-                  except:
-                    logging.exception('Ugh, kw=%s idx=%s iset=%s' % (kw, idx, iset))
-                    raise
-                else:
-                    # These are instances of PostingList
-                    plb = PostingListBucket(self.records.get(idx) or b'')
-                    plb.deleted = self.deleted
-                    plb.add(kw, *keywords[kw])
-                    self.records[idx] = plb.blob
+                # These are instances of PostingList
+                plb = PostingListBucket(self.records.get(idx) or b'')
+                plb.deleted = self.deleted
+                plb.add(kw, keywords[kw])
+                self.records[idx] = plb.blob
         t2 = time.time()
-        self.update_terms(keywords)
+        self.part_spaces[1] |= set(keywords.keys())
         self.profile_updates('+%d' % len(kw_idx_list), t0, t1, t2, time.time())
         return {'keywords': len(keywords), 'hits': hits}
 
     def __getitem__(self, keyword):
         idx = self.keyword_index(keyword)
-        if idx < self.l2_begin:
-            return self.records.get(idx) or IntSet()
-        else:
-            plb = PostingListBucket(self.records.get(idx) or b'')
-            return plb.get(keyword) or IntSet()
+        plb = PostingListBucket(self.records.get(idx) or b'')
+        return plb.get(keyword) or IntSet()
 
     def _search(self, term, tag_ns):
         if isinstance(term, tuple):
@@ -521,6 +577,26 @@ class SearchEngine:
             rv = (tag_namespace, ops, rv)
         return rv
 
+    def search_tags(self, search_set, tag_namespace=''):
+        """
+        Search for tags that match a search (terms or tuple) or result set
+        (IntSet or list of ints).
+
+        Returns a dictionary of (tag => (comment, IntSet)) mappings.
+        """
+        if isinstance(search_set, (tuple, str)):
+            search_set = self.search(search_set, tag_namespace=tag_namespace)
+        if not isinstance(search_set, IntSet):
+            iset = IntSet()
+            iset |= search_set
+            search_set = iset
+        results = {}
+        for tag, (bcom, iset) in self.iter_tags(tag_namespace=tag_namespace):
+            iset &= search_set
+            if iset:
+                results[tag] = (bcom, iset)
+        return results
+
     def magic_terms(self, term):
         what = term.split(':')[0].lower()
         magic = self.magic_term_map.get(what)
@@ -549,12 +625,12 @@ class SearchEngine:
 if __name__ == '__main__':
   try:
     pl = PostingListBucket(b'', compress=128)
-    pl.add('hello', 1, 2, 3, 4)
+    pl.add('hello', [1, 2, 3, 4])
     assert(isinstance(pl.get('hello'), IntSet))
     assert(pl.get('floop') is None)
     assert(1 in pl.get('hello'))
     assert(5 not in pl.get('hello'))
-    pl.add('hello', 5)
+    pl.add('hello', [5])
     assert(1 in pl.get('hello'))
     assert(5 in pl.get('hello'))
     pl.remove('hello')
@@ -584,15 +660,28 @@ if __name__ == '__main__':
     se.deleted |= 0
     assert(list(se.search(IntSet.All)) == [1, 2, 3, 4, 5])
 
+    assert(3 in se.search('please'))
+    assert(5 in se.search('please'))
+    assert(5 in se.search('please', tag_namespace='work'))
+    assert(3 not in se.search('please', tag_namespace='work'))
+
     # Make sure tags go to l1, others to l2.
     assert(se.keyword_index('in:bjarni') < se.l2_begin)
     assert(se.keyword_index('in:inbox') < se.l2_begin)
     assert(se.keyword_index('please') >= se.l2_begin)
 
-    assert(3 in se.search('please'))
-    assert(5 in se.search('please'))
-    assert(5 in se.search('please', tag_namespace='work'))
-    assert(3 not in se.search('please', tag_namespace='work'))
+    # We can enumerate our tags and set metadata on them!
+    se.set_tag_comment('in:bjarni', 'Hello world')
+    assert(se.get_tag('in:bjarni')[0] == b'Hello world')
+    assert('in:bjarni'         in dict(se.iter_tags()))
+    assert('in:inbox@work'     in dict(se.iter_tags()))
+    assert('in:bjarni'     not in dict(se.iter_tags(tag_namespace='work')))
+    assert('in:inbox'          in dict(se.iter_tags(tag_namespace='work')))
+    assert('in:inbox@work' not in dict(se.iter_tags(tag_namespace='work')))
+    assert(not se.search_tags([55]))
+    assert('in:inbox' in se.search_tags([4, 55]))
+    assert('in:inbox' not in se.search_tags('please'))
+    assert('in:inbox' in se.search_tags('please', tag_namespace='work'))
 
     assert(3 in se.search('remove'))
     se.del_results([(3, ['please'])])
@@ -604,19 +693,18 @@ if __name__ == '__main__':
     assert(4 not in se.search('all:mail', tag_namespace='work'))
     assert(3 not in se.search('in:inbox'))
     assert(4 in se.search('in:testing'))
-    se.mutate(IntSet([4, 3]), [(IntSet.Sub, 'in:testing'), (IntSet.Or, 'in:inbox')])
+
+    mr = se.mutate(IntSet([4, 3]),
+                   [(IntSet.Sub, 'in:testing'), (IntSet.Or, 'in:inbox')])
+    assert(mr['mutations'] == 2)
+    assert([4] == list(mr['changes'][0][1]))
     assert(4 not in se.search('in:testing'))
     assert(3 in se.search('in:inbox'))
     assert(4 in se.search('in:inbox'))
     assert(4 not in se.search('in:inbox', tag_namespace='work'))
-    se.rename_l1('in:inbox', 'in:outbox')
+    se.rename_tag('in:inbox', 'in:outbox')
     assert(4 in se.search('in:outbox'))
     assert(4 not in se.search('in:inbox'))
-    try:
-        se.mutate(IntSet([4, 3]), [(IntSet.Sub, 'hello'), (IntSet.Or, 'world')])
-        assert(not 'reached')
-    except KeyError:
-        pass
 
     # Test reducing a set to empty and then adding back to it
     se.del_results([(4, ['in:testempty'])])

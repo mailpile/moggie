@@ -86,9 +86,15 @@ class KeywordExtractor:
         if url_domains:
             txt += '\n' + '\n'.join(url_domains)
 
+        ltxt = txt.lower()
+        wordlist = WORD_REGEXP.findall(ltxt)
         words = set(
-            w for w in WORD_REGEXP.findall(txt.lower())
+            w for w in wordlist
             if self.min_word_length <= len(w) <= self.max_word_length)
+
+        for i in range(0, len(wordlist) - 1):
+            if (len(wordlist[i]) <= 3) or (len(wordlist[i+1]) <= 3):
+                words.add('%s %s' % (wordlist[i], wordlist[i+1]))
 
         return (url_domains | words) - self.stoplist
 
@@ -264,6 +270,10 @@ líka https://www.example.org/foo/bar/baz?bonk vefsíða.
             assert('bre@example.org' in keywords)
             assert('bre2@example.org' in keywords)
             assert('www.example.org' in keywords)
+            assert('er auðvitað' in keywords)
+            assert('þetta er' in keywords)
+            assert('og svo' in keywords)
+            assert('svo er' in keywords)
             print('Tests passed OK')
         except:
             print('Keywords:\n\t%s' % '\n\t'.join(sorted(list(keywords))))

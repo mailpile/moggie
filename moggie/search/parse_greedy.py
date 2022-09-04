@@ -26,6 +26,9 @@ anything matching "world" but not matching "iceland".
 Note that the search engine itself will then handle globbing of
 individual keywords, so searching for "hell* world" might become
 equivalent to "(hell OR hello OR hellsite) AND world".
+
+Small words (<3 letters) are considered to be part of both the preceding
+and following words: "hello my world" becomes "hello my" AND "my world".
 """
 import re
 
@@ -45,6 +48,24 @@ def greedy_parse_terms(terms, magic_map={}):
         else:
             return tuple(search)
 
+    def _make_pairs(srch):
+        op = srch[0]
+        if (len(srch) < 3) or (op not in (IntSet.And, IntSet.Or)):
+            return srch
+        for i in reversed(range(1, len(srch) - 1)):
+            if (isinstance(srch[i], str) and isinstance(srch[i+1], str)
+                   and ('*' not in srch[i])
+                   and ('*' not in srch[i+1])
+                   and (':' not in srch[i])
+                   and (':' not in srch[i+1])
+                   and (' ' not in srch[i+1])
+                   and ((len(srch[i]) < 4) or (len(srch[i+1]) < 4))):
+                if ((i == 1) or len(srch[i]) >= 4) and (op == IntSet.And):
+                    srch[i:i+2] = ['%s %s' % (srch[i], srch[i+1])]
+                else:
+                    srch[i:i+2] = [srch[i], '%s %s' % (srch[i], srch[i+1])]
+        return srch
+
     search_stack = [[IntSet.And]]
     changed = False
     for term in terms:
@@ -57,7 +78,7 @@ def greedy_parse_terms(terms, magic_map={}):
             if len(search_stack) > 1:
                 changed = True
                 done = search_stack.pop(-1)
-                search_stack[-1].append(tuple(done))
+                search_stack[-1].append(tuple(_make_pairs(done)))
 
         elif term in ('*', 'ALL'):
             search_stack[-1].append(IntSet.All)
@@ -99,14 +120,18 @@ def greedy_parse_terms(terms, magic_map={}):
     # Close all dangling parens
     while len(search_stack) > 1:
         done = search_stack.pop(-1)
-        search_stack[-1].append(tuple(done))
+        search_stack[-1].append(tuple(_make_pairs(done)))
 
-    return _flat(search_stack[-1])
+    return _flat(_make_pairs(search_stack[-1]))
 
 
 if __name__ == '__main__':
+    import sys
+    if sys.argv[1:]:
+        print('%s' % (greedy_parse_terms(' '.join(sys.argv[1:])),))
+
     assert(greedy_parse_terms('yes hello world')
-        == (IntSet.And, 'yes', 'hello', 'world'))
+        == (IntSet.And, 'yes hello', 'world'))
 
     assert(greedy_parse_terms('And AND hello +world +iceland')
         == (IntSet.Or, (IntSet.And, 'and', 'hello'), 'world', 'iceland'))
@@ -138,6 +163,3 @@ if __name__ == '__main__':
         == (IntSet.And, 'yes', (IntSet.Or, 'lo:hel', 'hel:lo'), 'world'))
 
     print('Tests passed OK')
-    import sys
-    if sys.argv[1:]:
-        print('%s' % (greedy_parse_terms(' '.join(sys.argv[1:])),))
