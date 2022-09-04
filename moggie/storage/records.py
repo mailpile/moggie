@@ -403,6 +403,9 @@ class RecordStoreReadOnly:
             raise ConfigMismatch('Config mismatch in %s' % self.keys_fn)
         self.keys = {}
         self.load_keys()
+        self.cache = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
         self.loaded = self.getmtime()
         self.loaded = os.path.getmtime(self.keys_fn)
         self.keys_fd.seek(0, io.SEEK_END)
@@ -502,14 +505,26 @@ class RecordStoreReadOnly:
         return chunk.length(idx)
 
     def __getitem__(self, key):
-        (idx, chunk) = self.get_chunk(self.key_to_index(key))
+        pair = (idx, chunk) = self.get_chunk(self.key_to_index(key))
+        if pair in self.cache:
+            self.cache_hits += 1
+            return self.cache[pair]
+        self.cache_misses += 1
         return chunk[idx]
 
-    def get(self, key, decode=True, default=None, aes_key=None):
+    def get(self, key, decode=True, default=None, aes_key=None, cache=None):
         try:
-            (idx, chunk) = self.get_chunk(self.key_to_index(key))
-            return chunk.get(idx,
+            pair = (idx, chunk) = self.get_chunk(self.key_to_index(key))
+            if decode and (cache is not False) and pair in self.cache:
+                self.cache_hits += 1
+                return self.cache[pair]
+
+            self.cache_misses += 1
+            rv = chunk.get(idx,
                 default=default, decode=decode, aes_key=aes_key)
+            if cache and decode and (rv != default):
+                self.cache[pair] = rv
+            return rv
         except KeyError:
             return default
 
@@ -524,6 +539,7 @@ class RecordStore(RecordStoreReadOnly):
         for c in self.chunks:
             self.chunks[c].close()
         self.chunks = {}
+        self.cache = {}
 
     def close(self):
         self.flush()
@@ -541,8 +557,10 @@ class RecordStore(RecordStoreReadOnly):
                 os.remove(os.path.join(self.workdir, f))
 
     def __delitem__(self, key):
-        (idx, chunk) = self.get_chunk(self.key_to_index(key))
+        pair = (idx, chunk) = self.get_chunk(self.key_to_index(key))
         del chunk[idx]
+        if pair in self.cache:
+            del self.cache[pair]
         to_delete = [
             (k, self.keys[k][0]) for k in self.keys if self.keys[k][1] == idx]
         try:
@@ -580,12 +598,15 @@ class RecordStore(RecordStoreReadOnly):
     def __setitem__(self, key, value):
         self.set(key, value)
 
-    def set(self, key, value, encode=True, encrypt=True, aes_key=None):
+    def set(self, key, value,
+            encode=True, encrypt=True, aes_key=None, cache=False):
         try:
             full_idx = self.key_to_index(key)
-            (c_idx, chunk) = self.get_chunk(full_idx, create=self.sparse)
+            pair = (c_idx, chunk) = self.get_chunk(full_idx, create=self.sparse)
             chunk.set(c_idx, value,
                 encode=encode, encrypt=encrypt, aes_key=aes_key)
+            if encode and (cache or pair in self.cache):
+                self.cache[pair] = value
             if full_idx >= self.next_idx:
                 self.next_idx = full_idx + 1
             return full_idx
@@ -593,17 +614,21 @@ class RecordStore(RecordStoreReadOnly):
             if isinstance(key, int):
                 raise
             return self.append(value,
-                keys=[key], encode=encode, encrypt=encrypt, aes_key=aes_key)
+                keys=[key], encode=encode, encrypt=encrypt, aes_key=aes_key,
+                cache=cache)
 
-    def append(self, value, keys=None, encode=True, encrypt=True, aes_key=None):
+    def append(self, value,
+            keys=None, encode=True, encrypt=True, aes_key=None, cache=False):
         if (keys is not None):
             for key in (keys if isinstance(keys, list) else [keys]):
                 if isinstance(key, int):
                     raise KeyError('Keys must not be ints')
 
         full_idx = len(self)
-        (c_idx, chunk) = self.get_chunk(full_idx, create=True)
+        pair = (c_idx, chunk) = self.get_chunk(full_idx, create=True)
         chunk.set(c_idx, value, encode=encode, encrypt=encrypt, aes_key=aes_key)
+        if encode and (cache or pair in self.cache):
+            self.cache[pair] = value
         if full_idx >= self.next_idx:
             self.next_idx = full_idx + 1
 
@@ -709,7 +734,7 @@ if __name__ == "__main__":
     load = 10000
     t0 = time.time()
     for i in range(0, load):
-        rs.append(i, keys=('%d' % i))
+        rs.append(i, keys=('%d' % i), cache=(i % 100 == 0))
     t1 = time.time()
     for i in range(0, load):
         rs['%d' % random.randint(0, load)] = i
@@ -726,6 +751,7 @@ if __name__ == "__main__":
         except KeyError:
             pass
     t4 = time.time()
+    assert(rs.cache_hits > 0)
 
     rs2 = RecordStoreReadOnly('/tmp/rs-test', 'testing',
         aes_keys=[test_key, test_key2], target_file_size=10240000)
