@@ -1,3 +1,4 @@
+import logging
 import mmap
 import time
 import threading
@@ -252,7 +253,9 @@ class FileStorage(BaseStorage):
         parser = iter([])
         if (limit is None) or (limit > 0):
             mailbox = self.get_mailbox(key)
-            if mailbox is not None:
+            if mailbox is None:
+                logging.debug('Failed to open mailbox: %s' % key)
+            else:
                 parser = mailbox.iter_email_metadata(skip=skip)
         if limit is None:
             yield from parser
