@@ -5,6 +5,8 @@ import logging
 import time
 import sys
 
+from ...config import AccessConfig
+
 
 class NotRunning(Exception):
     pass
@@ -17,6 +19,7 @@ class Nonsense(Exception):
 class CLICommand:
     AUTO_START = False
     NAME = 'command'
+    ROLES = AccessConfig.GRANT_ALL
     OPTIONS = {}
     CONNECT = True
     WEBSOCKET = True
@@ -24,7 +27,7 @@ class CLICommand:
     @classmethod
     def Command(cls, wd, args):
         try:
-            return cls(wd, args).sync_run()
+            return cls(wd, args, access=True).sync_run()
         except BrokenPipeError:
             return False
         except Nonsense as e:
@@ -36,19 +39,25 @@ class CLICommand:
             return False
 
     @classmethod
-    async def WebRunnable(cls, app, frame, conn, args):
+    async def WebRunnable(cls, app, access, frame, conn, args):
         def reply(msg, eof=False):
-            return conn.sync_reply(frame, bytes(msg, 'utf-8'), eof=eof)
+            if msg or eof:
+                if isinstance(msg, (bytes, bytearray)):
+                    return conn.sync_reply(frame, msg, eof=eof)
+                else:
+                    return conn.sync_reply(frame, bytes(msg, 'utf-8'), eof=eof)
         try:
-            cmd_obj = cls(app.profile_dir, args, appworker=app, connect=False)
+            cmd_obj = cls(app.profile_dir, args, access=access, appworker=app, connect=False)
             cmd_obj.write_reply = reply
             cmd_obj.write_error = reply
             return cmd_obj
+        except PermissionError:
+            raise
         except:
             logging.exception('Failed %s' % cls.NAME)
             reply('', eof=True)
 
-    def __init__(self, wd, args, appworker=None, connect=True):
+    def __init__(self, wd, args, access=None, appworker=None, connect=True):
         from ...workers.app import AppWorker
         from ...util.rpc import AsyncRPCBridge
 
@@ -57,9 +66,20 @@ class CLICommand:
         self.messages = []
         self.workdir = wd
 
+        if access is not True and not access:
+            raise PermissionError('Access denied')
+        self.access = access
+        if self.ROLES and '--context=' not in self.options:
+            self.get_context('default')
+
         self.mimetype = 'text/plain; charset=utf-8'
-        self.write_reply = sys.stdout.write
-        self.write_error = sys.stderr.write
+        def _writer(stuff):
+            if isinstance(stuff, str):
+                return sys.stdout.write(stuff)
+            else:
+                return sys.stdout.buffer.write(stuff)
+        self.write_reply = _writer
+        self.write_error = _writer
 
         if connect and self.CONNECT:
             self.worker = AppWorker.FromArgs(wd, self.configure(args))
@@ -100,16 +120,22 @@ class CLICommand:
     def handle_message(self, message):
         self.messages.append(message)
 
-    def context(self):
+    def get_context(self, ctx=None):
         from ...config import AppConfig
         cfg = AppConfig(self.workdir)
-        ctx = (self.options.get('--context=') or ['default'])[-1]
+        ctx = ctx or (self.options.get('--context=') or ['default'])[-1]
         if ctx == 'default':
             ctx = cfg.get(
                 AppConfig.GENERAL, 'default_cli_context', fallback='Context 0')
         else:
             pass # FIXME: Allow the user to select context by name, not
                  #        only the unfriendly "Context N" key.
+
+        if self.ROLES and self.access is not True:
+            if not self.access.grants(ctx, self.ROLES):
+                logging.error('Access denied, need %s on %s' % (self.ROLES, ctx))
+                raise PermissionError('Access denied')
+
         return ctx
 
     def metadata_worker(self):
@@ -140,12 +166,17 @@ class CLICommand:
                 if '=' in arg:
                     arg, opt = arg.split('=', 1)
                 else:
-                    arg, opt = arg.split(':', 1)
+                    try:
+                        arg, opt = arg.split(':', 1)
+                    except ValueError:
+                        pass
                 if arg+'=' not in self.OPTIONS:
                     raise Nonsense('Unrecognized argument: %s' % arg)
                 _setopt(arg+'=', opt)
             else:
                 leftovers.append(arg)
+        if '--context=' in self.options:
+            self.context = self.get_context()
         return leftovers
 
     def configure(self, args):
@@ -169,6 +200,8 @@ class CLICommand:
     async def web_run(self):
         try:
             return await self.run()
+        except PermissionError:
+            logging.info('Access denied in %s' % self.NAME)
         except:
             logging.exception('Failed to run %s' % self.NAME)
         finally:

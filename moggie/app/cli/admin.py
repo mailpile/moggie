@@ -1,4 +1,5 @@
 # TODO: add a status command, to check what is live?
+#       add an export command, for exporting messages from A to B
 
 import asyncio
 import logging
@@ -10,6 +11,7 @@ from .command import Nonsense, CLICommand
 
 class CommandUnlock(CLICommand):
     AUTO_START = False
+    NAME = 'unlock'
 
     def configure(self, args):
         self.passphrase = ' '.join(args)
@@ -58,6 +60,7 @@ class CommandImport(CLICommand):
       --old          Treat messages as "old": do not add to inbox etc.
 
     """
+    NAME = 'import'
     SEARCH = ('in:incoming',)
     OPTIONS = {
         '--context=':  ['default'],

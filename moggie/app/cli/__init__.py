@@ -15,8 +15,10 @@ class CommandHelp(CLICommand):
     without any arguments for a quick introduction and list of topics.
     """
     NAME = 'help'
+    ROLES = None
     CONNECT = False
     WEBSOCKET = False
+    WEB_EXPOSE = True
 
     def configure(self, args):
         self.arglist = args
@@ -71,23 +73,25 @@ Try `moggie help topics` for a list of what help has been written.
 
 Some useful commands:
 
-  moggie start [--cli|--wait]       Launch the Moggie background workers
-  moggie stop                       Stop Moggie
+   moggie start [--cli|--wait]       Launch the Moggie background workers
+   moggie unlock                     Unlock a running, encrypted Moggie
+   moggie stop                       Stop Moggie
+   moggie encrypt                    Enable encryption of local data
+   moggie compact                    Perform housekeeping to free up disk space
+   moggie import </path/to/mailbox>  Add some mail to the search index
 
-  moggie encrypt                    Enable encryption of local data
-  moggie unlock                     Unlock a running, encrypted Moggie              
-  moggie compact                    Perform housekeeping to free up disk space
-  moggie import </path/to/mailbox>  Add some mail to the search index
+ * moggie count [--multi] <terms>    Search, returns number of matches
+ * moggie search <terms>             Search for mail, summarize results
+ * moggie address <terms>            Search for mail, lists senders
 
-  moggie count [--multi] <terms>    Search, returns number of matches
-  moggie search <terms>             Search for mail, summarize results
-  moggie address <terms>            Search for mail, lists senders
-
-  moggie help <command>             Learn more about a specific command.
-  moggie help topics                List all available topics
+ * moggie help <command>             Learn more about a specific command.
+ * moggie help topics                List all available topics
 
 Bearing in mind that imitation is the sincerest form of flattery, Moggie tries
 to implement (most of) the command-line interfaces of both mutt and notmuch.
+
+*) Commands prefixed with an asterisk (*) can also be invoked using the faster
+   `lots` commmand-line tool, instead of `moggie` itself.
 """)
 
 
@@ -96,6 +100,7 @@ CLI_COMMANDS = {
     CommandSearch.NAME: CommandSearch,
     CommandCount.NAME: CommandCount,
     CommandTag.NAME: CommandTag,
+    CommandExport.NAME: CommandExport,
     'import': CommandImport,
     'encrypt': CommandEnableEncryption,
     'unlock': CommandUnlock,

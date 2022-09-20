@@ -31,29 +31,39 @@ from .public import PublicWorker, RequestTimer
 @http_require(secure_transport=True, csrf=False)
 @process_post(max_bytes=2048000, _async=True)
 async def web_cli(req_env):
-     conn = req_env['conn']
-     frame = req_env['frame']
+    # Note: This is internal only, equivalent to RPC calls using the
+    #       secret URL. However, it does seem we might want to expose
+    #       this remotely, but that requires auth and tokens and all
+    #       that jazz.
+    conn = req_env['conn']
+    frame = req_env['frame']
+    access = req_env['worker'].get_auth(req_env, secure_transport=True)
 
-     args = req_env.request_path.split('/')
-     while args.pop(0) != 'cli':
-         pass
-     if not args or (args == ['']):
-         args = ['help']
+    args = req_env.request_path.split('/')
+    while args.pop(0) != 'cli':
+        pass
+    if not args or (args == ['']):
+        args = ['help']
 
-     command = CLI_COMMANDS.get(args.pop(0))
-     if not hasattr(command, 'WebRunnable'):
-         return {'code': 404, 'msg': 'No such command'}
+    command = CLI_COMMANDS.get(args.pop(0))
+    if not (hasattr(command, 'WEB_EXPOSE') and command.WEB_EXPOSE):
+        return {'code': 404, 'msg': 'No such command'}
 
-     if 'argz' in req_env.post_vars:
-         argz = req_env.post_vars.get('argz')
-         if isinstance(argz, dict):
-             argz = argz['value']
-         if argz:
-             args.extend(argz.split('\0')[:-1])
+    if 'argz' in req_env.post_vars:
+        argz = req_env.post_vars.get('argz')
+        if isinstance(argz, dict):
+            argz = argz['value']
+        if argz:
+            args.extend(argz.split('\0')[:-1])
 
-     cmd = await command.WebRunnable(req_env['worker'], frame, conn, args)
-     asyncio.get_event_loop().create_task(cmd.web_run())
-     return {'mimetype': cmd.mimetype, 'eof': False}
+    try:
+        cmd = await command.WebRunnable(
+            req_env['worker'], access, frame, conn, args)
+    except PermissionError:
+        return {'code': 403, 'msg': 'Access denied'}
+
+    asyncio.get_event_loop().create_task(cmd.web_run())
+    return {'mimetype': cmd.mimetype, 'eof': False}
 
 
 @async_url('/')
@@ -70,10 +80,10 @@ async def web_root(req_env):
 
 
 def websocket_auth_check(req_env):
-    auth = req_env['worker'].get_auth(req_env, secure_transport=True)
-    if not auth:
+    access = req_env['worker'].get_auth(req_env, secure_transport=True)
+    if not access:
         raise PermissionError('Access Denied')
-    req_env['auth'] = auth
+    req_env['access'] = access
 
 
 @async_url('/pile', '/pile/*')
@@ -125,11 +135,11 @@ async def web_websocket(opcode, msg, conn, ws,
     if msg:
         code = 500
         result = {}
-        web_auth = conn.env['auth']
+        web_access = conn.env['access']
         conn_uid = conn.uid
         try:
             result = await conn.env['app'].api_jmap(
-                conn_uid, web_auth, json.loads(msg))
+                conn_uid, web_access, json.loads(msg))
             code = result.get('code', 500)
             if code == 200 and 'body' in result:
                 await conn.send(result['body'])
@@ -146,9 +156,9 @@ async def web_jmap_session(req_env):
     code, msg, status = 500, 'Oops', 'err'
     with RequestTimer('web_jmap_session', req_env, status='rej') as timer:
         try:
-            auth = req_env['worker'].get_auth(req_env, post=False, secure_transport=True)
+            access = req_env['worker'].get_auth(req_env, post=False, secure_transport=True)
             timer.status = 'ok'
-            return await req_env['app'].api_jmap_session(auth)
+            return await req_env['app'].api_jmap_session(access)
         except PermissionError as e:
             code, msg, status = 403, str(e), 'rej'
         except:
@@ -167,14 +177,14 @@ async def web_jmap(req_env):
     code, msg, status = 500, 'Oops', 'err'
     with RequestTimer('web_jmap', req_env, status='rej') as timer:
         try:
-            auth = req_env['worker'].get_auth(req_env, secure_transport=True)
+            access = req_env['worker'].get_auth(req_env, secure_transport=True)
             timer.status = 'ok'
             # FIXME: Do we want more granularity on our timers? If so, we need
             #        to change the timer name to match the method(s) called.
             #timer.name = 'jmap_foo'
             if req_env.post_data:
                 return await req_env['app'].api_jmap(
-                    None, auth, req_env.post_data)
+                    None, access, req_env.post_data)
         except PermissionError as e:
             code, msg, status = 403, str(e), 'rej'
         except:
@@ -193,7 +203,7 @@ class AppWorker(PublicWorker):
     """
 
     KIND = 'app'
-    PUBLIC_PATHS = ['/', '/ws']
+    PUBLIC_PATHS = ['/', '/ws', '/jmap']
     PUBLIC_PREFIXES = ['/pile', '/.well-known/']
 
     def __init__(self, *args, **kwargs):
@@ -222,16 +232,24 @@ class AppWorker(PublicWorker):
             self.set_rpc_authorization('Bearer %s' % self.auth_token)
         return conn
 
-    async def async_jmap(self, request_obj):
+    async def async_jmap(self, access, request_obj):
         if self._sock:
             return await self.app.api_jmap(
-                None, None, request_obj, internal=True)
+                None, access, request_obj, internal=True)
 
         # FIXME: It would be nice if this were async too...
-        return self.call('rpc/jmap', request_obj)
+        if (access is True) or (access and
+                access.config_key == self.app.config.ACCESS_ZERO):
+            return self.call('rpc/jmap', request_obj)
+        else:
+            raise PermissionError('Access denied')
 
-    def jmap(self, request_obj):
-        return self.call('rpc/jmap', request_obj)
+    def jmap(self, access, request_obj):
+        if (access is True) or (access and
+                access.config_key == self.app.config.ACCESS_ZERO):
+            return self.call('rpc/jmap', request_obj)
+        else:
+            raise PermissionError('Access denied')
 
     def get_app(self):
         return AppCore(self)
@@ -256,9 +274,15 @@ class AppWorker(PublicWorker):
             ofunc = only
         await ws_broadcast('app', json.dumps(message), only=ofunc)
 
+    def _check_access(self, secret, path):
+        if (secret == self._secret):
+            return self.app.config.access_zero()
+        return self.app.config.access_from_token(str(secret, 'utf-8'), _raise=False)
+
     def get_auth(self, req_env, **req_kwargs):
         # Set req_env[auth_*], or raise PermissionError
         access_requires(req_env, **req_kwargs)
+        req_acl = req_env.get('access')
         if 'auth_basic' in req_env:
             # FIXME: If we have a username and password, yay
             username, password = req_env['auth_basic']
@@ -267,6 +291,9 @@ class AppWorker(PublicWorker):
             acl = self.app.config.access_from_token(req_env['auth_bearer'])
             logging.debug('Access: %s = %s' % (acl.config_key, acl))
             return acl
+        elif req_acl:
+            logging.debug('Access: %s' % (req_acl,))
+            return req_acl
         raise PermissionError('Please login')
 
 

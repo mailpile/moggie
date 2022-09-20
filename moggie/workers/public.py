@@ -102,12 +102,12 @@ class WorkerHTTPD(HTTPD):
         404: 'ignored',
         500: 'failed'}
 
-    def __init__(self, secret, public_paths, public_prefixes, *args, **kwargs):
+    def __init__(self, worker, public_paths, public_prefixes, *args, **kwargs):
         HTTPD.__init__(self, *args, **kwargs)
-        self._secret = str(secret, 'latin-1')
         self._public_paths = public_paths or []
         self._public_prefixes = public_prefixes or []
-        self.status = self.base_env['worker'].status
+        self._worker = worker
+        self.status = self._worker.status
 
     def log_request(self, *args, **kwargs):
         scode = 'requests_%s' % self.CODE_STATUS.get(args[3], args[3])
@@ -121,6 +121,7 @@ class WorkerHTTPD(HTTPD):
                 public = True
                 break
 
+        secret = None
         if not public:
             try:
                 _, secret, path = path.split('/', 2)
@@ -132,13 +133,20 @@ class WorkerHTTPD(HTTPD):
         while (not func) and ('/' in path):
             path = path.rsplit('/', 1)[0]
             (func, fa) = HTTPD.get_handler(self, path+'/*', headers)
+        if func is None:
+            return None, fa
 
-        if (func is not None) and (not public) and (secret != self._secret):
-            # FIXME: Allow more nuanced access control, some secrets will
-            #        be valid for some things but not others.
+        access = self._worker._check_access(bytes(secret, 'utf-8'), path)
+        if (func is not None) and (not public) and (not access):
             raise PermissionError('Bad secret')
 
-        return func, fa
+        def mk_func_wrap(a):
+            def func_wrap(req_env, *args, **kwargs):
+                req_env['access'] = a
+                return func(req_env, *args, **kwargs)
+            return func_wrap
+
+        return mk_func_wrap(access), fa
 
 
 class PublicWorker(BaseWorker):
@@ -265,7 +273,7 @@ class PublicWorker(BaseWorker):
             uPK = WorkerPageKiteSettings
             port = self._sock.getsockname()[1]
 
-            self.httpd = WorkerHTTPD(self._secret,
+            self.httpd = WorkerHTTPD(self,
                 self.PUBLIC_PATHS, self.PUBLIC_PREFIXES,
                 self.kite_name, self.STATIC_PATH, self.shared_req_env, uPK)
 

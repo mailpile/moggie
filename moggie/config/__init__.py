@@ -14,7 +14,7 @@ from logging.handlers import TimedRotatingFileHandler
 from ..crypto.aes_utils import make_aes_key
 from ..crypto.passphrases import stretch_with_scrypt, generate_passcode
 from ..util.dumbcode import dumb_decode, dumb_encode_asc
-from .helpers import ListItemProxy, DictItemProxy, ConfigSectionProxy
+from .helpers import cfg_bool, ListItemProxy, DictItemProxy, ConfigSectionProxy
 
 
 APPNAME    = 'moggie'  #'mailpile'
@@ -62,8 +62,29 @@ class AccessConfig(ConfigSectionProxy):
         'description': str,
         'password': str,
         'username': str}
+    _EXTRA_KEYS = ['roles', 'tokens']
 
     MAX_TOKEN_AGE = 7 * 24 * 3600  #FIXME: is this sane?
+
+    GRANT_ROLE = {
+        'owner': ('A',          'Unlimited access'),
+        'admin': ('aPpEeTtrwx', 'Context admin'),
+        'user':  ('PpEeTtrwx',  'Normal user, can read/write e-mail and data'),
+        'guest': ('rcp',        'Guest access, read-only')}
+
+    GRANT_ALL          = 'A'  # Everything
+    GRANT_ACCESS       = 'a'  # Add/remove access controls
+    GRANT_FS           = 'F'  # Local files, including mailboxes
+    GRANT_NETWORK      = 'N'  # Network resources; remote mailboxes
+    GRANT_TAG_X        = 'T'  # Edit/add/remove tags.
+    GRANT_TAG_RW       = 't'  # Tag/untag operations
+    GRANT_CONTACT_WX   = 'P'  # Edit/add/remove contacts
+    GRANT_CONTACT_R    = 'p'  # View contacts
+    GRANT_CALENDAR_WX  = 'E'  # Edit/add/remove calendar events
+    GRANT_CALENDAR_R   = 'e'  # View calendar events
+    GRANT_SEND         = 'x'  # Send messages
+    GRANT_COMPOSE      = 'w'  # Compose messages
+    GRANT_READ         = 'r'  # Read messages
 
     def __init__(self, *args, **kwarg):
         super().__init__(*args, **kwarg)
@@ -96,6 +117,20 @@ class AccessConfig(ConfigSectionProxy):
         else:
             tok = self.new_token()
         return tok, int(self.tokens[tok])
+
+    def grants(self, context, roles):
+        role = self.roles.get(context, None)
+        ctx = self.config.contexts.get(context)
+
+        if role is None or ctx is None:
+            return None
+        if self.GRANT_ALL not in role:
+            for rc in roles:
+                if rc not in role:
+                    return False
+
+        tags = ctx.tags if ctx.tag_required else []
+        return (role, ctx.tag_namespace, tags)
 
 
 class AccountConfig(ConfigSectionProxy):
@@ -140,8 +175,8 @@ class ContextConfig(ConfigSectionProxy):
         'default_identity': str,
         # Optional...
         'tag_namespace': str,
-        'tag_required': str,
-        'flags': str}
+        'tag_required': cfg_bool}
+    _EXTRA_KEYS = ['identities', 'tags', 'flags', 'accounts']
 
     def __init__(self, *args, **kwarg):
         super().__init__(*args, **kwarg)
@@ -303,7 +338,8 @@ class AppConfig(ConfigParser):
     def access_zero(self):
         with self:
             azero = self.ACCESS_PREFIX + '0'
-            roles = ', '.join(['%s:owner' % p
+            roles = ', '.join([
+                '%s:%s' % (p, AccessConfig.GRANT_ALL)
                 for p in self if p.startswith(self.CONTEXT_PREFIX)])
             self[azero].update({
                 'name': 'Local access',
@@ -313,25 +349,24 @@ class AppConfig(ConfigParser):
     def context_zero(self):
         with self:
             czero = self.CONTEXT_ZERO
-            roles = ', '.join(['%s:owner' % p
-                for p in self if p.startswith(self.CONTEXT_PREFIX)])
-            self[czero].update({
-                'name': 'My Mail'})
+            self[czero].update({'name': 'My Mail'})
             return ContextConfig(self, czero)
 
-    def access_from_token(self, token):
-        if 'tokens' not in self._caches:
-            with self:
+    def access_from_token(self, token, _raise=True):
+        with self:
+            if 'tokens' not in self._caches:
                 token_cache = {}
                 for acl in self.all_access.values():
                     acl.expire_tokens()
-                    for token in acl.tokens:
-                        token_cache[token] = acl
-            self._caches['tokens'] = token_cache
-        acl = self._caches.get('tokens', {}).get(token)
+                    for t in acl.tokens:
+                        token_cache[t] = acl
+                self._caches['tokens'] = token_cache
+            acl = self._caches.get('tokens', {}).get(token)
         if acl is not None:
             return acl
-        raise PermissionError('No access granted')
+        if _raise:
+            raise PermissionError('No access granted')
+        return None
 
     def access_from_user(self, username, password):
         #FIXME
@@ -590,11 +625,11 @@ if __name__ == '__main__':
       ac[ac.ACCESS_PREFIX + '1'].update({
         'name': 'Test access',
         'tokens': '12341234:0, 9999:1',
-        'roles': 'Context 1:owner, Context 2:guest'})
+        'roles': 'Context 1:A, Context 2:r'})
 
       for acl in ac.all_access.values():
         #print('%s: tokens=%s, roles=%s' % (acl.name, acl.tokens, acl.roles))
-        acl.roles['Context 2'] = 'admin'
+        acl.roles['Context 2'] = 'aPpCcTtrwx'
         acl.tokens['abacab'] = int(time.time())
 
     assert(ac.access_from_token('12341234').name == 'Test access')

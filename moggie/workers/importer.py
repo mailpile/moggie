@@ -201,7 +201,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
 
     class MockAppWorker:
-        def jmap(self, request_obj):
+        def jmap(self, access, request_obj):
             print('jmap: %s' % request_obj)
             return ResponseMailbox(request_obj, [
                 Metadata.ghost('<ghost1@moggie>')

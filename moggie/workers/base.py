@@ -95,8 +95,11 @@ class BaseWorker(Process):
         self._caller = None
         self._caller_lock = threading.Lock()
         self._client = None
+        self._client_args = None
         self._client_addrinfo = None
         self._client_peeked = None
+        self._client_method = None
+        self._client_access = None
         self._client_headers = None
         self._background_jobs = {'default': []}
         self._background_threads = {}
@@ -154,6 +157,15 @@ class BaseWorker(Process):
     def _make_url(self, s_host, s_port):
         return 'http://%s:%d/%s' % (s_host, s_port, str(self._secret, 'utf-8'))
 
+    def on_idle(self):
+        pass
+
+    def on_tick(self):
+        pass
+
+    def _check_access(self, secret, args):
+        return (secret == self._secret)
+
     def _main_httpd_loop(self):
         while self.keep_running:
             client = None
@@ -165,12 +177,14 @@ class BaseWorker(Process):
                         method, path = peeked.split(b' ', 2)[:2]
                         secret, args = path.split(b'/', 2)[1:3]
                     except ValueError:
-                        secret = b''
-                    if secret == self._secret:
+                        secret, args = b'', None
+                    access = self._check_access(secret, args)
+                    if access:
                         self._client, client = client, None
                         self._client_addrinfo = c_addrinfo
                         self._client_peeked = peeked
                         self._client_method = method
+                        self._client_access = access
                         self._client_args = args
                         self._client_headers = None
                         self.handler(str(method, 'latin-1'), args)
@@ -227,7 +241,8 @@ class BaseWorker(Process):
             self.url_parts = self.url = None
         return self.url
 
-    def _conn(self, path, method='POST', timeout=60, headers='', more=False, secret=None):
+    def _conn(self, path,
+            method='POST', timeout=60, headers='', more=False, secret=None):
         host, port, url_secret = self.url_parts
         if secret is not None:
             url_secret = '/' + secret

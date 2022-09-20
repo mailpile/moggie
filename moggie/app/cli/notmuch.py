@@ -7,10 +7,16 @@
 import copy
 import datetime
 import json
+import io
+import os
 import sys
+import time
 
-from .command import Nonsense, CLICommand
+from .command import Nonsense, CLICommand, AccessConfig
 from ...email.metadata import Metadata
+from ...jmap.requests import RequestSearch, RequestMailbox, RequestEmail
+from ...storage.exporters.mbox import MboxExporter
+from ...storage.exporters.maildir import MaildirExporter, EmlExporter
 
 
 class CommandSearch(CLICommand):
@@ -24,7 +30,9 @@ class CommandSearch(CLICommand):
 
     """
     NAME = 'search'
+    ROLES = AccessConfig.GRANT_READ
     WEBSOCKET = False
+    WEB_EXPOSE = True
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
@@ -208,8 +216,8 @@ class CommandSearch(CLICommand):
 
     async def perform_query(self, query, batch, limit):
         query['limit'] = min(batch, limit or batch)
-        msg = await self.worker.async_jmap(query)
-        if 'emails' not in msg:
+        msg = await self.worker.async_jmap(self.access, query)
+        if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
 
         return msg.get('emails') or []
@@ -237,6 +245,8 @@ class CommandSearch(CLICommand):
 
 class CommandAddress(CommandSearch):
     NAME = 'address'
+    ROLES = AccessConfig.GRANT_READ
+    WEB_EXPOSE = True
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
@@ -341,6 +351,8 @@ class CommandAddress(CommandSearch):
 
 class CommandCount(CLICommand):
     NAME = 'count'
+    ROLES = AccessConfig.GRANT_READ
+    WEB_EXPOSE = True
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
@@ -378,9 +390,9 @@ class CommandCount(CLICommand):
         from ...jmap.requests import RequestCounts
 
         query = RequestCounts(
-            context=self.context(),
+            context=self.context,
             terms_list=list(set(self.terms)))
-        msg = await self.worker.async_jmap(query)
+        msg = await self.worker.async_jmap(self.access, query)
 
         if self.options['--lastmod']:
             suffix = '\tlastmod-unsupported 1'  # FIXME?

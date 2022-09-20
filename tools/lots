@@ -1,9 +1,18 @@
 #!/bin/bash
+if [ "$MOGGIE_URL" = "" ]; then
+  if [ "$MOGGIE_TOKEN" = "" ]; then
+    URL=$(cat ~/.local/share/Moggie/default/workers/app.url)
+  else
+    URL=$(cut -f1-3 -d/ ~/.local/share/Moggie/default/workers/app.url)/$MOGGIE_TOKEN
+  fi
+else
+  URL="$MOGGIE_URL"
+fi
 APP=$1
 shift
+
 (for ARG in "$@"; do
-    echo -n $ARG
+    echo -n "$ARG"
     echo -n -e '\0'
 done) \
-|curl -fN -F 'argz=<-' \
-    $(cat ~/.local/share/Moggie/default/workers/app.url)/cli/$APP
+|curl -sfN -F 'argz=<-' $URL/cli/$APP

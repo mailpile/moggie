@@ -7,7 +7,7 @@ import traceback
 import time
 import sys
 
-from ..config import APPNAME_UC, APPVER, AppConfig
+from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
 from ..jmap.core import JMAPSessionResource
 from ..jmap.requests import *
 from ..jmap.responses import *
@@ -265,31 +265,37 @@ main app worker. Hints:
         return ResponseMailbox(jmap_request, info, watched)
 
     async def api_jmap_search(self, conn_id, access, jmap_request):
-        # FIXME: Make sure access allows requested contexts
         ctx = jmap_request['context']
-        if ctx not in self.config.contexts:
-            raise ValueError('Invalid context: %s' % ctx)
-        tag_namespace = self.config.get(ctx, 'tag_namespace', fallback=None)
+        # Will rais ValueError or NameError if access denied
+        roles, tag_ns, tag_scope = access.grants(ctx, AccessConfig.GRANT_READ)
 
         def perform_search():
-            return list(self.metadata.with_caller(conn_id).metadata(
-                self.search.with_caller(conn_id).search(
-                        jmap_request['terms'],
-                        tag_namespace=tag_namespace,
-                        mask_deleted=jmap_request.get('mask_deleted', True)
-                    )['hits'],
+            s_result = self.search.with_caller(conn_id).search(
+                jmap_request['terms'],
+                tag_namespace=tag_ns,
+                #tag_scope=tag_scope,  ## FIXME
+                mask_deleted=jmap_request.get('mask_deleted', True),
+                with_tags=(not jmap_request.get('only_ids', False)))
+            if jmap_request.get('uncooked'):
+                return s_result
+            return (s_result, list(self.metadata.with_caller(conn_id).metadata(
+                s_result['hits'],
+                tags=s_result.get('tags'),
                 sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
                 only_ids=jmap_request.get('only_ids', False),
                 threads=jmap_request.get('threads', False),
                 skip=jmap_request['skip'],
                 limit=jmap_request['limit'],
-                raw=True))
+                raw=True)))
 
         jmap_request['skip'] = jmap_request.get('skip') or 0
         jmap_request['limit'] = jmap_request.get('limit', None)
         if self.metadata and self.search:
             results = await async_run_in_thread(perform_search)
-            return ResponseSearch(jmap_request, results)
+            if jmap_request.get('uncooked'):
+                return ResponseSearch(jmap_request, None, results)
+            else:
+                return ResponseSearch(jmap_request, results[1], results[0])
         else:
             return ResponsePleaseUnlock(jmap_request)
 
@@ -324,7 +330,8 @@ main app worker. Hints:
             return self.storage.with_caller(conn_id).email(
                 jmap_request['metadata'],
                 text=jmap_request.get('text', False),
-                data=jmap_request.get('data', False))
+                data=jmap_request.get('data', False),
+                full_raw=jmap_request.get('full_raw', False))
         info = await async_run_in_thread(get_email)
         return ResponseEmail(jmap_request, info)
 
@@ -378,7 +385,8 @@ main app worker. Hints:
             return self.importer.with_caller(conn_id).import_search(
                 jmap_request['search'],
                 jmap_request.get('initial_tags', []),
-                force=jmap_request.get('force', False))
+                force=jmap_request.get('force', False),
+                full=jmap_request.get('full', False))
         if self.metadata and self.search:
             result = await async_run_in_thread(import_search)
             return ResponsePing(jmap_request)  # FIXME
@@ -465,7 +473,12 @@ main app worker. Hints:
 
     async def rpc_jmap(self, request, **kwargs):
         try:
-            rv = await self.api_jmap(None, self.config.access_zero(), request)
+            access = kwargs.get('access')
+            if access:
+                access = self.config.all_access[access]
+            else:
+                access = self.config.access_zero()
+            rv = await self.api_jmap(None, access, request)
             self.worker.reply_json(rv['_result'])
         except:
             logging.exception('rpc_jmap failed %s' % (request,))
