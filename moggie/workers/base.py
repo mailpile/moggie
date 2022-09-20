@@ -55,6 +55,10 @@ class BaseWorker(Process):
 
     BACKGROUND_TASK_SLEEP = 0.1
 
+    # Intervals for on_tick() and on_idle() events. Neither are precise.
+    IDLE_T = 60
+    TICK_T = 300
+
     HTTP_200 = b'HTTP/1.0 200 OK\r\n'
     HTTP_400 = b'HTTP/1.0 400 Invalid Request\r\nContent-Length: 16\r\n\r\nInvalid Request\n'
     HTTP_403 = b'HTTP/1.0 403 Access Denied\r\nX-MP: Sorry\r\nContent-Length: 14\r\n\r\nAccess Denied\n'
@@ -167,8 +171,14 @@ class BaseWorker(Process):
         return (secret == self._secret)
 
     def _main_httpd_loop(self):
+        next_tick = int(time.time() + self.TICK_T)
+        self._sock.settimeout(self.IDLE_T)
         while self.keep_running:
             client = None
+            now = int(time.time())
+            if now >= next_tick:
+                next_tick += (1 + (now-next_tick) // self.TICK_T) * self.TICK_T
+                self.on_tick()
             try:
                 (client, c_addrinfo) = self._sock.accept()
                 peeked = client.recv(self.PEEK_BYTES, socket.MSG_PEEK)
@@ -197,6 +207,8 @@ class BaseWorker(Process):
                     logging.warning('Bad method or data: %s' % peeked[:20])
                     self.status['requests_ignored'] += 1
                     client.send(self.HTTP_400)
+            except socket.timeout:
+                self.on_idle()
             except OSError:
                 pass
             except (QuitException, KeyboardInterrupt):

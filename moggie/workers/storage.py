@@ -108,11 +108,12 @@ class StorageWorker(BaseWorker):
             'skip': skip,
             'limit': limit})
 
-    def email(self, metadata, text=False, data=False):
+    def email(self, metadata, text=False, data=False, full_raw=False):
         return self.call('email', qs={
             'metadata': metadata[:Metadata.OFS_HEADERS],
             'text': text,
-            'data': data})
+            'data': data,
+            'full_raw': full_raw})
 
     def get(self, key, *args, dumbcode=None):
         if dumbcode is not None:
@@ -145,19 +146,23 @@ class StorageWorker(BaseWorker):
     def api_mailbox(self, key, skip=0, limit=None, method=None):
         self._expire_parse_cache()
         if key in self.parsed_mailboxes:
-            pm = self.parsed_mailboxes[key][1]
+            while (not self.parsed_mailboxes[key][1]
+                    and self.background_thread is not None):
+                time.sleep(0.1)
+            logging.debug('%s: Returning from self.parsed_mailboxes' % key)
+            pm = self.parsed_mailboxes[key][-1]
             beg = skip
             end = skip + (limit or (len(pm)-skip))
-            while (end > len(pm)) and self.background_thread is not None:
-                time.sleep(0.1)
             return self.reply_json(pm[beg:end])
 
-        parser = self.backend.iter_mailbox(key, skip=skip)
         collect = []
-        self.parsed_mailboxes[key] = (time.time(), collect)
+        parser = self.backend.iter_mailbox(key, skip=skip)
+        self.parsed_mailboxes[key] = [time.time(), False, collect]
 
         if limit is None:
-            collect.extend(parser)
+            collect.extend(msg for msg in parser)
+            logging.debug('%s: Returning %d messages (u)' % (key, len(collect)))
+            self.parsed_mailboxes[key][1] = True
             return self.reply_json(collect)
 
         result = []
@@ -166,22 +171,30 @@ class StorageWorker(BaseWorker):
             if limit and len(result) >= limit:
                 break
             result.append(msg)
+        logging.debug('%s: Returning %d messages' % (key, len(result)))
         self.reply_json(result)
 
         # Finish in background thread
         if limit and len(result) >= limit:
             def finish():
+                logging.debug('%s: Background completing scan' % key)
                 collect.extend(msg for msg in parser)
+                self.parsed_mailboxes[key][1] = True
                 self.background_thread = None
             self._background(finish)
+        else:
+            self.parsed_mailboxes[key][1] = True
 
-    def api_email(self, metadata=None, text=False, data=False, method=None):
+    def api_email(self,
+           metadata=None, text=False, data=False, full_raw=False, method=None):
         metadata = Metadata(*(metadata[:Metadata.OFS_HEADERS] + [b'']))
         parsed = self.backend.parse_message(metadata)
         if text:
             parsed.with_text()
         if data:
             parsed.with_data()
+        if full_raw:
+            parsed.with_full_raw()
         self.reply_json(parsed)
 
     def api_get(self, key, *args, dumbcode=False, method=None):
