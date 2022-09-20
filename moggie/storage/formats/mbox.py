@@ -4,6 +4,11 @@ import time
 import os
 import re
 
+# FIXME: We really should use the MboxExporter.MboxTransform to escape
+#        From lines and preserve other useful metadata, before writing to
+#        the mbox.
+#
+#from ..exporters.mbox import MboxExporter
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.parsemime import parse_message as ep_parse_message
