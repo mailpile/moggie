@@ -240,11 +240,10 @@ class TuiFrame(urwid.Frame):
         if self.notifications:
             nage = now - self.notifications[-1]['ts']
         if 0 < nage <= 30:
-            push = (' ' * int((30 - nage) * (30 - nage) // 120))
             msg = self.notifications[-1]['message']
             hints = [
                 ('weight', len(msg), urwid.Text(
-                    push + msg, align='left', wrap='clip'))]
+                    msg, align='left', wrap='clip'))]
         else:
             nage = 0
             hints.append(
