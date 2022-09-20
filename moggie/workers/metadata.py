@@ -64,13 +64,15 @@ class MetadataWorker(BaseWorker):
         return self.call('add_metadata', update, metadata)
 
     def metadata(self, hits,
+            tags=None,
             threads=False,
             only_ids=False,
             sort=SORT_NONE,
             skip=0,
             limit=None,
             raw=False):
-        res = self.call('metadata', hits, threads, only_ids, sort, skip, limit)
+        res = self.call('metadata',
+            hits, tags, threads, only_ids, sort, skip, limit)
         if only_ids or raw:
             return res
         if threads:
@@ -145,7 +147,8 @@ class MetadataWorker(BaseWorker):
 
         return hits
 
-    def api_metadata(self, hits, threads, only_ids, sort_order, skip, limit,
+    def api_metadata(self,
+            hits, tags, threads, only_ids, sort_order, skip, limit,
             **kwargs):
         if not isinstance(hits, (list, IntSet)):
             hits = list(dumb_decode(hits))
@@ -161,6 +164,23 @@ class MetadataWorker(BaseWorker):
             limit = len(result) - skip
         result = [r for r in result[skip:skip+limit]]
 
+        if tags:
+            for tag in tags:
+                tags[tag] = dumb_decode(tags[tag][1])
+            def _metadata(i):
+                md = self._metadata.get(i, default=i)
+                md.more['tags'] = tlist = []
+                for tag in tags:
+                    if i in tags[tag]:
+                        tlist.append(tag)
+                return md
+        else:
+            def _metadata(i):
+                md = self._metadata.get(i, default=i)
+                if 'tags' in md.more:
+                    del md.more['tags']
+                return md
+
         if threads:
             if only_ids:
                 for grp in result:
@@ -170,10 +190,10 @@ class MetadataWorker(BaseWorker):
             else:
                 for grp in result:
                     del grp['_ts']
-                    grp['messages'] = [self._metadata.get(i, default=i)
+                    grp['messages'] = [_metadata(i)
                         for i in self._metadata.get_thread_idxs(grp['thread'])]
         elif not only_ids:
-            result = [self._metadata.get(i, default=i) for i in result]
+            result = [_metadata(i) for i in result]
 
         self.reply_json(result)
 

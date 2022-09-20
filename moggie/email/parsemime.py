@@ -144,12 +144,14 @@ class MessagePart(dict):
             #   - Quoted content
             #   - Forwarded messages
             #   - Inline PGP encrypted/signed blobs
+            # FIXME: Obey self.fix_mbox_from!
             pass
 
         elif ct == 'message/rfc822':
             # FIXME:
             #   - Is this a delivery failure report?
             #   - Is recursively parsing this anything but a recipe for bugs?
+            # FIXME: Obey self.fix_mbox_from!
             pass
 
         return self
@@ -240,6 +242,13 @@ class MessagePart(dict):
             if ((multipart or not ct.startswith('multipart/')) and
                     (text or not ct in ('text/plain', 'text/html'))):
                 part['_DATA'] = str(self._base64(part), 'latin-1')
+        return self
+
+    def with_full_raw(self):
+        """
+        Add a _RAW elements for the complete, unparsed message.
+        """
+        self['_RAW'] = str(base64.b64encode(self.msg_bin), 'latin-1')
         return self
 
     def with_raw(self, multipart=False, recurse=True):

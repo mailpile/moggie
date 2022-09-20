@@ -321,6 +321,32 @@ main app worker. Hints:
         else:
             return ResponsePleaseUnlock(jmap_request)
 
+    async def api_jmap_tag(self, conn_id, access, jmap_request):
+        # FIXME: Make sure access allows requested contexts
+        ctx = jmap_request['context']
+        if ctx not in self.config.contexts:
+            raise ValueError('Invalid context: %s' % ctx)
+        tag_namespace = self.config.get(ctx, 'tag_namespace', fallback=None)
+
+        if self.search:
+            results = self.search.with_caller(conn_id).tag(
+                jmap_request.get('tag_ops', []),
+                tag_namespace=tag_namespace,
+                #tag_undo_id=jmap_request.get('tag_undo_id'),
+                #tag_redo_id=jmap_request.get('tag_redo_id'),
+                record_history=jmap_request.get('undoable', 'Tagging'),
+                mask_deleted=jmap_request.get('mask_deleted', True))
+
+            # FIXME: The return value will tell us what?
+            #        At least the undo ID needs communicating, but do we
+            #        also report counts of how many messages were touched
+            #        per op? Or maybe just which ones? Caller can count?
+
+            return ResponseTag(jmap_request, results)
+        else:
+            return ResponsePleaseUnlock(jmap_request)
+
+
     async def api_jmap_email(self, conn_id, access, jmap_request):
         # FIXME: Does this user have access to this email?
         #        How will that be determined? Probably a token that
@@ -415,6 +441,8 @@ main app worker. Hints:
             result = await self.api_jmap_mailbox(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestSearch:
             result = await self.api_jmap_search(conn_id, access, jmap_request)
+        elif type(jmap_request) == RequestTag:
+            result = await self.api_jmap_tag(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestCounts:
             result = await self.api_jmap_counts(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestEmail:

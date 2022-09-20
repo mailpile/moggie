@@ -59,15 +59,18 @@ class ResponseMailbox(dict):
 
 
 class ResponseSearch(dict):
-    def __init__(self, request, emails):
+    def __init__(self, request, emails, results=None):
         self.update({
             'prototype': 'search',
             'req_id': request['req_id'],
             'context': request['context'],
             'terms': request['terms'],
             'limit': request['limit'],
-            'skip': request['skip'],
-            'emails': emails})
+            'skip': request['skip']})
+        if emails is not None:
+            self['emails'] = emails
+        if results:
+            self['results'] = results
 
 
 class ResponseCounts(dict):
@@ -76,7 +79,16 @@ class ResponseCounts(dict):
             'prototype': 'counts',
             'req_id': request['req_id'],
             'context': request['context'],
-            'counts':counts})
+            'counts': counts})
+
+
+class ResponseTag(dict):
+    def __init__(self, request, results):
+        self.update({
+            'prototype': 'tag',
+            'req_id': request['req_id'],
+            'context': request['context'],
+            'results': results})
 
 
 class ResponseEmail(dict):

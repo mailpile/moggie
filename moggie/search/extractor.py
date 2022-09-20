@@ -10,6 +10,7 @@ from .dates import ts_to_keywords
 
 WORD_REGEXP = re.compile('[\w’\']{2,}')
 WORD_STRIP = re.compile(r'[’\']+')
+MIXED_REGEXP = re.compile('^([a-zA-Z]+\d|\d+[a-zA-Z])')
 
 DOMAIN_REGEXP = re.compile(r'[a-zA-Z0-9\._-]+(?:\.[a-zA-Z0-9\._-]+)*')
 URL_REGEXP = re.compile(
@@ -86,15 +87,21 @@ class KeywordExtractor:
         if url_domains:
             txt += '\n' + '\n'.join(url_domains)
 
+        def _keep(w):
+            if ((len(w) > self.max_word_length) or
+                    (len(w) < 7 and MIXED_REGEXP.match(w))):
+                return False
+            return True
+
         ltxt = txt.lower()
-        wordlist = WORD_REGEXP.findall(ltxt)
-        words = set(
-            w for w in wordlist
-            if self.min_word_length <= len(w) <= self.max_word_length)
+        wordlist = [w for w in WORD_REGEXP.findall(ltxt) if _keep(w)]
+        words = set(w for w in wordlist if self.min_word_length <= len(w))
 
         for i in range(0, len(wordlist) - 1):
             if (len(wordlist[i]) <= 3) or (len(wordlist[i+1]) <= 3):
-                words.add('%s %s' % (wordlist[i], wordlist[i+1]))
+                combined = '%s %s' % (wordlist[i], wordlist[i+1])
+                if len(combined) <= self.max_word_length:
+                    words.add(combined)
 
         return (url_domains | words) - self.stoplist
 
@@ -230,6 +237,8 @@ Date: Tue, 29 Mar 2022 14:17:00 +0000
 Halló heimur, þetta er íslenskur texti því stundum þarf að flækja
 málin aðeins og athuga hvernig gengur.
 
+Hexadecimal 0x1234 gets ignored yo: 0e1abc 0x123456789
+
 Ég er <bre@example.org> og mailto:bre2@example.org og svo er auðvitað
 líka https://www.example.org/foo/bar/baz?bonk vefsíða.
 
@@ -271,6 +280,10 @@ líka https://www.example.org/foo/bar/baz?bonk vefsíða.
             assert('bre2@example.org' in keywords)
             assert('www.example.org' in keywords)
             assert('er auðvitað' in keywords)
+            assert('ignored yo' in keywords)
+            assert('0x1234' not in keywords)   # We ignore short hex strings
+            assert('0e1abc' not in keywords)   # ditto.
+            assert('0x123456789' in keywords)  # Longer ones we do index tho
             assert('þetta er' in keywords)
             assert('og svo' in keywords)
             assert('svo er' in keywords)

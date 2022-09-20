@@ -55,7 +55,7 @@ def greedy_parse_terms(terms, magic_map={}):
         for i in reversed(range(1, len(srch) - 1)):
             if (isinstance(srch[i], str) and isinstance(srch[i+1], str)
                    and ('*' not in srch[i])
-                   and ('*' not in srch[i+1])
+                  #and ('*' not in srch[i+1])
                    and (':' not in srch[i])
                    and (':' not in srch[i+1])
                    and (' ' not in srch[i+1])
@@ -112,7 +112,9 @@ def greedy_parse_terms(terms, magic_map={}):
                         break
 
             if isinstance(term, str):
-                search_stack[-1].append(term.lower())
+                if not term.startswith('id:'):
+                    term = term.lower()
+                search_stack[-1].append(term)
             else:
                 search_stack[-1].append(_flat(term))
             changed = False
@@ -128,7 +130,7 @@ def greedy_parse_terms(terms, magic_map={}):
 if __name__ == '__main__':
     import sys
     if sys.argv[1:]:
-        print('%s' % (greedy_parse_terms(' '.join(sys.argv[1:])),))
+        print('Parsed: %s' % (greedy_parse_terms(' '.join(sys.argv[1:])),))
 
     assert(greedy_parse_terms('yes hello world')
         == (IntSet.And, 'yes hello', 'world'))

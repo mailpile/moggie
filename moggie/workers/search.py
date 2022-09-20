@@ -20,6 +20,8 @@ class SearchWorker(BaseWorker):
         '/etc/dictionaries-common/words',
         '/usr/share/dict/words']
 
+    MASK_TAGS = ('in:trash', 'in:spam')
+
     SORT_NONE = 0
     SORT_DATE_ASC = 1
     SORT_DATE_DEC = 2
@@ -45,7 +47,7 @@ class SearchWorker(BaseWorker):
         self.functions.update({
             b'add_results':  (True, self.api_add_results),
             b'del_results':  (True, self.api_del_results),
-            b'mutate':       (True, self.api_mutate),
+            b'tag':          (True, self.api_tag),
             b'compact':      (True, self.api_compact),
             b'update_terms': (True, self.api_update_terms),
             b'term_search':  (True, self.api_term_search),
@@ -91,10 +93,6 @@ class SearchWorker(BaseWorker):
     def del_results(self, results, callback_chain=None, wait=True):
         return self.call('del_results', results, callback_chain, wait)
 
-    def mutate(self, mset, op_kw_list):
-        strop_kw_list = [[self._OP_STR_MAP(op), kw] for op, kw in op_kw_list]
-        return self.call('mutate', mset, strop_kw_list)
-
     def compact(self, full=False, callback_chain=None):
         return self.call('compact', full, callback_chain)
 
@@ -107,17 +105,68 @@ class SearchWorker(BaseWorker):
     def explain(self, terms):
         return self.call('explain', terms)
 
-    def search(self, terms, tag_namespace=None, mask_deleted=True):
-        return self.call('search', terms, mask_deleted, tag_namespace)
+    def search(self, terms,
+            tag_namespace=None, mask_deleted=True, mask_tags=None,
+            with_tags=False):
+        return self.call('search', terms,
+                         mask_deleted, mask_tags, tag_namespace, with_tags)
 
-    def intersect(self, terms, hits, tag_namespace=None, mask_deleted=True):
-        srch = self.call('search', terms, mask_deleted, tag_namespace)
+    def intersect(self, terms, hits,
+            tag_namespace=None, mask_deleted=True, mask_tags=None):
+        srch = self.call('search', terms,
+                         mask_deleted, mask_tags, tag_namespace, False)
         return IntSet.And(dumb_decode(srch['hits']), hits)
 
-    def api_mutate(self, mset, strop_kw_list, **kwargs):
-        op_kw_list = [(self._STR_OP_MAP(op), kw) for op, kw in strop_kw_list]
+    def tag(self, tag_op_sets, record_history=None,
+            tag_namespace=None, mask_deleted=True, mask_tags=None):
+        tag_op_sets = list(tag_op_sets)
+        for i, (tag_ops, m) in enumerate(tag_op_sets):
+            if isinstance(m, str):
+                m = self.call('search', m,
+                              mask_deleted, mask_tags, tag_namespace, False)
+                tag_op_sets[i] = (tag_ops, m['hits'])
+            else:
+                tag_op_sets[i] = (tag_ops, dumb_encode_asc(IntSet(m)))
+        return self.call('tag',
+            tag_op_sets, record_history, tag_namespace, mask_deleted, mask_tags)
+
+    def api_tag(self,
+            tag_op_sets, rec_hist, tag_namespace, mask_deleted, mask_tags, **kwa):
+        mutations = []
+        for (tag_ops, m) in tag_op_sets:
+            mutation = [m, []]
+            if isinstance(m, str):
+                m = dumb_decode(m)
+                mutation[0] = m
+            if not isinstance(m, (IntSet, list)):
+                raise ValueError('Should search for %s' % m)
+                m = self.call('search', m,
+                              mask_deleted, mask_tags, tag_namespace, False)
+                mutation[0] = m['hits']
+
+            for tag_op in tag_ops:
+                tag = tag_op[1:]
+                if ':' in tag:
+                    tag = 'in:' + tag.split(':')[1]
+                else:
+                    tag = 'in:' + tag
+                if tag_op[:1] == '+':
+                    mutation[1].append([IntSet.Or, tag])
+                elif tag_op[:1] == '-':
+                    mutation[1].append([IntSet.Sub, tag])
+                else:
+                    raise ValueError('Invalid tag op: %s' % tag_op)
+
+            if mutation[0] and mutation[1]:
+                mutations.append(mutation)
+
         with self.change_lock:
-            self.reply_json(self._engine.mutate(mset, op_kw_list))
+            result = self._engine.mutate(
+                mutations,
+                record_history=rec_hist,
+                tag_namespace=tag_namespace)
+            result['changed'] = dumb_encode_asc(result['changed'])
+            self.reply_json(result)
 
     def api_compact(self, full, callback_chain, **kwargs):
         def report_progress(progress):
@@ -165,16 +214,26 @@ class SearchWorker(BaseWorker):
     def api_explain(self, terms, **kwargs):
         self.reply_json(self._engine.explain(terms))
 
-    def api_search(self, terms, mask_deleted, tag_namespace, **kwargs):
+    def api_search(self,
+            terms, mask_deleted, mask_tags, tag_namespace, with_tags, **kwa):
         tns, ops, hits = self._engine.search(terms,
             tag_namespace=tag_namespace,
             mask_deleted=mask_deleted,
+            mask_tags=self.MASK_TAGS if (mask_tags is None) else mask_tags,
             explain=True)
         result = {
             'terms': terms,
             'tag_namespace': tns,
             'query': self._explain_ops(ops),
             'hits': dumb_encode_asc(hits, compress=256)}
+
+        if with_tags:
+            tag_info = self._engine.search_tags(
+                hits, tag_namespace=tag_namespace)
+            result['tags'] = dict(
+                (tag, (str(com, 'utf-8'), dumb_encode_asc(iset, compress=128)))
+                for tag, (com, iset) in tag_info.items())
+
         self.reply_json(result)
 
 

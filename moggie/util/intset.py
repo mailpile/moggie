@@ -106,6 +106,24 @@ class IntSet:
             raise ValueError('Invalid IntSet encoding')
         return cls().frombytes(binary)
 
+    def __eq__(self, other):
+        # Note: Proving equality is generally much more expensive than
+        #       proving inequality, which is why we don't do this the other
+        #       way around!
+        return not self.__ne__(other)
+
+    def __ne__(self, other):
+        if isinstance(other, list):
+            return (other != list(self))
+        elif isinstance(other, IntSet):
+            if (self.npa is None) and (other.npa is None):
+                return False
+            if (self.npa is None) or (other.npa is None):
+                return True
+            return not numpy.array_equal(self.npa, other.npa)
+        else:
+            return True
+
     def dumb_encode_bin(self):
         return self.ENC_BIN + self.tobytes()
 
@@ -171,6 +189,8 @@ class IntSet:
         return self
 
     def __ior__(self, other):
+        if other in (None, []):
+            return self
         if isinstance(other, IntSet):
             if len(other.npa) > len(self.npa):
                 self.npa.resize(len(other.npa) + self.DEF_GROW)
@@ -194,6 +214,36 @@ class IntSet:
                     self.npa.resize(len(bitmask) + self.DEF_GROW)
 
                 self.npa[:len(bitmask)] |= numpy.array(bitmask, dtype=self.dtype)
+        else:
+            raise ValueError('Bad type %s' % type(other))
+        return self
+
+    def __ixor__(self, other):
+        if other in (None, []):
+            return self
+        if isinstance(other, IntSet):
+            if len(other.npa) > len(self.npa):
+                self.npa.resize(len(other.npa) + self.DEF_GROW)
+            self.npa[:len(other.npa)] |= other.npa
+
+        elif isinstance(other, int):
+            val = other
+            pos = val // self.bits
+            if pos > len(self.npa):
+                self.npa.resize(pos + self.DEF_GROW)
+            bit = val % self.bits
+            self.npa[pos] = int(self.npa[pos]) ^ (1 << bit)
+
+        elif isinstance(other, (tuple, list, set)):
+            if len(other) > 0:
+                maxint = max(other)
+                bitmask = [0] * (1 + (maxint // self.bits))
+                for i in other:
+                    bitmask[i // self.bits] |= (1 << (i % self.bits))
+                if len(bitmask) > len(self.npa):
+                    self.npa.resize(len(bitmask) + self.DEF_GROW)
+
+                self.npa[:len(bitmask)] ^= numpy.array(bitmask, dtype=self.dtype)
         else:
             raise ValueError('Bad type %s' % type(other))
         return self
@@ -263,6 +313,13 @@ if __name__ == "__main__":
     assert(9 not in is1)
     assert(11 not in list(is1))
     assert(len(is1.tobytes()) == (is1.DEF_INIT * is1.bits // 8))
+    is1 ^= [9, 44, 45, 46]
+    assert(9 in is1)
+    assert(46 in is1)
+    assert(47 not in is1)
+    is1 ^= [9, 11]
+    assert(9 not in is1)
+    assert(11 in is1)
 
     a100 = IntSet.All(100)
     assert(bool(a100))
@@ -294,11 +351,21 @@ if __name__ == "__main__":
     some = list(range(0, 1024000, 10))
     few = [0, 1020, 9990, 1024000-10]
 
-    t0 = time.time()
-    count = 10
+    b1 = IntSet(many)
+    b2 = IntSet(some)
+    b3 = IntSet(few)
+
+    assert(b3 == few)
+    assert(b3 == IntSet(few))
+    assert(b3 != b2)
+    assert(b3 != b1)
+    assert(b3 != 'hello')
+    assert(b3 != None)
 
     print('Tests passed OK')
 
+    count = 10
+    t0 = time.time()
     for i in range(0, count):
         b1 = IntSet(many)
         b2 = IntSet(some)

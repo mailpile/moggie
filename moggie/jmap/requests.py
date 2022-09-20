@@ -45,6 +45,20 @@ class RequestCounts(RequestBase):
         }, req_id=req_id)
 
 
+class RequestTag(RequestBase):
+    def __init__(self, context='',
+            tag_ops=[], tag_undo_id=None, tag_redo_id=None, undoable=True,
+            req_id=None):
+        self.update({
+            'prototype': 'tag',
+            'context': context,
+            'undoable': undoable,
+            'tag_undo_id': tag_undo_id,
+            'tag_redo_id': tag_redo_id,
+            'tag_ops': tag_ops
+        }, req_id=req_id)
+
+
 class RequestAddToIndex(RequestBase):
     def __init__(self,
             context='', search='', initial_tags=[], force=False,
@@ -70,12 +84,14 @@ class RequestMailbox(RequestBase):
 
 
 class RequestEmail(RequestBase):
-    def __init__(self, metadata=[], text=False, data=False, req_id=None):
+    def __init__(self,
+            metadata=[], text=False, data=False, full_raw=False, req_id=None):
         self.update({
             'prototype': 'email',
             'metadata': metadata[:Metadata.OFS_HEADERS],
             'text': text,
-            'data': data
+            'data': data,
+            'full_raw': full_raw,
         }, req_id=req_id)
 
 
@@ -110,6 +126,7 @@ class RequestChangePassphrase(RequestBase):
 
 def to_jmap_request(_input):
     cls = {
+         'tag': RequestTag,
          'ping': RequestPing,
          'email': RequestEmail,
          'counts': RequestCounts,

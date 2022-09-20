@@ -1,30 +1,39 @@
-# IDEA:  Instead of dropping really short/common terms like "a" and "of",
-#        include them as prefixes or suffixes of the surrounding words.
-#        Doing a full n-gram search would really bloat
-#        the index for limited gain, but just turning the little words into
-#        n-gram equivalents will start to capture some of the sentence
-#        structure at relatively low cost?
-#
-# So searching for "orange in my bag" can expand to:
-#
-#    (orange in-my bag) OR (orange-in my-bag)
-#
-# But... how does that interact with partial word searches? If we only do
-# the prefixed form, "in-my" and "my-bag", it will work fine?
-#
 # Other thoughts:
 #   - what do we need to start providing search suggestions?
 #   - what do we need to start providing autosuggested canned replies??
+#   - we want to search e-mail addresses
+#   - we need undo for tag operations
+#   - undo implies a search history, implies broadcasting change notifications
+#   - the modification history of a message... how?
+#       - in the metadata: does not scale to large mutations
+#       - tagged:2022-08-01 ?     date?    == 366 keywords per year
+#       - tagged:2022-08-01-12 ?  date+hr? == 8784 keywords per year
+#       - tagged:12-30 ?       minute?  == 1440 keywords, assuming cleanup
+#       - tagged-inbox:2022-08-01       == 366 keywords per year per tag
+#       - How quickly can we scan all the mutation keywords?
+#           ... we could perform cleanups, merge tagged:2022-08-01-* into
+#           ... lets us implement changed:* magic
+#
+# I don't think we need search history, since entire result sets are compact
+# enough for us to pass them around when needed.
+#
+# However, we do want tag-op history, since those are pretty complex. A tagging
+# operation will be an ordered set of mutations; to undo the mutations need to
+# be reversed in reverse order. A tagging operation should also be annotated
+# with a human-readable description of what was done, and that should be
+# provided by the user-interface, since the engine cannot really know what UX
+# action the tagging operation represents.
 #
 import copy
 import logging
 import os
 import struct
+import random
 import re
 import threading
 import time
 
-from ..util.dumbcode import dumb_decode, dumb_encode_bin
+from ..util.dumbcode import dumb_decode, dumb_encode_bin, dumb_encode_asc
 from ..util.intset import IntSet
 from ..util.wordblob import wordblob_search, create_wordblob, update_wordblob
 from ..storage.records import RecordFile, RecordStore
@@ -172,10 +181,16 @@ class SearchEngine:
 
     IDX_CONFIG = 0
     IDX_PART_SPACE = 1
-    IDX_MAX_RESERVED = 100
+    IDX_EMAIL_SPACE_1 = 2
+    IDX_EMAIL_SPACE_2 = 3
+    IDX_EMAIL_SPACE_3 = 4
+    IDX_HISTORY_STATUS = 1000
+    IDX_HISTORY_START = 1001
+    IDX_HISTORY_END = 2000
+    IDX_MAX_RESERVED = 2000
 
     IGNORE_SPECIAL_KW_RE = re.compile('(^\d+|[:@%"\'<>?!\._-]+)')
-    IGNORE_NONLATIN_RE = re.compile('(^\d+|[:@%"\'<>?!\._-]+|'
+    IGNORE_NONLATIN_RE = re.compile('(^\d+|[\s:@%"\'<>?!\._-]+|'
         + '[^\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u0180-\u024F])')
 
     def __init__(self, workdir,
@@ -199,10 +214,21 @@ class SearchEngine:
         logging.debug('Search engine config: %s' % (self.config,))
 
         try:
-            self.part_spaces = [self.records[self.IDX_PART_SPACE]]
+            self.part_spaces = [self.records[self.IDX_PART_SPACE], set()]
         except (KeyError, IndexError):
-            self.part_spaces = [bytes()]
+            self.part_spaces = [bytes(), set()]
 
+        try:
+            self.email_spaces = [
+                self.records[self.IDX_EMAIL_SPACE_1],  # Recent only!
+                set(),
+                (self.records[self.IDX_EMAIL_SPACE_2], 'to'),
+                (self.records[self.IDX_EMAIL_SPACE_3], 'from')]
+        except (KeyError, IndexError):
+            self.email_spaces = [
+                bytes(), set(), ('to', bytes()), ('from', bytes())]
+
+        self.history = self.records.get(self.IDX_HISTORY_STATUS) or {}
         self.l1_begin = self.IDX_MAX_RESERVED + 1
         self.l2_begin = self.l1_begin + self.config['l1_keywords']
         self.maxint = maxint
@@ -223,8 +249,18 @@ class SearchEngine:
 
         from .dates import date_term_magic
         self.magic_term_map = {
+            # FIXME: 'tid': self.magic_thread,
+            # FIXME: 'thread': self.magic_thread,
             'date': date_term_magic,
             'dates': date_term_magic}
+
+    def _allocate_history_slot(self):
+        pos = self.history.get('pos', self.IDX_HISTORY_END) + 1
+        if pos > self.IDX_HISTORY_END:
+            pos = self.IDX_HISTORY_START
+        self.history['pos'] = pos
+        self.records[self.IDX_HISTORY_STATUS] = self.history
+        return pos
 
     def delete_everything(self, *args):
         with self.lock:
@@ -245,7 +281,7 @@ class SearchEngine:
             with self.lock:
                 if idx not in self.records:
                     return
-                plb = PostingListBucket(self.records[idx])
+                plb = PostingListBucket(self.records.get(idx, cache=True))
                 if not tag_namespace:
                     for kw, comment, iset in plb.items(decode=False):
                         kw = str(kw, 'utf-8')
@@ -292,11 +328,35 @@ class SearchEngine:
             self.records[self.IDX_PART_SPACE] = self.part_spaces[0]
             return self.part_spaces[0]
 
-    def update_terms(self, terms, min_hits=0, ignore_re=IGNORE_NONLATIN_RE):
+    def part_space_count(self, term, min_hits):
+        count = 0
+        for hit in self[term]:
+            if count >= min_hits:
+                return True
+        return False
+
+    def email_space_count(self, term, min_hits):
+        # FIXME: We need to search for something a bit different here.
+        count = 0
+        for hit in self[term]:
+            if count >= min_hits:
+                return True
+        return False
+
+    def update_terms(self, terms,
+            min_hits=0, ignore_re=IGNORE_NONLATIN_RE, spaces=None):
+        if spaces is None:
+            spaces = self.part_spaces
+        if spaces == self.email_spaces:
+            counter = self.email_space_count
+        else:
+            counter = self.part_space_count
+
+        updating = set(terms) | spaces[1]
         adding = set()
         removing = set()
         ignoring = set()
-        for kw in terms:
+        for kw in sorted(list(updating)):
             kwb = bytes(kw, 'utf-8')
             if ignore_re:
                 if ignore_re.search(kw):
@@ -305,60 +365,68 @@ class SearchEngine:
             if min_hits < 1:
                 adding.add(kwb)
                 continue
-            count = 0
-            for hit in self[term]:
-                if count >= min_hits:
-                    adding.add(kwb)
-                    break
-            if count < min_hits:
+            if counter(term, min_hits):
+                adding.add(kwb)
+            else:
                 removing.add(kwb)
 
         if adding or removing:
             blacklist = (removing | ignoring)
-            for blob, wset in self.part_spaces[1:]:
+            for blob, wset in spaces[2:]:
                 blacklist |= wset
                 adding -= wset
 
         if adding or removing:
-            self.part_spaces[0] = update_wordblob(adding, self.part_spaces[0],
+            spaces[0] = update_wordblob(adding, spaces[0],
                 blacklist=blacklist,
                 shortest=self.config['partial_shortest'],
                 longest=self.config['partial_longest'],
                 maxlen=self.config['partial_list_len'],
                 lru=True)
             # FIXME: This becomes expensive if update batches are small!
-            self.records[self.IDX_PART_SPACE] = self.part_spaces[0]
+            self.records[self.IDX_PART_SPACE] = spaces[0]
 
-        return self.part_spaces[0]
+        spaces[1] = set()
+        return spaces[0]
 
-    def add_static_terms(self, wordlist):
+    def add_static_terms(self, wordlist, spaces=None):
+        if spaces is None:
+            spaces = self.part_spaces
         shortest = self.config['partial_shortest']
         longest = self.config['partial_longest']
         words = set([
             (bytes(w, 'utf-8') if isinstance(w, str) else w)
             for w in wordlist
             if shortest <= len(w) <= longest])
-        self.part_spaces.append((create_wordblob(words,
+        spaces.append((create_wordblob(words,
                 shortest=shortest,
                 longest=longest,
                 maxlen=len(words)+1),
             words))
 
-    def add_dictionary_terms(self, dict_path):
+    def add_dictionary_terms(self, dict_path, spaces=None):
+        if spaces is None:
+            spaces = self.part_spaces
         with open(dict_path, 'rb') as fd:
             blob = str(fd.read(), 'utf-8').lower()
             words = set([word.strip()
                 for word in blob.splitlines()
                 if not self.IGNORE_SPECIAL_KW_RE.search(word)])
         if words:
-            self.add_static_terms(words)
-        assert(b'hello' in self.part_spaces[-1][0])
+            self.add_static_terms(words, spaces=spaces)
 
-    def candidates(self, keyword, max_results):
-        blobs = [self.part_spaces[0]]
-        blobs.extend(blob for blob, words in self.part_spaces[1:])
+    def candidates(self, keyword, max_results, spaces=None):
+        if ' ' in keyword:
+            prefix, keyword = keyword.split(' ', 1)
+            prefix += ' '
+        else:
+            prefix = ''
+        if spaces is None:
+            spaces = self.part_spaces
+        blobs = [spaces[0]]
+        blobs.extend(blob for blob, words in spaces[2:])
         clist = wordblob_search(keyword, blobs, max_results)
-        return clist[:max_results]
+        return [prefix+c for c in clist[:max_results]]
 
     def _empty_l1_idx(self):
         for idx in range(self.l1_begin, self.l2_begin):
@@ -406,6 +474,13 @@ class SearchEngine:
                     self.maxint = r_id
                 for kw in kw_list + extra_kws:
                     kw = kw.replace('*', '')  # Otherwise partial search breaks..
+
+                    # Treat tag: and is: prefixes as alternatives to in: for tags.
+                    if kw[:4] == 'tag:':
+                        kw = 'in:' + kw[4:]
+                    elif kw[:3] == 'is:':
+                        kw = 'in:' + kw[3:]
+
                     if tag_ns and (kw[:3] == 'in:'):
                         kw = '%s@%s' % (kw, tag_ns)
                     keywords[kw] = keywords.get(kw, []) + [r_id]
@@ -428,6 +503,7 @@ class SearchEngine:
         new_kw = self._ns(new_kw, tag_namespace)
         kw_pos, kw_idx = self.records.keys[self.records.hash_key(kw)]
         with self.lock:
+            self.records.cache = {}  # Drop cache
             plb = PostingListBucket(self.records.get(kw_idx) or b'')
             bcom, iset = plb.remove(kw)
             plb.set(new_kw, iset, comment=bcom)
@@ -453,24 +529,74 @@ class SearchEngine:
             plb = PostingListBucket(self.records.get(idx) or b'')
         return plb.get(tag, with_comment=True)
 
-    def mutate(self, mset, op_kw_list, tag_namespace=''):
-        op_idx_kw_list = [
-            (op, kw, self.keyword_index(self._ns(kw, tag_namespace), create=True))
-            for op, kw in op_kw_list]
+    def mutate(self, mlist, record_history=None, tag_namespace=''):
+        def _op(o):
+            o = {'+': IntSet.Or,
+                b'+': IntSet.Or,
+                 '-': IntSet.Sub,
+                b'-': IntSet.Sub}.get(o, o)
+            if o not in (IntSet.Or, IntSet.Sub):
+                raise ValueError('Unsupported op: %s' % o)
+            return o
 
+        def _op_kwi(op, kw):
+            op = _op(op)
+            if (kw == '*'):
+                return (op, kw, None)
+            else:
+                return (op, kw, self.keyword_index(self._ns(kw, tag_namespace),
+                                                   create=(op == IntSet.Or)))
+
+        slot = None
+        cset_all = IntSet()
         changes = []
+        mutations = 0
         with self.lock:
-            for op, kw, idx in op_idx_kw_list:
-                plb = PostingListBucket(self.records.get(idx) or b'')
+            for mset, op_kw_list in mlist:
+                op_idx_kw_list = [_op_kwi(op, kw) for op, kw in op_kw_list]
 
-                iset = plb.get(kw)
-                oset = op(iset, mset)
+                for op, kw, idx in op_idx_kw_list:
+                    plb = PostingListBucket(self.records.get(idx) or b'')
+                    iset = plb.get(kw)
+                    if iset is None:
+                        iset = IntSet()
 
-                plb.set(kw, oset)
-                self.records[idx] = plb.blob
-                changes.append((idx, iset, oset))
+                    oset = op(iset, mset)
 
-        return {'mutations': len(op_idx_kw_list), 'changes': changes}
+                    if iset != oset:
+                        plb.set(kw, oset)
+                        self.records[idx] = plb.blob
+                        mutations += 1
+
+                        # Only keep history and report results regarding the
+                        # mutation itself, to save space (zeros compress well)
+                        # and avoid leaking data from outside our tag namespace.
+                        # We assume the mset has already been scoped.
+                        cset = IntSet()
+                        cset |= iset
+                        cset ^= oset  # XOR tells us which bits changed
+                        cset &= mset  # Scope
+                        iset &= mset  # Scope
+                        changes.append((kw, idx, iset, cset))
+                        cset_all |= cset
+
+            if record_history:
+                # Allocate slot while still locked, then release.
+                slot = self._allocate_history_slot()
+
+        if record_history:
+            changes = {
+                'id': '%.3x-%x' % (slot, random.randint(0, 0xffffffffff)),
+                'comment': record_history,
+                'changes': [
+                    [kw, idx, dumb_encode_asc(iset), dumb_encode_asc(oset)]
+                    for kw, idx, iset, oset in changes]}
+            self.records[slot] = changes
+
+        return {
+            'mutations': mutations,
+            'changed': cset_all,
+            ('history' if record_history else 'changes'): changes}
 
     def profile_updates(self, which, t0, t1, t2, t3):
         p1 = int((t1 - t0) * 1000)
@@ -522,16 +648,41 @@ class SearchEngine:
         plb = PostingListBucket(self.records.get(idx) or b'')
         return plb.get(keyword) or IntSet()
 
+    def _id_list(self, ids):
+        try:
+            if ids[0] in ('I', 'S', 'T', 'Z'):
+                ids = dumb_decode(ids)
+            else:
+                elems = ids.split(',')
+                ids = []
+                for _id in elems:
+                    if '..' in _id:
+                        b, e = _id.split('..')
+                        ids.extend(range(int(b), int(e)+1))
+                    else:
+                        ids.append(int(_id))
+        except ValueError:
+            ids = []
+        return ids
+
     def _search(self, term, tag_ns):
         if isinstance(term, tuple):
             op = term[0]
             return op(*[self._search(t, tag_ns) for t in term[1:]])
 
         if isinstance(term, str):
+            # Treat tag: and is: prefixes as alternatives to in: for tags.
+            if term[:4] == 'tag:':
+               term = 'in:' + term[4:]
+            elif term[:3] == 'is:':
+               term = 'in:' + term[3:]
+
             if tag_ns and (term[:3] == 'in:'):
                return self['%s@%s' % (term, tag_ns)]
-            elif term in ('in:', 'all:mail'):
+            elif term in ('in:', 'all:mail', '*'):
                term = IntSet.All
+            elif term[:3] == 'id:' or term[:4] == 'mid:':
+               return IntSet(self._id_list(term.split(':', 1)[1]))
             else:
                return self[term]
 
@@ -548,7 +699,8 @@ class SearchEngine:
     def explain(self, terms):
         return explain_ops(self.parse_terms(terms, self.magic_map))
 
-    def search(self, terms, tag_namespace='', mask_deleted=True, explain=False):
+    def search(self, terms,
+            tag_namespace='', mask_deleted=True, mask_tags=None, explain=False):
         """
         Search for terms in the index, returning an IntSet.
 
@@ -569,6 +721,12 @@ class SearchEngine:
             # from outside the namespace (which would otherwise happen when
             # searching without any tags at all).
             ops = (IntSet.And, IntSet.All, ops)
+        if mask_tags:
+            # Certain search results are excluded by default, unless they
+            # were specifically requested in the query itself.
+            masking = [tag for tag in mask_tags if tag not in terms]
+            if masking:
+                ops = tuple([IntSet.Sub, ops] + masking)
         with self.lock:
             rv = self._search(ops, tag_namespace)
             if mask_deleted:
@@ -613,6 +771,9 @@ class SearchEngine:
         return term  # FIXME: A no-op
 
     def magic_candidates(self, term):
+        if term == '*':
+            return term
+
         max_results = self.config.get('partial_matches', 10)
         matches = self.candidates(term, max_results)
         if len(matches) > 1:
@@ -694,10 +855,24 @@ if __name__ == '__main__':
     assert(3 not in se.search('in:inbox'))
     assert(4 in se.search('in:testing'))
 
-    mr = se.mutate(IntSet([4, 3]),
-                   [(IntSet.Sub, 'in:testing'), (IntSet.Or, 'in:inbox')])
+    mr = se.mutate([
+        (IntSet([4, 3]), [('-', 'in:testing'), (IntSet.Or, 'in:inbox')]),
+        ], record_history='Testing')
+
+    assert(5 not in se.search('in:imaginary'))
+    mr2 = se.mutate([
+        (IntSet([5, 6]), [('+', 'in:imaginary')])
+        ], record_history='Test2')
+    assert(5 in se.search('in:imaginary'))
+
+    slot = int(mr['history']['id'].split('-')[0], 16)
+    assert(slot == se.IDX_HISTORY_START)
+    lh = se.records.get(slot, decode=True)
+    assert(lh['comment'] == 'Testing')
+    assert(lh == mr['history'])
+
     assert(mr['mutations'] == 2)
-    assert([4] == list(mr['changes'][0][1]))
+    assert('in:testing' == mr['history']['changes'][0][0])
     assert(4 not in se.search('in:testing'))
     assert(3 in se.search('in:inbox'))
     assert(4 in se.search('in:inbox'))
@@ -755,6 +930,7 @@ if __name__ == '__main__':
         assert(se.candidates('orang*', 10) == ['orang'])
         se.add_static_terms(['red', 'green', 'blue', 'orange'])
         assert(se.candidates('orang*', 10) == ['orang', 'orange'])
+        assert(se.candidates('the orang*', 10) == ['the orang', 'the orange'])
         se.add_dictionary_terms('/usr/share/dict/words')
         assert('additional' in se.candidates('addit*', 20))
 
