@@ -36,9 +36,48 @@ class CommandSearch(CLICommand):
     Search for emails or threads matching the given search terms. Search
     terms are exact matches, unless the wildcard (*) is used. Examples:
 
-        moggie search bjarni    # Exact match
-        moggie search bjarn*    # Will match bjarni or bjarna
+      moggie search bjarni                 # Exact match
+      moggie search bjarn*                 # Will match bjarni or bjarna
 
+      moggie search in:inbox is:unread     # Both in the inbox and unread
+      moggie search in:inbox -is:unread    # In the inbox, not unread
+      moggie search in:inbox +is:unread    # In the inbox, or unread
+      moggie search bjarni --format=json   # JSON for further processing...
+
+      moggie search dates:2022-08 --format=mbox > August2022.mbx  # Export!
+
+    Options:
+      --context=<ctx>   Choose which context to search within.
+      --format=<fmt>    Result format: text, text0, json, zip, maildir, mbox
+      --output=<data>   Result output: summary, threads, messages, files,
+                                       tags, emails, thread_emails.
+      --offset=<N>      Skip the first N results
+      --limit=<N>       Output at most N results
+      --sort=<N>        Either newest-first (the default) or oldest-first.
+
+    The search command can emit various types of results in various formats.
+    Some constraints and special cases:
+
+      * The default output is `summary`, unless something else is implied
+        by the format. The default format is `text`.
+      * The only valid outputs for zip, maildir and mbox are emails and
+        thread_emails.
+      * The maildir format actually generates a gzipped tar archive, which
+        contains the maildir.
+      * The headers of messages contained in mbox and zip results will be
+        modified to include Moggie metadata (tags, read/unread, etc.).
+      * Searching for `*` returns all known mail.
+      * Searching for `mailbox:/path/to/mailbox` can be used to extract
+        information from a mailbox directly.
+      * File listings may not encode to Unicode correctly, since *nix
+        filenames are in fact binary data, not UTF-8. This means JSON
+        formatting with `--output=files` may fail in some cases. Use
+        `--format=text0` for the most reliable results.
+
+    Where moggie and notmuch options overlap (see `man notmuch`), an attempt
+    has been made to ensure compatibility. However, note that Moggie file
+    paths have extra data appended (offets within a mbox, etc). Moggie's
+    search syntax also differs from that of notmuch in important ways.
     """
     NAME = 'search'
     ROLES = AccessConfig.GRANT_READ

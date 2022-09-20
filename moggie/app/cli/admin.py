@@ -9,6 +9,35 @@ import sys
 from .command import Nonsense, CLICommand
 
 
+class CommandGrantAccess(CLICommand):
+    """moggie grant [<name>] [<context>] [<[+|-]roles>]
+
+    This command lists or changes what access is currently granted.
+
+    The listing can be filtered by name or name and context, if a role
+    string is also specified grants will be changed to match.
+
+    Examples:
+
+        moggie grant Bjarni
+        moggie grant Bjarni 'Context 0' +owner
+
+    """
+    AUTO_START = False
+    NAME = 'grant'
+
+    def configure(self, args):
+        self.name = args[0] if (len(args) > 0) else None
+        self.context = args[1] if (len(args) > 1) else None
+        self.roles = args[2] if (len(args) > 2) else None
+        if len(args) > 3:
+            raise Nonsense('Too many arguments')
+        return []
+
+    async def run(self):
+        pass
+
+
 class CommandUnlock(CLICommand):
     AUTO_START = False
     NAME = 'unlock'
@@ -183,6 +212,44 @@ class CommandImport(CLICommand):
                 logging.exception('Woops')
                 raise
         return True
+
+
+class CommandExport(CLICommand):
+    """moggie export [opts] <format>:<dest> <terms|/paths/to/mailboxes ...>
+
+    This command can be used to export search results, or convert from one
+    mailbox format to another.
+
+    Options:
+        --add            Add to an existing mailbox
+        --clean          Clean export; does not add Moggie-specific headers
+        --context=<ctx>  Context for tags/search
+
+    Examples:
+        moggie export mbox:/tmp/test.mbx from:twitter to:bre
+        moggie export maildir:/tmp/test/
+
+    """
+    NAME = 'export'
+    AUTO_START = True
+    OPTIONS = {
+        '--context=':  ['default'],
+        '--add':       [],
+        '--clean':     []}
+
+    def configure(self, args):
+        args = self.strip_options(args)
+        try:
+            self.fmt, self.dest = args.pop(0).split(':', 1)
+        except ValueError:
+            raise Nonsense('Please provide a format:/path/to/destination')
+        self.src = args
+        return []
+
+    async def run(self):
+        # This should most def be an API call, so the UI can do things
+        # that are exports under the hood.
+        raise Nonsense('FIXME')
 
 
 def CommandEnableEncryption(wd, args):

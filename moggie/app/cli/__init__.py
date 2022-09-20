@@ -1,7 +1,8 @@
 import sys
 
 from .command import CLICommand
-from .admin import CommandUnlock, CommandImport, CommandEnableEncryption
+from .admin import CommandUnlock, CommandEnableEncryption
+from .admin import CommandImport, CommandExport
 from .notmuch import CommandSearch, CommandAddress, CommandCount, CommandTag
 from .notmuch import CommandConfig
 from .help import TOPICS
