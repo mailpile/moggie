@@ -11,6 +11,9 @@ import struct
 from configparser import ConfigParser, NoOptionError, _UNSET
 from logging.handlers import TimedRotatingFileHandler
 
+from passcrow.client import PasscrowServerPolicy, PasscrowIdentityPolicy
+from passcrow.client import PasscrowClientPolicy, PasscrowClient
+
 from ..crypto.aes_utils import make_aes_key
 from ..crypto.passphrases import stretch_with_scrypt, generate_passcode
 from ..util.dumbcode import dumb_decode, dumb_encode_asc
@@ -51,6 +54,108 @@ def configure_logging(
         handlers=handlers,
         force=True)
     return logfile
+
+
+class PasscrowConfig(ConfigSectionProxy):
+    _KEYS = {
+        'enabled': cfg_bool,
+        'quick': cfg_bool,
+        'env_override': cfg_bool}
+    _EXTRA_KEYS = ['myself', 'others', 'servers']
+
+    _DEFAULT_SERVERS = ['tel, mailto via passcrow.mailpile.is']
+    _MOGGIE_HOME = '~moggie'
+    _RECOVERY_VER = 'moggie-recovery-1.0'
+    _RECOVERY_NAME = 'Moggie Settings'
+    _RECOVERY_DESC = 'Moggie configuration recovery data'
+
+    def __init__(self, *args, **kwarg):
+        super().__init__(*args, **kwarg)
+        if 'enabled' not in self:
+            self.enabled = False
+        if 'quick' not in self:
+            self.quick = True
+        if 'servers' not in self:
+            self.servers.extend(self._DEFAULT_SERVERS)
+        for opt in ('myself', 'others'):
+            self.config.set_private(
+                self.config_key, opt, save=False, delete=False)
+
+    myself = property(lambda s: ListItemProxy(s.config, s.config_key, 'myself', delim=';'))
+    others = property(lambda s: ListItemProxy(s.config, s.config_key, 'others', delim=';'))
+    servers = property(lambda s: ListItemProxy(s.config, s.config_key, 'servers', delim=';'))
+
+    def client(self):
+        pc_dir = os.path.join(self.config.profile_dir, 'passcrow')
+        client = PasscrowClient(
+            config_dir=pc_dir,
+            data_dir=pc_dir,
+            env_override=False if (self.env_override is False) else True,
+            create_dirs=True,
+            logger=logging.info)
+        if not client.default_policy.servers:
+            # FIXME: This might be a place to invoke some sort of recovery
+            #        server discovery mechanism. Or alternately, do we want
+            #        to always use Mailpile's servers by default? Nah?
+            client.default_policy.servers=[
+                PasscrowServerPolicy().parse(srv)
+                for srv in self.servers]
+            client.save_default_policy()
+        return client
+
+    def policy(self, client=None, myself=True):
+        dp = (client or self.client()).default_policy
+        idps = [
+            PasscrowIdentityPolicy().parse(idp, defaults=dp)
+            for idp in (self.myself if myself else self.others)]
+        for idp in idps:
+            if not idp.usable:
+                raise ValueError('Unusable identity policy: %s' % idp)
+        return PasscrowClientPolicy(
+            n=dp.n,
+            m=dp.m,
+            idps=idps,
+            expiration_days=dp.expiration_days,
+            timeout_minutes=dp.timeout_minutes)
+
+    def protect_json(self):
+        if not self.config.aes_key:
+            raise PermissionError('Please unlock the app first!')
+        _b64str = lambda d: str(base64.b64encode(d), 'utf-8')
+        return json.dumps({
+            'version': self._RECOVERY_VER,
+            'description': self._RECOVERY_DESC,
+            'aes_key': _b64str(self.config.aes_key),
+            'config': _b64str(open(self.config.filepath, 'rb').read())})
+
+    def protect(self, name=None, client=None, desc=None, policy=None, data=None):
+        if not self.enabled:
+            return False
+        client = client or self.client()
+        return client.protect(
+            name or self._RECOVERY_NAME,
+            data or self.protect_json(),
+            policy or self.policy(client=client),
+            pack_description=desc or self._RECOVERY_DESC,
+            verify_description=name or self._RECOVERY_NAME,
+            quick=self.quick)
+
+    def request_codes(self, name=None):
+        client = self.client()
+        pack = client.pack(name or self._RECOVERY_NAME)
+        # FIXME: Is the pack obsolete? Try anyway? Hmm.
+        return client.verify(pack, quick=self.quick)
+
+    def recover(self, codes, name=None):
+        client = self.client()
+        pack = client.pack(name or self._RECOVERY_NAME)
+        return client.recover(pack, codes, quick=self.quick)
+
+    # FIXME: Do we want to test the recovery settings?
+    #        Maybe no need, if we are doing e-mail based verification
+    #        and we can grab the e-mails from working configs?
+    #        When do we prompt the user to switch this on?
+    #        We need a process to re-up the recovery packs!
 
 
 class AccessConfig(ConfigSectionProxy):
@@ -218,12 +323,11 @@ class IdentityConfig(ConfigSectionProxy):
         'address': str}
 
 
-
 class AppConfig(ConfigParser):
 
     GENERAL = 'App'
     SECRETS = 'Secrets'
-    RECOVERY = 'Recovery Data'
+    PASSCROW = 'Passcrow Recovery'
     SMTP_BRIDGE_SVC = 'SMTP Bridge Service'
     ACCESS_PREFIX = 'Access '
     ACCOUNT_PREFIX = 'Account '
@@ -251,7 +355,7 @@ class AppConfig(ConfigParser):
 
     DIGIT_RE = re.compile('\d')
 
-    ALLOWED_SECTIONS = [GENERAL, SECRETS, RECOVERY]
+    ALLOWED_SECTIONS = [GENERAL, SECRETS, PASSCROW]
     ALLOWED_SECTION_PREFIXES = [
         ACCESS_PREFIX,
         ACCOUNT_PREFIX,
@@ -324,6 +428,8 @@ class AppConfig(ConfigParser):
     contexts = property(lambda self:
         dict((p, ContextConfig(self, p))
             for p in self if p.startswith(self.CONTEXT_PREFIX)))
+
+    passcrow = property(lambda self: PasscrowConfig(self, self.PASSCROW))
 
     def __enter__(self, *args, **kwargs):
         self.lock.acquire()
@@ -540,28 +646,33 @@ class AppConfig(ConfigParser):
                 self.add_section(section)
         return super().__getitem__(section)
 
-    def get(self, section, option, *, raw=False, vars=None, fallback=_UNSET):
+    def get(self, section, option, *,
+            raw=False, vars=None, fallback=_UNSET, permerror=False):
         if not self.has_section(section):
             if self.allowed_section(section):
                 self.add_section(section)
         val = super().get(section, option, raw=raw, vars=vars, fallback=fallback)
         if isinstance(val, str) and val[:2] == '::':
+            if permerror and not self.aes_key:
+                raise PermissionError('AES key is not set')
             val = dumb_decode(val[2:], aes_key=self.aes_key)
         return val
 
-    def set(self, section, option, value=None, save=True):
-        if self.key_desc(section, option) in self.keep_private:
-            return self.set_private(section, option, value=value, save=save)
-
+    def set(self, section, option, value=None, save=True, delete=True):
         if not self.has_section(section):
             if self.allowed_section(section):
                 self.add_section(section)
+
+        if self.key_desc(section, option) in self.keep_private:
+            return self.set_private(section, option,
+                value=value, save=save, delete=delete)
+
         if value is not None:
             encoded = dumb_encode_asc(value)
             if encoded[:1] != 'U':
                 value = '::' + encoded
             super().set(section, option, value=value)
-        else:
+        elif delete and option in self[section]:
             del self[section][option]
         if save:
             self.save()
