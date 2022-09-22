@@ -31,10 +31,6 @@ from .public import PublicWorker, RequestTimer
 @http_require(secure_transport=True, csrf=False)
 @process_post(max_bytes=2048000, _async=True)
 async def web_cli(req_env):
-    # Note: This is internal only, equivalent to RPC calls using the
-    #       secret URL. However, it does seem we might want to expose
-    #       this remotely, but that requires auth and tokens and all
-    #       that jazz.
     conn = req_env['conn']
     frame = req_env['frame']
     access = req_env['worker'].get_auth(req_env, secure_transport=True)
@@ -49,12 +45,23 @@ async def web_cli(req_env):
     if not (hasattr(command, 'WEB_EXPOSE') and command.WEB_EXPOSE):
         return {'code': 404, 'msg': 'No such command'}
 
-    if 'argz' in req_env.post_vars:
-        argz = req_env.post_vars.get('argz')
+    post_vars = req_env.post_vars
+    if 'argz' in post_vars:
+        argz = post_vars.get('argz')
         if isinstance(argz, dict):
             argz = argz['value']
         if argz:
             args.extend(argz.split('\0')[:-1])
+    else:
+        for var, val in (
+                list(req_env.query_tuples) +
+                list(post_vars.items())):
+            if isinstance(val, dict):
+                val = val['value']
+            if val == 'True':
+                args.append('--%s' % var)
+            else:
+                args.append('--%s=%s' % (var, val))
 
     try:
         cmd = await command.WebRunnable(
