@@ -141,13 +141,14 @@ class SearchWorker(BaseWorker):
             tag_op_sets, rec_hist, tag_namespace,
             mask_deleted, mask_tags, more_terms, **kwa):
         mutations = []
+        if tag_namespace:
+            tag_namespace = tag_namespace.lower()
         for (tag_ops, m) in tag_op_sets:
             mutation = [m, []]
             if isinstance(m, str):
                 m = dumb_decode(m)
                 mutation[0] = m
             if not isinstance(m, (IntSet, list)):
-                raise ValueError('Should search for %s' % m)
                 m = self.call('search', m,
                               mask_deleted, mask_tags, more_terms,
                               tag_namespace, False)
@@ -226,6 +227,8 @@ class SearchWorker(BaseWorker):
     def api_search(self,
             terms, mask_deleted, mask_tags, more_terms,
             tag_namespace, with_tags, **kwa):
+        if tag_namespace:
+            tag_namespace = tag_namespace.lower()
         mask_tags = self.MASK_TAGS if (mask_tags is None) else mask_tags
         tns, ops, hits = self._engine.search(terms,
             tag_namespace=tag_namespace,

@@ -24,6 +24,13 @@
 # provided by the user-interface, since the engine cannot really know what UX
 # action the tagging operation represents.
 #
+# Another concern:
+#   - Tagging a message into a tag_namespace should also add the tag to the
+#     in:@ns "all mail".
+#   - We need to better think through how importing and namespaces are going
+#     to interact. Although the above might suffice in practice, since tagging
+#     in:inbox@ns will do the job just fine?
+#
 import copy
 import logging
 import os
@@ -495,6 +502,8 @@ class SearchEngine:
 
     def _ns(self, k, ns):
         if ns and (k[:3] == 'in:'):
+            if '@' in k:
+                raise PermissionError('Namespace is fixed')
             return '%s@%s' % (k, ns)
         return k
 
@@ -544,8 +553,8 @@ class SearchEngine:
             if (kw == '*'):
                 return (op, kw, None)
             else:
-                return (op, kw, self.keyword_index(self._ns(kw, tag_namespace),
-                                                   create=(op == IntSet.Or)))
+                kw = self._ns(kw, tag_namespace)
+                return (op, kw, self.keyword_index(kw, create=(op==IntSet.Or)))
 
         slot = None
         cset_all = IntSet()

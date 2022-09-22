@@ -321,16 +321,15 @@ main app worker. Hints:
             return ResponsePleaseUnlock(jmap_request)
 
     async def api_jmap_tag(self, conn_id, access, jmap_request):
-        # FIXME: Make sure access allows requested contexts
         ctx = jmap_request['context']
-        if ctx not in self.config.contexts:
-            raise ValueError('Invalid context: %s' % ctx)
-        tag_namespace = self.config.get(ctx, 'tag_namespace', fallback=None)
+        # Will raise ValueError or NameError if access denied
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
 
         if self.search:
             results = self.search.with_caller(conn_id).tag(
                 jmap_request.get('tag_ops', []),
-                tag_namespace=tag_namespace,
+                tag_namespace=tag_ns,
+                more_terms=scope_s,
                 #tag_undo_id=jmap_request.get('tag_undo_id'),
                 #tag_redo_id=jmap_request.get('tag_redo_id'),
                 record_history=jmap_request.get('undoable', 'Tagging'),
