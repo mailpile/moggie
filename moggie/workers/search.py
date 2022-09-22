@@ -106,32 +106,40 @@ class SearchWorker(BaseWorker):
         return self.call('explain', terms)
 
     def search(self, terms,
-            tag_namespace=None, mask_deleted=True, mask_tags=None,
+            tag_namespace=None,
+            mask_deleted=True, mask_tags=None, more_terms=None,
             with_tags=False):
         return self.call('search', terms,
-                         mask_deleted, mask_tags, tag_namespace, with_tags)
+                         mask_deleted, mask_tags, more_terms,
+                         tag_namespace, with_tags)
 
     def intersect(self, terms, hits,
-            tag_namespace=None, mask_deleted=True, mask_tags=None):
+            tag_namespace=None,
+            mask_deleted=True, mask_tags=None, more_terms=None):
         srch = self.call('search', terms,
-                         mask_deleted, mask_tags, tag_namespace, False)
+                         mask_deleted, mask_tags, more_terms,
+                         tag_namespace, False)
         return IntSet.And(dumb_decode(srch['hits']), hits)
 
     def tag(self, tag_op_sets, record_history=None,
-            tag_namespace=None, mask_deleted=True, mask_tags=None):
+            tag_namespace=None,
+            mask_deleted=True, mask_tags=None, more_terms=None):
         tag_op_sets = list(tag_op_sets)
         for i, (tag_ops, m) in enumerate(tag_op_sets):
             if isinstance(m, str):
                 m = self.call('search', m,
-                              mask_deleted, mask_tags, tag_namespace, False)
+                              mask_deleted, mask_tags, more_terms,
+                              tag_namespace, False)
                 tag_op_sets[i] = (tag_ops, m['hits'])
             else:
                 tag_op_sets[i] = (tag_ops, dumb_encode_asc(IntSet(m)))
         return self.call('tag',
-            tag_op_sets, record_history, tag_namespace, mask_deleted, mask_tags)
+            tag_op_sets, record_history, tag_namespace,
+            mask_deleted, mask_tags, more_terms)
 
     def api_tag(self,
-            tag_op_sets, rec_hist, tag_namespace, mask_deleted, mask_tags, **kwa):
+            tag_op_sets, rec_hist, tag_namespace,
+            mask_deleted, mask_tags, more_terms, **kwa):
         mutations = []
         for (tag_ops, m) in tag_op_sets:
             mutation = [m, []]
@@ -141,7 +149,8 @@ class SearchWorker(BaseWorker):
             if not isinstance(m, (IntSet, list)):
                 raise ValueError('Should search for %s' % m)
                 m = self.call('search', m,
-                              mask_deleted, mask_tags, tag_namespace, False)
+                              mask_deleted, mask_tags, more_terms,
+                              tag_namespace, False)
                 mutation[0] = m['hits']
 
             for tag_op in tag_ops:
@@ -215,17 +224,25 @@ class SearchWorker(BaseWorker):
         self.reply_json(self._engine.explain(terms))
 
     def api_search(self,
-            terms, mask_deleted, mask_tags, tag_namespace, with_tags, **kwa):
+            terms, mask_deleted, mask_tags, more_terms,
+            tag_namespace, with_tags, **kwa):
+        mask_tags = self.MASK_TAGS if (mask_tags is None) else mask_tags
         tns, ops, hits = self._engine.search(terms,
             tag_namespace=tag_namespace,
             mask_deleted=mask_deleted,
-            mask_tags=self.MASK_TAGS if (mask_tags is None) else mask_tags,
+            mask_tags=mask_tags,
+            more_terms=more_terms,
             explain=True)
         result = {
             'terms': terms,
+            'more_terms': more_terms,
+            'mask_deleted': mask_deleted,
+            'mask_tags': mask_tags,
             'tag_namespace': tns,
-            'query': self._explain_ops(ops),
-            'hits': dumb_encode_asc(hits, compress=256)}
+            'query': self._explain_ops(ops)}
+
+        logging.debug('Searched: %s' % result)
+        result['hits'] = dumb_encode_asc(hits, compress=256)
 
         if with_tags:
             tag_info = self._engine.search_tags(

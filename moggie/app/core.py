@@ -266,15 +266,15 @@ main app worker. Hints:
 
     async def api_jmap_search(self, conn_id, access, jmap_request):
         ctx = jmap_request['context']
-        # Will rais ValueError or NameError if access denied
-        roles, tag_ns, tag_scope = access.grants(ctx, AccessConfig.GRANT_READ)
+        # Will raise ValueError or NameError if access denied
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_READ)
 
         def perform_search():
             s_result = self.search.with_caller(conn_id).search(
                 jmap_request['terms'],
                 tag_namespace=tag_ns,
-                #tag_scope=tag_scope,  ## FIXME
                 mask_deleted=jmap_request.get('mask_deleted', True),
+                more_terms=scope_s,
                 with_tags=(not jmap_request.get('only_ids', False)))
             if jmap_request.get('uncooked'):
                 return s_result
@@ -300,17 +300,16 @@ main app worker. Hints:
             return ResponsePleaseUnlock(jmap_request)
 
     async def api_jmap_counts(self, conn_id, access, jmap_request):
-        # FIXME: Make sure access allows requested contexts
         ctx = jmap_request['context']
-        if ctx not in self.config.contexts:
-            raise ValueError('Invalid context: %s' % ctx)
-        tag_namespace = self.config.get(ctx, 'tag_namespace', fallback=None)
+        # Will raise ValueError or NameError if access denied
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_READ)
 
         def perform_counts():
             counts = {}
             for terms in jmap_request['terms_list']:
                 result = self.search.with_caller(conn_id).search(terms,
-                    tag_namespace=tag_namespace,
+                    tag_namespace=tag_ns,
+                    more_terms=scope_s,
                     mask_deleted=jmap_request.get('mask_deleted', True))
                 counts[terms] = dumb_decode(result['hits']).count()
             return counts

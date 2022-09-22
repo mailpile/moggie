@@ -86,6 +86,7 @@ class CommandSearch(CLICommand):
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
+        '--q=':              [],
         # These are notmuch options which we implement
         '--format=':         ['text'],
         '--output=':         ['default'],
@@ -106,9 +107,12 @@ class CommandSearch(CLICommand):
 
     def configure(self, args):
         self.batch = 10000
-        self.terms = ' '.join(self.strip_options(args))
-        if self.terms == '*':
-            self.terms = 'all:mail'
+
+        # Allow both --q=.. and unmarked query terms. The --q=
+        # option is mostly for use with the web-CLI.
+        terms = self.strip_options(args)
+        terms.extend(self.options['--q='])
+        self.terms = ' '.join(terms)
 
         if self.options['--format='][-1] == 'json':
             self.mimetype = 'application/json'

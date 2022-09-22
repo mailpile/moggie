@@ -700,7 +700,9 @@ class SearchEngine:
         return explain_ops(self.parse_terms(terms, self.magic_map))
 
     def search(self, terms,
-            tag_namespace='', mask_deleted=True, mask_tags=None, explain=False):
+            tag_namespace='',
+            mask_deleted=True, mask_tags=None, more_terms=None,
+            explain=False):
         """
         Search for terms in the index, returning an IntSet.
 
@@ -716,6 +718,10 @@ class SearchEngine:
             ops = self.parse_terms(terms, self.magic_map)
         else:
             ops = terms
+        if more_terms:
+            if isinstance(more_terms, str):
+                more_terms = self.parse_terms(more_terms, self.magic_map)
+            ops = (IntSet.And, ops, more_terms)
         if tag_namespace:
             # Explicitly search for "all:mail", to avoid returning results
             # from outside the namespace (which would otherwise happen when

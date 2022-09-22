@@ -234,8 +234,11 @@ class AccessConfig(ConfigSectionProxy):
                 if rc not in role:
                     return False
 
-        tags = ctx.tags if ctx.tag_required else []
-        return (role, ctx.tag_namespace, tags)
+        scope_search = ' '.join('+in:%s' % t.lower() for t in ctx.tags)[1:]
+        if ctx.scope_search:
+            scope_search += ' ' + ctx.scope_search
+
+        return (role, ctx.tag_namespace, scope_search)
 
 
 class AccountConfig(ConfigSectionProxy):
@@ -279,41 +282,56 @@ class ContextConfig(ConfigSectionProxy):
         'description': str,
         'default_identity': str,
         # Optional...
-        'tag_namespace': str,
-        'tag_required': cfg_bool}
-    _EXTRA_KEYS = ['identities', 'tags', 'flags', 'accounts']
+        'scope_search': str,
+        'tag_namespace': str}
+    _EXTRA_KEYS = ['identities', 'tags', 'extra_tags', 'flags', 'accounts']
 
     def __init__(self, *args, **kwarg):
         super().__init__(*args, **kwarg)
         self._ids_list = ListItemProxy(self.config, self.config_key, 'identities')
         self._tags_list = ListItemProxy(self.config, self.config_key, 'tags')
+        self._etags_list = ListItemProxy(self.config, self.config_key, 'extra_tags')
         self._flags_list = ListItemProxy(self.config, self.config_key, 'flags')
         self._accts_list = ListItemProxy(self.config, self.config_key, 'accounts')
 
     tags = property(lambda self: self._tags_list)
+    extra_tags = property(lambda self: self._etags_list)
     flags = property(lambda self: self._flags_list)
     identities = property(lambda self: self._ids_list)
     accounts = property(lambda self: self._accts_list)
 
-    def as_dict(self):
-        accounts = [
+    def _accounts(self):
+        return [
             (a, AccountConfig(self.config, a))
             for a in self.accounts if a]
 
-        tags = set()
+    def _extra_tags(self, accounts=None):
+        etags = []
+        etags.extend(self._etags_list)
+        accounts = self._accounts() if (accounts is None) else accounts
         for akey, acct in accounts:
-            tags |= set(acct.get_tags())
-        tags = list(tags)
-        tags.extend(t.lower() for t in self.tags if t)
+            etags.extend(acct.get_tags())
+        return set(etags)
+
+    def as_dict(self, deep=True):
+        if not deep:
+            return super().as_dict()
+
+        accounts = self._accounts()
+        tags = set(t.lower() for t in self.tags if t)
+        etags = self._extra_tags(accounts=accounts)
 
         return {
             'name': self.name,
             'description': self.description,
+            'tag_namespace': self.tag_namespace,
+            'scope_search': self.scope_search,
             'accounts': dict((k, a.as_dict()) for k, a in sorted(accounts)),
             'identities': dict(
                  (i, IdentityConfig(self.config, i).as_dict())
                  for i in self.identities if i),
             'tags': tags,
+            'extra_tags': etags,
             'key': self.config_key}
 
 
@@ -333,6 +351,8 @@ class AppConfig(ConfigParser):
     ACCOUNT_PREFIX = 'Account '
     IDENTITY_PREFIX = 'Identity '
     CONTEXT_PREFIX = 'Context '
+
+    ACCESS_ZERO = 'Access 0'
     CONTEXT_ZERO = 'Context 0'
 
     INITIAL_SETTINGS = [
@@ -443,7 +463,7 @@ class AppConfig(ConfigParser):
 
     def access_zero(self):
         with self:
-            azero = self.ACCESS_PREFIX + '0'
+            azero = self.ACCESS_ZERO
             roles = ', '.join([
                 '%s:%s' % (p, AccessConfig.GRANT_ALL)
                 for p in self if p.startswith(self.CONTEXT_PREFIX)])
