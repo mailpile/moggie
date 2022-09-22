@@ -468,7 +468,6 @@ main app worker. Hints:
 
         return {
             'code': code,
-            '_result': result,
             'mimetype': 'application/json',
             'body': bytes(json_result, 'utf-8')}
 
@@ -504,8 +503,8 @@ main app worker. Hints:
                 access = self.config.all_access[access]
             else:
                 access = self.config.access_zero()
-            rv = await self.api_jmap(None, access, request)
-            self.worker.reply_json(rv['_result'])
+            rv = await self.api_jmap(None, access, request, internal=True)
+            self.worker.reply_json(rv)
         except:
             logging.exception('rpc_jmap failed %s' % (request,))
             self.worker.reply_json({'error': 'FIXME'})
