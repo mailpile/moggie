@@ -145,17 +145,6 @@ main app worker. Hints:
             self.storage.quit()
             self.start_workers(start_encrypted=False)
 
-        if (self.storage and self.search and self.metadata
-                and (self.importer is None)):
-            self.importer = ImportWorker(self.worker.worker_dir,
-                fs_worker=self.storage,
-                app_worker=self.worker,
-                search_worker=self.search,
-                metadata_worker=self.metadata,
-                notify=notify_url,
-                name='importer',
-                log_level=log_level).connect()
-
         return True
 
     def start_workers(self, start_encrypted=True):
@@ -189,6 +178,17 @@ main app worker. Hints:
             notify=notify_url,
             name='fs',
             log_level=log_level).connect()
+
+        if (self.storage and self.search and self.metadata
+                and (self.importer is None)):
+            self.importer = ImportWorker(self.worker.worker_dir,
+                fs_worker=self.storage,
+                app_worker=self.worker,
+                search_worker=self.search,
+                metadata_worker=self.metadata,
+                notify=notify_url,
+                name='importer',
+                log_level=log_level).connect()
 
         return True
 
