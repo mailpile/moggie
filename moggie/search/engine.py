@@ -482,11 +482,9 @@ class SearchEngine:
                 for kw in kw_list + extra_kws:
                     kw = kw.replace('*', '')  # Otherwise partial search breaks..
 
-                    # Treat tag: and is: prefixes as alternatives to in: for tags.
+                    # Treat tag: prefix as alternatives to in: for tags.
                     if kw[:4] == 'tag:':
                         kw = 'in:' + kw[4:]
-                    elif kw[:3] == 'is:':
-                        kw = 'in:' + kw[3:]
 
                     if tag_ns and (kw[:3] == 'in:'):
                         kw = '%s@%s' % (kw, tag_ns)
@@ -683,8 +681,6 @@ class SearchEngine:
             # Treat tag: and is: prefixes as alternatives to in: for tags.
             if term[:4] == 'tag:':
                term = 'in:' + term[4:]
-            elif term[:3] == 'is:':
-               term = 'in:' + term[3:]
 
             if tag_ns and (term[:3] == 'in:'):
                return self['%s@%s' % (term, tag_ns)]

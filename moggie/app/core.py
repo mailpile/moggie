@@ -145,7 +145,8 @@ main app worker. Hints:
             self.storage.quit()
             self.start_workers(start_encrypted=False)
 
-        if self.importer is None:
+        if (self.storage and self.search and self.metadata
+                and (self.importer is None)):
             self.importer = ImportWorker(self.worker.worker_dir,
                 fs_worker=self.storage,
                 app_worker=self.worker,

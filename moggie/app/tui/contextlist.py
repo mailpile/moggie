@@ -142,7 +142,7 @@ class ContextList(urwid.ListBox):
             if i == self.expanded:
                 for tag in ctx.get('tags', []):
                     count_terms.append('in:%s' % tag)
-                    count_terms.append('in:%s is:unread' % tag)
+                    count_terms.append('in:%s tag:unread' % tag)
             self.tui_frame.app_bridge.send_json(self.counts_obj)
 
     def incoming_message(self, message):

@@ -7,7 +7,7 @@ class SearchDialog(urwid.WidgetWrap):
     HELP_TEXT = """\
 
 Examples:
- - in:inbox is:unread
+ - in:inbox tag:unread
  - from:joe has:attachment
  - dates:2010-01..2010-04
  - party +from:mom -to:dad

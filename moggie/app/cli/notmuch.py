@@ -39,9 +39,9 @@ class CommandSearch(CLICommand):
       moggie search bjarni                 # Exact match
       moggie search bjarn*                 # Will match bjarni or bjarna
 
-      moggie search in:inbox is:unread     # Both in the inbox and unread
-      moggie search in:inbox -is:unread    # In the inbox, not unread
-      moggie search in:inbox +is:unread    # In the inbox, or unread
+      moggie search in:inbox tag:unread    # Both in the inbox and unread
+      moggie search in:inbox -tag:unread   # In the inbox, not unread
+      moggie search in:inbox +tag:unread   # In the inbox, or unread
       moggie search bjarni --format=json   # JSON for further processing...
 
       moggie search dates:2022-08 --format=mbox > August2022.mbx  # Export!
@@ -165,7 +165,7 @@ class CommandSearch(CLICommand):
 
             tags = []
             for msg in msgs.values():
-                tags.extend(msg['tags'])
+                tags.extend(msg.get('tags', []))
             tags = [t.split(':')[-1] for t in set(tags)]
 
             authors = ', '.join(list(set(
@@ -634,7 +634,7 @@ class CommandTag(CLICommand):
             if tagop[:1] not in ('+', '-'):
                 raise Nonsense(
                     'Tag operations must start with + or -: %s' % otagop)
-            if tagop[1:4] in ('in:', 'is:'):
+            if tagop[1:4] in ('in:',):
                 tagop = tagops[idx] = tagop[:1] + tagop[4:]
             elif tagop[1:5] in ('tag:',):
                 tagop = tagops[idx] = tagop[:1] + tagop[5:]
