@@ -181,7 +181,7 @@ class CommandImport(CLICommand):
         def _next():
             path, request_obj = requests.pop(0)
             sys.stdout.write('[import] Processing %s\n' % path)
-            self.worker.jmap(request_obj)
+            self.worker.jmap(True, request_obj)
 
         _next()
         while True:
