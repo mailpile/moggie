@@ -161,7 +161,7 @@ class PasscrowConfig(ConfigSectionProxy):
 class AccessConfig(ConfigSectionProxy):
     _KEYS = {
         'name': str,
-        #tokens = dict of token->creation ts
+        #tokens = dict of token->expiration ts
         #roles = dict of context->role
         # These are optional
         'description': str,
@@ -169,7 +169,7 @@ class AccessConfig(ConfigSectionProxy):
         'username': str}
     _EXTRA_KEYS = ['roles', 'tokens']
 
-    MAX_TOKEN_AGE = 7 * 24 * 3600  #FIXME: is this sane?
+    DEFAULT_TOKEN_TTL = 7 * 24 * 3600
 
     GRANT_ROLE = {
         'owner': ('A',          'Unlimited access'),
@@ -199,25 +199,25 @@ class AccessConfig(ConfigSectionProxy):
     roles = property(lambda self: self._role_dict)
     tokens = property(lambda self: self._token_dict)
 
-    def expire_tokens(self, max_age=MAX_TOKEN_AGE):
-        oldest = time.time() - max_age
+    def expire_tokens(self):
+        now = time.time()
         expired = [t for t, c in self.tokens.items()
-            if int(c) and (int(c) < oldest)]
+            if int(c) and (int(c) < now)]
         for token in expired:
             del self.tokens[token]
 
-    def new_token(self):
+    def new_token(self, ttl=None):
         # Tokens: 80 bits of entropy, encoded using base32
         token = str(base64.b32encode(os.urandom(10)), 'latin-1')
-        self.tokens[token] = int(time.time())
+        ttl = ttl or self.DEFAULT_TOKEN_TTL
+        self.tokens[token] = int(time.time()) + ttl
         return token
 
     def get_fresh_token(self):
         tokens = self.tokens.items()
         if tokens:
-            age, tok = max((int(a), t) for t, a in tokens)
-            exp = age + self.MAX_TOKEN_AGE
-            if exp < time.time() + (self.MAX_TOKEN_AGE/2):
+            exp, tok = max((int(a), t) for t, a in tokens)
+            if exp < time.time() + (self.DEFAULT_TOKEN_TTL/2):
                 tok = self.new_token()
         else:
             tok = self.new_token()

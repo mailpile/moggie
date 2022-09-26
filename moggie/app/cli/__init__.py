@@ -1,6 +1,7 @@
 import sys
 
 from .command import CLICommand
+from .admin import CommandGrantAccess
 from .admin import CommandUnlock, CommandEnableEncryption
 from .admin import CommandImport, CommandExport
 from .notmuch import CommandSearch, CommandAddress, CommandCount, CommandTag
@@ -97,6 +98,7 @@ to implement (most of) the command-line interfaces of both mutt and notmuch.
 
 
 CLI_COMMANDS = {
+    CommandGrantAccess.NAME: CommandGrantAccess,
     CommandAddress.NAME: CommandAddress,
     CommandSearch.NAME: CommandSearch,
     CommandCount.NAME: CommandCount,

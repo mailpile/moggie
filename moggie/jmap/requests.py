@@ -103,6 +103,40 @@ class RequestContexts(RequestBase):
         }, req_id=req_id)
 
 
+class RequestConfigGet(RequestBase):
+    def __init__(self,
+            which=None,
+            urls=False,
+            access=False,
+            accounts=False,
+            identities=False,
+            contexts=False,
+            req_id=None):
+        self.update({
+            'prototype': 'config_get',
+            'which': which,
+            'urls': urls,
+            'access': access,
+            'identities': identities,
+            'accounts': accounts,
+            'contexts': contexts,
+        }, req_id=req_id)
+
+
+class RequestConfigSet(RequestBase):
+    def __init__(self,
+            new=None,
+            section=None,
+            updates=[],
+            req_id=None):
+        self.update({
+            'prototype': 'config_set',
+            'new': new,
+            'section': section,
+            'updates': updates
+        }, req_id=req_id)
+
+
 class RequestUnlock(RequestBase):
     def __init__(self, passphrase=None, req_id=None):
         self.update({
@@ -133,6 +167,8 @@ def to_jmap_request(_input):
          'search': RequestSearch,
          'mailbox': RequestMailbox,
          'contexts': RequestContexts,
+         'config_set': RequestConfigSet,
+         'config_get': RequestConfigGet,
          'add_to_index': RequestAddToIndex,
          'unlock': RequestUnlock,
          'change_passphrase': RequestChangePassphrase,

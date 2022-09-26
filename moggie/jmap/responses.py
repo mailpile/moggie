@@ -100,6 +100,26 @@ class ResponseEmail(dict):
             'email': parsed_email})
 
 
+class ResponseConfigGet(dict):
+    def __init__(self, request, config_data, error=None):
+        self.update({
+            'prototype': 'config_get',
+            'req_id': request['req_id'],
+            'config': config_data})
+        if error is not None:
+            self['error'] = error
+
+
+class ResponseConfigSet(dict):
+    def __init__(self, request, config_data, error=None):
+        self.update({
+            'prototype': 'config_get',
+            'req_id': request['req_id'],
+            'config': config_data})
+        if error is not None:
+            self['error'] = error
+
+
 class ResponseContexts(dict):
     def __init__(self, request, contexts):
         self.update({

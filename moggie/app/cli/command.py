@@ -139,13 +139,20 @@ class CLICommand:
     def get_context(self, ctx=None):
         from ...config import AppConfig
         cfg = AppConfig(self.workdir)
+
+        all_contexts = cfg.contexts
         ctx = ctx or (self.options.get('--context=') or ['default'])[-1]
         if ctx == 'default':
             ctx = cfg.get(
                 AppConfig.GENERAL, 'default_cli_context', fallback='Context 0')
         else:
-            pass # FIXME: Allow the user to select context by name, not
-                 #        only the unfriendly "Context N" key.
+            if ctx not in all_contexts:
+                for ctx_key, ctx_info in all_contexts.items():
+                    if ctx == ctx_info.name:
+                        ctx = ctx_key
+                        break
+        if ctx not in all_contexts:
+            raise Nonsense('Invalid context: %s' % ctx)
 
         if self.ROLES and self.access is not True:
             if not self.access.grants(ctx, self.ROLES):

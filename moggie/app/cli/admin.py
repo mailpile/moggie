@@ -2,15 +2,19 @@
 #       add an export command, for exporting messages from A to B
 
 import asyncio
+import datetime
+import json
 import logging
 import os
 import sys
+import time
 
+from ...config import AppConfig, AccessConfig
 from .command import Nonsense, CLICommand
 
 
 class CommandGrantAccess(CLICommand):
-    """moggie grant [<name>] [<context>] [<[+|-]roles>]
+    """moggie grant [<op> [<name> [<roles>] [options]]]
 
     This command lists or changes what access is currently granted.
 
@@ -19,28 +23,278 @@ class CommandGrantAccess(CLICommand):
 
     Examples:
 
-        moggie grant Bjarni
-        moggie grant Bjarni 'Context 0' +owner
+        moggie grant list
+        moggie grant list --output=urls
+        moggie grant create Bjarni owner --context='Context 0'
+        moggie grant update Bjarni user --context='Context 2'
+        moggie grant login  Bjarni --ttl=1m
+        moggie grant logout Bjarni
+        moggie grant remove Bjarni
 
+    The `logout` operation removes all access tokens, rendering any live
+    sessions or shared URLs invalid.
+
+    The `login` op will by default create access tokens/URLs which are only
+    valid for 1 week. For other durations, specify `--ttl=X` where X can be
+    either seconds (no suffix), hours (12h), days (5d), weeks (2w), months
+    (1m) or years (10y). Note that months are always a multiple of 31 days,
+    and years are always multiples of 365 days.
+
+    Requesting `--output=urls` will change the output to list the URLs
+    which are currently live for each user.
     """
-    AUTO_START = False
     NAME = 'grant'
+    ROLES = AccessConfig.GRANT_ACCESS
+    WEBSOCKET = False
+    AUTO_START = False
+    WEB_EXPOSE = True
+    OPTIONS = {
+        '--context=': ['default'],
+        '--format=':  ['text'],
+        '--output=':  ['grants'],
+        '--ttl=':     [None]}
 
     def configure(self, args):
-        self.name = args[0] if (len(args) > 0) else None
-        self.context = args[1] if (len(args) > 1) else None
+        args = self.strip_options(args)
+        self.cmd = args[0] if (len(args) > 0) else None
+        self.name = args[1] if (len(args) > 1) else None
         self.roles = args[2] if (len(args) > 2) else None
         if len(args) > 3:
             raise Nonsense('Too many arguments')
+        if self.roles and self.options['--context='][-1] == 'default':
+            raise Nonsense('Please specify --context=X when granting access')
+        if not self.cmd:
+            self.cmd = 'list'
+        if self.cmd not in ('list', 'update', 'create', 'remove', 'logout', 'login'):
+            raise Nonsense('Unknown command: %s' % self.cmd)
         return []
 
     async def run(self):
-        pass
+        if self.cmd == 'list':
+             result = await self.get_roles()
+        elif self.cmd == 'create':
+             result = await self.do_create()
+        elif self.cmd == 'update':
+             result = await self.do_update()
+        elif self.cmd == 'remove':
+             result = await self.do_remove()
+        elif self.cmd == 'logout':
+             result = await self.do_logout()
+        elif self.cmd == 'login':
+             result = await self.do_login()
+
+        fmt = self.options['--format='][-1]
+        if fmt == 'json':
+            self.emit_json(result)
+        else:
+            self.emit_text(result)
+
+    def emit_text(self, result):
+
+        want_urls = self.options['--output='][-1] == 'urls'
+        if want_urls:
+            fmt = '%(k)-13s %(n)-13s %(e)-10s %(u)s'
+        else:
+            fmt = '%(k)-13s %(n)-13s %(c)15s %(r)10s %(t)s'
+        legend = {
+            'k': 'KEY',
+            'n': 'NAME',
+            'c': 'CONTEXT',
+            'r': 'ROLE',
+            't': 'TOKEN',
+            'e': 'EXPIRES',
+            'u': 'URLS'}
+
+        def _fmt_date(ts):
+            dt = datetime.datetime.fromtimestamp(int(ts))
+            return '%4.4d-%2.2d-%2.2d' % (dt.year, dt.month, dt.day)
+
+        self.print(fmt % legend)
+        for ai in result:
+            u = ai['urls']
+            t = ai['tokens']
+            c = sorted(list(ai['contexts'].keys()))
+            cl = len(c)
+            if want_urls and not u:
+                continue
+            for i in range(0, max(1, len(u) if want_urls else cl)):
+                self.print(fmt % {
+                    'k': ai['key']               if (i == 0) else '',
+                    'n': ai['name']              if (i == 0) else '',
+                    'c': c[i-1]                  if (0 < i <= cl) else '',
+                    'r': ai['contexts'][c[i-1]]  if (0 < i <= cl) else '',
+                    't': t[0]                    if (t and i == 0) else '',
+                    'e': _fmt_date(u[0][0])      if (u and i == 0) else '',
+                    'u': u[i][1]                 if (i < len(u)) else ''})
+
+    def emit_json(self, config):
+        self.print(json.dumps(config))
+
+    async def get_roles(self, want_context=True):
+        from ...jmap.requests import RequestConfigGet
+
+        cfg = await self.worker.async_jmap(self.access, RequestConfigGet(
+            urls=True,
+            access=True,
+            contexts=True))
+        result = []
+        want_context = want_context and (
+            self.options['--context='][-1] != 'default')
+
+        with_tokens = (self.access is True
+            or (self.access
+                and self.access.config_key == AppConfig.ACCESS_ZERO))
+
+        for akey, adata in cfg['config'].get('access', {}).items():
+            if self.name in (None, adata['name'], akey):
+                if self.name:
+                    # Update our idea of what the name is, in the case that
+                    # we actually matched on the config section key.
+                    self.name = adata['name']
+                ctxs = {}
+                for ctx, role in adata.get('roles', {}).items():
+                    if (not want_context) or (ctx == self.context):
+                        ctxs[ctx] = role.strip()
+
+                tokens = sorted([
+                    (e, t if with_tokens else '(live)')
+                    for t, e in adata.get('tokens', {}).items()])
+                urls = []
+                if with_tokens and tokens:
+                    urls.extend((tokens[0][0], '%s/%s/' % (u, tokens[0][1]))
+                        for u in cfg['config']['urls'])
+
+                if ctxs:
+                    result.append({
+                        'key': akey,
+                        'name': adata['name'],
+                        'urls': urls,
+                        'contexts': ctxs,
+                        'tokens': [t[1] for t in reversed(tokens)]})
+        return sorted(result, key=lambda r: r['key'])
+
+    def _make_role_update(self):
+        if self.roles in ('-', '', 'none', 'None'):
+            return [{
+                'op': 'dict_del',
+                'variable': 'roles',
+                'dict_key': self.context}]
+        else:
+            # Translate user-friendly role names into role strings
+            self.roles = AccessConfig.GRANT_ROLE.get(
+                self.roles, [self.roles])[0]
+            return [{
+                'op': 'dict_set',
+                'variable': 'roles',
+                'dict_key': self.context,
+                'dict_val': self.roles}]
+
+    async def do_create(self):
+        from ...jmap.requests import RequestConfigSet
+
+        updates = [{
+            'op': 'set',
+            'variable': 'name',
+            'value': self.name}]
+        if self.name and self.roles:
+            updates.extend(self._make_role_update())
+        if updates:
+            current = await self.get_roles(want_context=True)  # Need contexts!
+            if current and current[0]['name'] == self.name:
+                raise Nonsense('%s already exists, use update?' % self.name)
+            rv = await self.worker.async_jmap(self.access,
+                RequestConfigSet(new='access', updates=updates))
+
+        return await self.get_roles()
+
+    async def do_update(self):
+        from ...jmap.requests import RequestConfigSet
+
+        updates = []
+        if self.name and self.roles:
+            updates.extend(self._make_role_update())
+        if updates:
+            current = await self.get_roles(want_context=False)
+            if not (current and current[0]['name'] == self.name):
+                raise Nonsense('%s not found, use create?' % self.name)
+
+            akey = current[0]['key']
+            if akey == AppConfig.ACCESS_ZERO:
+                raise Nonsense(
+                    '%s (%s) cannot be changed.' % (self.name, akey))
+            rv = await self.worker.async_jmap(self.access,
+                RequestConfigSet(section=akey, updates=updates))
+
+        return await self.get_roles()
+
+    async def do_remove(self):
+        from ...jmap.requests import RequestConfigSet
+
+        current = await self.get_roles(want_context=False)
+        if not (current and current[0]['name'] == self.name):
+            raise Nonsense('%s not found.' % self.name)
+
+        akey = current[0]['key']
+        rv = await self.worker.async_jmap(self.access,
+            RequestConfigSet(section=akey, updates=[{
+                    'op': 'remove_section',
+                }]))
+
+        return await self.get_roles()
+
+    async def do_logout(self):
+        from ...jmap.requests import RequestConfigSet
+
+        current = await self.get_roles(want_context=False)
+        if not (current and current[0]['name'] == self.name):
+            raise Nonsense('%s not found.' % self.name)
+
+        akey = current[0]['key']
+        rv = await self.worker.async_jmap(self.access,
+            RequestConfigSet(section=akey, updates=[{
+                    'op': 'del',
+                    'variable': 'tokens'
+                }]))
+
+        return await self.get_roles()
+
+    async def do_login(self):
+        from ...jmap.requests import RequestConfigSet
+
+        current = await self.get_roles(want_context=False)
+        if not (current and current[0]['name'] == self.name):
+            raise Nonsense('%s not found.' % self.name)
+
+        ttl = self.options.get('--ttl=')[-1]
+        if ttl:
+            ttl = ttl.lower()
+            if ttl[-1:] == 'y':
+                ttl = int(ttl[:-1]) * 365 * 24 * 3600
+            elif ttl[-1:] == 'm':
+                ttl = int(ttl[:-1]) * 31 * 24 * 3600
+            elif ttl[-1:] == 'w':
+                ttl = int(ttl[:-1]) * 7 * 24 * 3600
+            elif ttl[-1:] == 'd':
+                ttl = int(ttl[:-1]) * 24 * 3600
+            elif ttl[-1:] == 'h':
+                ttl = int(ttl[:-1]) * 3600
+            else:
+                ttl = int(ttl)
+
+        akey = current[0]['key']
+        rv = await self.worker.async_jmap(self.access,
+            RequestConfigSet(section=akey, updates=[{
+                    'op': 'new_access_token',
+                    'ttl': ttl
+                }]))
+
+        return await self.get_roles()
 
 
 class CommandUnlock(CLICommand):
-    AUTO_START = False
     NAME = 'unlock'
+    ROLES = AccessConfig.GRANT_ACCESS
+    AUTO_START = False
 
     def configure(self, args):
         self.passphrase = ' '.join(args)
@@ -90,6 +344,10 @@ class CommandImport(CLICommand):
 
     """
     NAME = 'import'
+    ROLES = (
+        AccessConfig.GRANT_FS +
+        AccessConfig.GRANT_COMPOSE +
+        AccessConfig.GRANT_TAG_RW)
     SEARCH = ('in:incoming',)
     OPTIONS = {
         '--context=':  ['default'],

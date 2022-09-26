@@ -8,6 +8,7 @@ import time
 import sys
 
 from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
+from ..config.helpers import DictItemProxy, ListItemProxy
 from ..jmap.core import JMAPSessionResource
 from ..jmap.requests import *
 from ..jmap.responses import *
@@ -85,6 +86,7 @@ main app worker. Hints:
             b'rpc/get_access_token':  (True, self.rpc_get_access_token)}
 
         self._schedule = []
+        self.counter = int(time.time()) - 1663879773
         self.metadata = None
         self.importer = None
         self.storage = None
@@ -253,6 +255,147 @@ main app worker. Hints:
 
     async def api_webroot(self, req_env):
         return 'FIXME: Hello world'
+
+    async def api_jmap_config_set(self, conn_id, access, jmap_request):
+        czero = self.config.CONTEXT_ZERO
+
+        create = jmap_request.get('new') or ''
+        section = jmap_request.get('section') or ''
+        updates = jmap_request.get('updates') or []
+
+        # Sanity and access checks
+        #
+        # FIXME: Allow more non-admin config changes?
+        try:
+            if (create and section) or not (create or section):
+                raise ValueError('Need one of create or section (not both)')
+            elif section == self.config.SECRETS:
+                # This is just too dangerous, at least for now
+                raise PermissionError('Access denied')
+            elif access.config_key == self.config.ACCESS_ZERO:
+                # Access Zero can do anything they like
+                pass
+            elif section.startswith(self.config.CONTEXT_PREFIX):
+                # User has admin rights on the section? OK.
+                _, _, _ = access.grants(section, AccessConfig.GRANT_ACCESS)
+            elif updates and (
+                    section.startswith(self.config.ACCESS_PREFIX)
+                    or (create == 'account')):
+                # If the user is ONLY granting/revoking access to contexts they
+                # are in charge of, then allow it.
+                for update in updates:
+                    if update['variable'] not in 'roles':
+                        raise PermissionError('Access denied')
+                    if update['op'] not in ('dict_set', 'dict_del'):
+                        raise PermissionError('Invalid operation')
+                    _, _, _ = access.grants(
+                        update['dict_key'], AccessConfig.GRANT_ACCESS)
+            else:
+                # Other changes require "root" access
+                _, _, _ = access.grants(czero, AccessConfig.GRANT_ACCESS)
+        except (ValueError, NameError, TypeError):
+            # FIXME: this might not be the most helpful thing to do here
+            raise PermissionError('Access denied')
+
+        result = {'updates': []}
+        errors = []
+
+        if create:
+            while True:
+                section = '%s%x' % ({
+                        'access': self.config.ACCESS_PREFIX,
+                        'account': self.config.ACCOUNT_PREFIX,
+                        'context': self.config.CONTEXT_PREFIX
+                    }[create], self.counter)
+                self.counter += 1
+                if section not in self.config:
+                    break
+
+        # FIXME: The access object should give us some more details, e.g.
+        #        IP address if the user is remote - this is our audit log!
+        logging.info('[config] %s [%s] for %s' % (
+            'Creating' if create else 'Updating', section, access.name))
+
+        logging.info('SET: create=%s section=%s updates=%s'
+            % (create, section, updates))
+        with self.config:
+          for update in updates:
+            op, var = update['op'], update.get('variable')
+            if op == 'remove_section'  and not var:
+                self.config.remove_section(section)
+            elif op == 'set':
+                self.config.set(section, var, update['value'])
+            elif op in ('del', 'delete', 'remove'):
+                self.config.remove_option(section, var)
+            elif op in ('dict_set', 'dict_del'):
+                dp = DictItemProxy(self.config, section, var)
+                if op == 'dict_set':
+                    dp[update['dict_key']] = update['dict_val']
+                elif op == 'dict_del':
+                    del dp[update['dict_key']]
+            elif op in ('list_add', 'list_del'):
+                lp = ListItemProxy(self.config, section, var)
+                raise ValueError('Unimplemented')
+            elif (section.startswith(self.config.ACCESS_PREFIX)
+                   and op == 'new_access_token'):
+                ttl = update.get('ttl')
+                self.config.all_access[section].new_token(ttl=ttl)
+            else:
+                errors.append('Unknown op: %s(%s)' % (op, var))
+                logging.info('ConfigSet error: %s' % errors[-1])
+
+        return ResponseConfigSet(jmap_request, result, error=', '.join(errors))
+
+    async def api_jmap_config_get(self, conn_id, access, jmap_request):
+        result = {}
+        czero = self.config.CONTEXT_ZERO
+        which = jmap_request.get('which')
+        error = None
+
+        def _fill(name, all_items, context, prefix, roles):
+            if which and which.startswith(prefix):
+                if access.grants(context, roles):
+                    result[name] = {which: all_items[which].as_dict()}
+                else:
+                    error = 'Access denied: %s/%s' % (name, which)
+            elif access.grants(context, roles):
+                result[name] = dict(
+                    (k, v.as_dict()) for k,v in all_items.items())
+            else:
+                error = 'Access denied: %s' % name
+
+        if jmap_request.get('access'):
+            _fill('access', self.config.all_access, czero,
+                self.config.ACCESS_PREFIX, AccessConfig.GRANT_ACCESS)
+        if jmap_request.get('accounts'):
+            _fill('accounts', self.config.accounts, czero,
+                self.config.ACCOUNT_PREFIX, AccessConfig.GRANT_ACCESS)
+        if jmap_request.get('identities'):
+            _fill('identities', self.config.identities, czero,
+                self.config.IDENTITY_PREFIX, AccessConfig.GRANT_ACCESS)
+
+        if jmap_request.get('urls'):
+            result['urls'] = [self.worker.url.rsplit('/', 1)[0]]
+            kite_name = self.config.get(
+                self.config.GENERAL, 'kite_name', fallback=None)
+            if kite_name:
+                result['urls'].append('https://%s' % kite_name)
+
+        if jmap_request.get('contexts'):
+            contexts = self.config.contexts
+            if which and which.startswith(self.config.CONTEXT_PREFIX):
+                if access.grants(which, AccessConfig.GRANT_ACCESS):
+                    result['contexts'] = {
+                        which: contexts[which].as_dict(deep=False)}
+                else:
+                    error = 'Access denied: contexts/%s' % (which,)
+            elif access.grants(czero, AccessConfig.GRANT_ACCESS):
+                result['contexts'] = dict(
+                    (k, v.as_dict(deep=False)) for k,v in contexts.items())
+            else:
+                error = 'Access denied: contexts'
+
+        return ResponseConfigGet(jmap_request, result, error=error)
 
     async def api_jmap_mailbox(self, conn_id, access, jmap_request):
         # FIXME: Make sure access grants right to read mailboxes directly
@@ -450,6 +593,10 @@ main app worker. Hints:
             result = await self.api_jmap_contexts(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestAddToIndex:
             result = await self.api_jmap_add_to_index(conn_id, access, jmap_request)
+        elif type(jmap_request) == RequestConfigGet:
+            result = await self.api_jmap_config_get(conn_id, access, jmap_request)
+        elif type(jmap_request) == RequestConfigSet:
+            result = await self.api_jmap_config_set(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestUnlock:
             result = await self.api_jmap_unlock(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestChangePassphrase:
