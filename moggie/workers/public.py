@@ -121,7 +121,7 @@ class WorkerHTTPD(HTTPD):
                 public = True
                 break
 
-        secret = None
+        secret = ''
         if not public:
             try:
                 _, secret, path = path.split('/', 2)

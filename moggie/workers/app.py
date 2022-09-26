@@ -212,6 +212,7 @@ class AppWorker(PublicWorker):
     KIND = 'app'
     PUBLIC_PATHS = ['/', '/ws', '/jmap']
     PUBLIC_PREFIXES = ['/pile', '/.well-known/']
+    CONFIG_SECTION = 'App'
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
