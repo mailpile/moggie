@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import socket
 import time
@@ -26,6 +27,17 @@ class WorkerPageKiteSettings(uPageKiteDefaults):
     APPVER = '2.0.0'
 
     MAX_POST_BYTES = 256*1024*1024
+
+    PARSE_HTTP_HEADERS = re.compile(
+        '^(Auth'
+        '|Accept'
+        '|Con[nt]'
+        '|Cook'
+        '|Host'
+        '|Orig'
+        '|Sec-Web'
+        '|Upgrade'
+        '|User-Agent)[^:]*:')
 
     info = logging.info
     error = logging.error

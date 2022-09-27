@@ -39,7 +39,7 @@ class CLICommand:
             return False
 
     @classmethod
-    async def WebRunnable(cls, app, access, frame, conn, args):
+    async def WebRunnable(cls, app, access, frame, conn, req_env, args):
         def reply(msg, eof=False):
             if msg or eof:
                 if isinstance(msg, (bytes, bytearray)):
@@ -47,7 +47,9 @@ class CLICommand:
                 else:
                     return conn.sync_reply(frame, bytes(msg, 'utf-8'), eof=eof)
         try:
-            cmd_obj = cls(app.profile_dir, args, access=access, appworker=app, connect=False)
+            cmd_obj = cls(app.profile_dir, args,
+                access=access, appworker=app, connect=False)
+            cmd_obj.set_web_defaults(req_env)
             cmd_obj.write_reply = reply
             cmd_obj.write_error = reply
             return cmd_obj
@@ -93,6 +95,20 @@ class CLICommand:
         if connect and self.WEBSOCKET:
             self.app = AsyncRPCBridge(self.ev_loop, 'cli', self.worker, self)
             self.ev_loop.run_until_complete(self._await_connection())
+
+    def set_web_defaults(self, req_env):
+        if '--format=' in self.options:
+            ua = (req_env.http_headers.get('User-Agent')
+                or req_env.http_headers.get('user-agent')
+                or '')
+            at = req_env.http_headers.get('Accept') or ''
+
+            if at.startswith('text/plain'):
+                self.options['--format='][:1] = ['text']
+            elif at.startswith('text/html'):
+                self.options['--format='][:1] = ['html']
+            elif ('json' in at) or ('Mozilla' not in ua):
+                self.options['--format='][:1] = ['json']
 
     def print(self, *args):
         self.write_reply(' '.join(args) + '\n')

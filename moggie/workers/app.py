@@ -65,7 +65,7 @@ async def web_cli(req_env):
 
     try:
         cmd = await command.WebRunnable(
-            req_env['worker'], access, frame, conn, args)
+            req_env['worker'], access, frame, conn, req_env, args)
     except PermissionError:
         return {'code': 403, 'msg': 'Access denied'}
 
