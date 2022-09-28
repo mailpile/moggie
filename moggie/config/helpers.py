@@ -20,8 +20,10 @@ class ListItemProxy(list):
         self.delim = delim
         self.access_denied = False
         try:
-            items = ac.get(section, item, permerror=True).split(self.delim)
-            self.extend(i.strip() for i in items)
+            data = ac.get(section, item, permerror=True).strip()
+            if data:
+                items = data.split(self.delim)
+                self.extend(i.strip() for i in items)
         except PermissionError as e:
             self.access_denied = e
         except (TypeError, AttributeError, KeyError, NoOptionError) as e:

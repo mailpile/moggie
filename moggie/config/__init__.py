@@ -355,6 +355,12 @@ class AppConfig(ConfigParser):
     ACCESS_ZERO = 'Access 0'
     CONTEXT_ZERO = 'Context 0'
 
+    STANDARD_ATTRIBUTE_TAGS = (
+       'Unread', 'Replied', 'Forwarded', 'Flagged')
+
+    STANDARD_CONTAINER_TAGS = (
+       'Inbox', 'Drafts', 'Outbox', 'Sent', 'Spam', 'Trash')
+
     INITIAL_SETTINGS = [
        (GENERAL, 'config_backups', '10'),
        (GENERAL, 'default_cli_context', 'Context 0'),

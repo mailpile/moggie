@@ -306,7 +306,7 @@ main app worker. Hints:
                         'access': self.config.ACCESS_PREFIX,
                         'account': self.config.ACCOUNT_PREFIX,
                         'context': self.config.CONTEXT_PREFIX
-                    }[create], self.counter)
+                    }[create], self.counter % 0x10000)
                 self.counter += 1
                 if section not in self.config:
                     break
@@ -333,9 +333,32 @@ main app worker. Hints:
                     dp[update['dict_key']] = update['dict_val']
                 elif op == 'dict_del':
                     del dp[update['dict_key']]
-            elif op in ('list_add', 'list_del'):
+            elif op in ('list_add_unique', 'list_add', 'list_set', 'list_del'):
                 lp = ListItemProxy(self.config, section, var)
-                raise ValueError('Unimplemented')
+
+                val = update.get('list_val')
+                cs = update.get('case_sensitive', True)
+                def _exists():
+                    if cs:
+                        return (val in lp) and val or None
+                    for v in lp:
+                        if (v.lower() == val.lower()):
+                            return v
+                    return None
+
+                if op == 'list_add':
+                    lp.append(val)
+                elif op == 'list_add_unique':
+                    if _exists() is None:
+                        lp.append(val)
+                elif op == 'list_set':
+                    lp[int(update['list_key'])] = val
+                elif op == 'list_del':
+                    ex = _exists()
+                    if ex is not None:
+                        lp.remove(ex)
+                        if len(lp) == 0:
+                            self.config.remove_option(section, var)
             elif (section.startswith(self.config.ACCESS_PREFIX)
                    and op == 'new_access_token'):
                 ttl = update.get('ttl')

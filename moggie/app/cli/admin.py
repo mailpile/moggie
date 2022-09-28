@@ -13,7 +13,316 @@ from ...config import AppConfig, AccessConfig
 from .command import Nonsense, CLICommand
 
 
-class CommandGrantAccess(CLICommand):
+class CommandContext(CLICommand):
+    """moggie context [<op> [<name> [options]]]
+
+    This command lists or configures moggie contexts.
+
+    Examples:
+
+        moggie context list
+        moggie context create Yum --with-standard-tags
+        moggie context update Yum --tag="icecream" --tag="cake"
+        moggie context update Yum --show-tag="flagged"
+        moggie context update Yum --remove-tag="cake"
+        moggie context update Yum --require="dates:2022"
+        moggie context update Yum --forbid="vegetables" --forbid="veggies"
+        moggie context remove Yum
+
+    FIXME: What about namespaces?
+    """
+    NAME = 'context'
+    ROLES = AccessConfig.GRANT_ACCESS
+    WEBSOCKET = False
+    AUTO_START = False
+    WEB_EXPOSE = True
+    OPTIONS = {
+        '--format=':            ['text'],
+        '--with-standard-tags': [],
+        '--name=':              [],
+        '--description=':       [],
+        '--tag-namespace=':     [],
+        '--tag=':               [],
+        '--show-tag=':          [],
+        '--remove-tag=':        [],
+        '--scope-search=':      [],
+        '--require=':           [],
+        '--forbid=':            [],
+        '--output=':            []}
+
+    def configure(self, args):
+        args = self.strip_options(args)
+        self.cmd = args[0] if (len(args) > 0) else None
+        self.name = args[1] if (len(args) > 1) else None
+        if len(args) > 2:
+            raise Nonsense('Too many arguments')
+        if not self.cmd:
+            self.cmd = 'list'
+        if self.cmd not in ('list', 'update', 'create', 'remove'):
+            raise Nonsense('Unknown command: %s' % self.cmd)
+        return []
+
+    async def run(self):
+        if self.cmd == 'list':
+             result = await self.get_contexts()
+        elif self.cmd == 'create':
+             result = await self.do_create()
+        elif self.cmd == 'update':
+             result = await self.do_update()
+        elif self.cmd == 'remove':
+             result = await self.do_remove()
+
+        fmt = self.options['--format='][-1]
+        if fmt == 'json':
+            self.emit_json(result)
+        else:
+            self.emit_text(result)
+
+    def emit_text(self, result):
+        fmt0 = '%(k)-13s %(n)-38s'
+        fmtN = '%(k)-13s %(n)-13s %(t)-13s %(N)-10s'
+        legend = {
+            'k': 'KEY',
+            'n': 'NAME',
+            'd': 'DESCRIPTION',
+            't': 'TAGS',
+            'i': 'IDS',
+            'N': 'NAMESPACE',
+            'S': 'SCOPE'}
+
+        want_ids = want_scope = False
+        if 'ids' in self.options['--output=']:
+            want_ids = True
+            fmt0 += ' %(i)-10s'
+            fmtN += ' %(i)-10s'
+        if 'scope' in self.options['--output=']:
+            fmtN += ' %(S)s'
+            fmt0 += ' %(S)s'
+
+        self.print(fmtN % legend)
+        for ckey, ctx in sorted(list(result.items())):
+            d = ctx.get('description', '')
+            n = ctx['name']
+            if d:
+                n = '%s (%s)' % (n, d)
+
+            ns = ctx.get('tag_namespace', '')
+            ss = ctx.get('scope_search', '')
+            rt = set(ctx.get('tags', []))
+            et = set(ctx.get('extra_tags', []))
+
+            ids = sorted(ctx.get('identities', []))
+            il = len(ids)
+            t = sorted(['%s%s' % (tag, '*' if tag in rt else '')
+                        for tag in (rt | et)])
+            count = tl = len(t)
+
+            if want_ids:
+                count = max(count, il)
+            for i in range(0, count+1):
+                self.print((fmt0   if (i == 0) else fmtN) % {
+                    'k': ckey      if (i == 0) else '',
+                    'n': n         if (i == 0) else '',
+                    'd': d         if (i == 0) else '',
+                    'i': ids[i-1]  if (0 < i <= il) else '',
+                    't': t[i-1]    if (0 < i <= tl) else '',
+                    'N': ns        if (i > 0) else '',
+                    'S': ss        if (i == 0) else ''})
+
+    def emit_json(self, config):
+        self.print(json.dumps(config))
+
+    async def get_contexts(self):
+        from ...jmap.requests import RequestConfigGet
+
+        cfg = await self.worker.async_jmap(self.access,
+            RequestConfigGet(contexts=True))
+
+        contexts = cfg['config'].get('contexts', {})
+        if self.name:
+            for ctx in contexts:
+                if self.name in (ctx, contexts[ctx]['name']):
+                    self.name = ctx
+                    return {ctx: contexts[ctx]}
+        else:
+            return contexts
+
+        return {}
+
+    def _make_updates(self, current=None):
+        updates = []
+        opts = self.options
+
+        for opt, var in (
+                ('--name=',          'name'),
+                ('--description=',   'description'),
+                ('--tag-namespace=', 'tag_namespace')):
+            if opts[opt]:
+                updates.append({
+                    'op': 'set',
+                    'variable': var,
+                    'value': opts[opt][-1]})
+
+        for tag in opts['--remove-tag=']:
+            updates.append({
+                'op': 'list_del',
+                'case_sensitive': False,
+                'variable': 'extra_tags',
+                'list_val': tag})
+            updates.append({
+                'op': 'list_del',
+                'case_sensitive': False,
+                'variable': 'tags',
+                'list_val': tag})
+
+        if opts['--with-standard-tags']:
+            opts['--show-tag='].extend(AppConfig.STANDARD_CONTAINER_TAGS)
+        for var, tags in (
+                ('tags',       opts['--tag=']),
+                ('extra_tags', opts['--show-tag='])):
+            for tag in tags:
+                updates.append({
+                    'op': 'list_add_unique',
+                    'case_sensitive': False,
+                    'variable': var,
+                    'list_val': tag})
+
+        if (opts['--scope-search=']
+                or opts['--forbid='] or opts['--require=']):
+            if current and self.name in current:
+                scope_search = current[self.name].get('scope_search', '')
+            else:
+                scope_search = ''
+            scope_search = (opts['--scope-search='] or [scope_search])[-1]
+
+            for forbid in opts['--forbid=']:
+                if scope_search:
+                    scope_search += ' '
+                scope_search += ' '.join(('-%s' % w) for w in forbid.split())
+
+            for req in opts['--require=']:
+                scope_search = ('%s %s' % (req, scope_search)).strip()
+
+            updates.append({
+                'op': 'set',
+                'variable': 'scope_search',
+                'value': scope_search})
+
+        return updates
+
+        if self.roles in ('-', '', 'none', 'None'):
+            return [{
+                'op': 'dict_del',
+                'variable': 'roles',
+                'dict_key': self.context}]
+        else:
+            # Translate user-friendly role names into role strings
+            self.roles = AccessConfig.GRANT_ROLE.get(
+                self.roles, [self.roles])[0]
+            return [{
+                'op': 'dict_set',
+                'variable': 'roles',
+                'dict_key': self.context,
+                'dict_val': self.roles}]
+
+    async def do_create(self):
+        from ...jmap.requests import RequestConfigSet
+
+        current = await self.get_contexts()
+        if current:
+            raise Nonsense('%s already exists, use update?' % self.name)
+
+        updates = [{
+            'op': 'set',
+            'variable': 'name',
+            'value': self.name}]
+        updates.extend(self._make_updates())
+
+        rv = await self.worker.async_jmap(self.access,
+            RequestConfigSet(new='context', updates=updates))
+
+        return await self.get_contexts()
+
+    async def do_update(self):
+        from ...jmap.requests import RequestConfigSet
+
+        current = await self.get_contexts()
+        if not current:
+            raise Nonsense('%s not found, use create?' % self.name)
+
+        updates = self._make_updates(current)
+        if not self.name or not updates:
+            raise Nonsense('Nothing to do?')
+
+        for akey in current:
+            await self.worker.async_jmap(self.access,
+                RequestConfigSet(section=akey, updates=updates))
+            break
+
+        return await self.get_contexts()
+
+    async def do_remove(self):
+        from ...jmap.requests import RequestConfigSet
+
+        if self._make_updates() or not self.name:
+            raise Nonsense('Configure the context or remove it, not both')
+
+        current = await self.get_contexts()
+        if not current:
+            raise Nonsense('%s not found.' % self.name)
+
+        for akey in current:
+            if akey == AppConfig.CONTEXT_ZERO:
+                raise Nonsense('%s cannot be removed.' % akey)
+            await self.worker.async_jmap(self.access,
+                RequestConfigSet(section=akey, updates=[{
+                        'op': 'remove_section',
+                    }]))
+            break
+
+        # FIXME: If the context is referenced by other settings, this
+        #        becomes problematic. Refuse? Remove from everywhere?
+
+        return await self.get_contexts()
+
+
+class CommandUnlock(CLICommand):
+    NAME = 'unlock'
+    ROLES = AccessConfig.GRANT_ACCESS
+    AUTO_START = False
+
+    def configure(self, args):
+        self.passphrase = ' '.join(args)
+        return []
+
+    def get_passphrase(self):
+        if self.passphrase == '-':
+            return ''
+        elif self.passphrase:
+            return self.passphrase
+        else:
+            import getpass
+            return getpass.getpass('Enter passphrase: ')
+
+    async def run(self):
+        app_crypto_status = self.worker.call('rpc/crypto_status')
+        if not app_crypto_status.get('locked'):
+            print('App already unlocked, nothing to do.')
+            return True
+
+        from ...jmap.requests import RequestUnlock
+        self.app.send_json(RequestUnlock(self.get_passphrase()))
+        while True:
+            msg = await self.await_messages('unlocked', 'notification')
+            if msg and msg.get('message'):
+                print(msg['message'])
+                return (msg['prototype'] == 'unlocked')
+            else:
+                print('Unknown error (%s) or timed out.' % msg)
+                return False
+
+
+class CommandGrant(CLICommand):
     """moggie grant [<op> [<name> [<roles>] [options]]]
 
     This command lists or changes what access is currently granted.
@@ -133,10 +442,12 @@ class CommandGrantAccess(CLICommand):
     async def get_roles(self, want_context=True):
         from ...jmap.requests import RequestConfigGet
 
-        cfg = await self.worker.async_jmap(self.access, RequestConfigGet(
-            urls=True,
-            access=True,
-            contexts=True))
+        cfg = await self.worker.async_jmap(self.access,
+            RequestConfigGet(
+                urls=True,
+                access=True,
+                contexts=True))
+
         result = []
         want_context = want_context and (
             self.options['--context='][-1] != 'default')
