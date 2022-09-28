@@ -161,9 +161,9 @@ class SearchWorker(BaseWorker):
                 else:
                     tag = 'in:' + tag
                 if tag_op[:1] == '+':
-                    mutation[1].append([IntSet.Or, tag])
+                    mutation[1].append([IntSet.Or, tag.lower()])
                 elif tag_op[:1] == '-':
-                    mutation[1].append([IntSet.Sub, tag])
+                    mutation[1].append([IntSet.Sub, tag.lower()])
                 else:
                     raise ValueError('Invalid tag op: %s' % tag_op)
 

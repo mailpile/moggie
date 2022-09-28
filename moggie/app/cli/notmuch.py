@@ -640,6 +640,7 @@ class CommandTag(CLICommand):
                 tagop = tagops[idx] = tagop[:1] + tagop[5:]
             if not tagop[1:]:
                 raise Nonsense('Missing tag: %s' % otagop)
+            tagops[idx] = tagop.lower()
 
     def _batch_configure(self, ifd):
         for line in ifd:
