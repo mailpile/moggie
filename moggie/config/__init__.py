@@ -330,8 +330,8 @@ class ContextConfig(ConfigSectionProxy):
             'identities': dict(
                  (i, IdentityConfig(self.config, i).as_dict())
                  for i in self.identities if i),
-            'tags': tags,
-            'extra_tags': etags,
+            'tags': list(tags),
+            'extra_tags': list(etags),
             'key': self.config_key}
 
 

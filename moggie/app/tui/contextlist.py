@@ -91,8 +91,9 @@ class ContextList(urwid.ListBox):
                     widgets.append(urwid.Divider())
 
                 shown = []
+                all_tags = ctx.get('tags', []) + ctx.get('extra_tags', [])
                 for tag, items in self.TAG_ITEMS:
-                    if tag in ctx.get('tags', []):
+                    if tag in all_tags:
                         for sc, name, search in items:
                             sc = (' %s:' % sc) if sc else '   '
                             os = search and {'enter': _sel_search(search)}
@@ -101,7 +102,7 @@ class ContextList(urwid.ListBox):
                                 on_select=os))
                         shown.append(tag)
                 count = 1
-                unshown = [t for t in ctx.get('tags', []) if t not in shown]
+                unshown = [t for t in all_tags if t not in shown]
                 if unshown:
                     widgets.append(urwid.Divider())
                     for tag in unshown:
@@ -140,7 +141,8 @@ class ContextList(urwid.ListBox):
             self.counts_obj['context'] = ctx['key']
             self.counts_obj['terms_list'] = count_terms = []
             if i == self.expanded:
-                for tag in ctx.get('tags', []):
+                all_tags = ctx.get('tags', []) + ctx.get('extra_tags', [])
+                for tag in set(all_tags):
                     count_terms.append('in:%s' % tag)
                     count_terms.append('in:%s tag:unread' % tag)
             self.tui_frame.app_bridge.send_json(self.counts_obj)
