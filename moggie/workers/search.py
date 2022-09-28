@@ -162,6 +162,11 @@ class SearchWorker(BaseWorker):
                     tag = 'in:' + tag
                 if tag_op[:1] == '+':
                     mutation[1].append([IntSet.Or, tag.lower()])
+                    if tag_namespace:
+                        mutation[1].append([IntSet.Or, 'in:'])
+                    elif '@' in tag:
+                        ns = tag.split('@', 1)[1]
+                        mutation[1].append([IntSet.Or, 'in:@'+ns])
                 elif tag_op[:1] == '-':
                     mutation[1].append([IntSet.Sub, tag.lower()])
                 else:

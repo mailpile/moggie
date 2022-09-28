@@ -165,6 +165,7 @@ class AccessConfig(ConfigSectionProxy):
         #roles = dict of context->role
         # These are optional
         'description': str,
+        'default_context': str,
         'password': str,
         'username': str}
     _EXTRA_KEYS = ['roles', 'tokens']
@@ -222,6 +223,12 @@ class AccessConfig(ConfigSectionProxy):
         else:
             tok = self.new_token()
         return tok, int(self.tokens[tok])
+
+    def get_default_context(self):
+        if self.default_context:
+            return self.default_context
+        for ctx, role in sorted(list(self.roles.items())):
+            return ctx
 
     def grants(self, context, roles):
         role = self.roles.get(context, None)

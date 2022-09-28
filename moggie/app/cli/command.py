@@ -143,8 +143,11 @@ class CLICommand:
         all_contexts = cfg.contexts
         ctx = ctx or (self.options.get('--context=') or ['default'])[-1]
         if ctx == 'default':
-            ctx = cfg.get(
-                AppConfig.GENERAL, 'default_cli_context', fallback='Context 0')
+            if self.access is True or not self.access:
+                ctx = cfg.get(
+                    AppConfig.GENERAL, 'default_cli_context', fallback='Context 0')
+            else:
+                ctx = self.access.get_default_context()
         else:
             if ctx not in all_contexts:
                 for ctx_key, ctx_info in all_contexts.items():

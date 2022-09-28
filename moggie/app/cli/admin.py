@@ -426,7 +426,7 @@ class CommandGrant(CLICommand):
             cl = len(c)
             if want_urls and not u:
                 continue
-            for i in range(0, max(1, len(u) if want_urls else cl)):
+            for i in range(0, max(0, len(u) if want_urls else cl) + 1):
                 self.print(fmt % {
                     'k': ai['key']               if (i == 0) else '',
                     'n': ai['name']              if (i == 0) else '',
