@@ -244,8 +244,10 @@ class AccessConfig(ConfigSectionProxy):
         scope_search = ' '.join('+in:%s' % t.lower() for t in ctx.tags)[1:]
         if ctx.scope_search:
             scope_search += ' ' + ctx.scope_search
+            if scope_search.startswith(' -'):
+                scope_search = 'all:mail' + scope_search
 
-        return (role, ctx.tag_namespace, scope_search)
+        return (role, ctx.tag_namespace, scope_search.strip())
 
 
 class AccountConfig(ConfigSectionProxy):

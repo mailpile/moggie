@@ -194,6 +194,10 @@ class CommandContext(CLICommand):
             else:
                 scope_search = ''
             scope_search = (opts['--scope-search='] or [scope_search])[-1]
+            if scope_search in (True, '-'):
+                # This is a quirk of our argument parser, the empty string
+                # gets represented as True. Fix it!
+                scope_search = ''
 
             for forbid in opts['--forbid=']:
                 if scope_search:
@@ -203,8 +207,9 @@ class CommandContext(CLICommand):
             for req in opts['--require=']:
                 scope_search = ('%s %s' % (req, scope_search)).strip()
 
+            scope_search = scope_search.strip()
             updates.append({
-                'op': 'set',
+                'op': 'set' if scope_search else 'del',
                 'variable': 'scope_search',
                 'value': scope_search})
 
