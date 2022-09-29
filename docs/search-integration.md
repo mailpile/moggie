@@ -143,24 +143,26 @@ one context is not the same as the inbox in another.)
 
 ## 4. Grant access to the Context
 
-Access is granted to a moggie Context using the `moggie grant` command:
+Access is granted to a moggie Context using the `moggie grant` command.
 
-   # Grant normal "user" access (read, write, search, tag etc.)
-   $ moggie grant create "Bjarni" user --context="Yum"
+This will grant normal "user" access (read, write, search, tag etc.):
 
-   # ... or for read-only access:
-   $ moggie grant create "Bjarni" guest --context="Yum"
+    $ moggie grant create "Bjarni" user --context="Yum"
+
+... or for read-only access:
+
+    $ moggie grant create "Bjarni" guest --context="Yum"
 
 In both cases, the tool will output a summary of the current granted
 access, and a URL for use in the next step.
 
-To revoke access:
+To remove Bjarni's access to Yum:
 
-   # Remove Bjarni's access to Yum
-   $ moggie grant update "Bjarni" none --context="Yum"
+    $ moggie grant update "Bjarni" none --context="Yum"
 
-   # Remove Bjarni's access entirely
-   $ moggie grant remove "Bjarni"
+To remove Bjarni's access entirely:
+
+    $ moggie grant remove "Bjarni"
 
 (Note: See `moggie help grant` for details about more granular
 access controls, what roles exist etc.)
