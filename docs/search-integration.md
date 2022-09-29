@@ -82,7 +82,8 @@ editor:
 
     vim ~/.local/share/Moggie/default/config.rc
 
-Add a `port` setting to the `[App]` section. For example:
+Add a `kite_name` and `kite_secret` settings to the `[App]` section. For
+example:
 
     [App]
     kite_name = moggie-USER.pagekite.me
