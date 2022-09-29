@@ -477,7 +477,7 @@ class CommandGrant(CLICommand):
                     for t, e in adata.get('tokens', {}).items()])
                 urls = []
                 if with_tokens and tokens:
-                    urls.extend((tokens[0][0], '%s/%s/' % (u, tokens[0][1]))
+                    urls.extend((tokens[0][0], '%s/%s' % (u, tokens[0][1]))
                         for u in cfg['config']['urls'])
 
                 if ctxs:
