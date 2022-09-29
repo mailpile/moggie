@@ -114,7 +114,19 @@ class IntSet:
 
     def __ne__(self, other):
         if isinstance(other, list):
-            return (other != list(self))
+            oi = iter(other)
+            si = iter(self)
+            for elem in other:
+                try:
+                    if elem != next(si):
+                        return True
+                except StopIteration:
+                    return True
+            try:
+                next(si)
+                return True
+            except StopIteration:
+                return False
         elif isinstance(other, IntSet):
             if (self.npa is None) and (other.npa is None):
                 return False
@@ -189,12 +201,13 @@ class IntSet:
         return self
 
     def __ior__(self, other):
-        if other in (None, []):
-            return self
         if isinstance(other, IntSet):
             if len(other.npa) > len(self.npa):
                 self.npa.resize(len(other.npa) + self.DEF_GROW)
             self.npa[:len(other.npa)] |= other.npa
+
+        elif other in (None, []):
+            return self
 
         elif isinstance(other, int):
             val = other
@@ -219,12 +232,13 @@ class IntSet:
         return self
 
     def __ixor__(self, other):
-        if other in (None, []):
-            return self
         if isinstance(other, IntSet):
             if len(other.npa) > len(self.npa):
                 self.npa.resize(len(other.npa) + self.DEF_GROW)
             self.npa[:len(other.npa)] |= other.npa
+
+        elif other in (None, []):
+            return self
 
         elif isinstance(other, int):
             val = other
@@ -355,12 +369,17 @@ if __name__ == "__main__":
     b2 = IntSet(some)
     b3 = IntSet(few)
 
+    assert(b1 != some)
+    assert(b2 != many)
     assert(b3 == few)
     assert(b3 == IntSet(few))
-    assert(b3 != b2)
-    assert(b3 != b1)
     assert(b3 != 'hello')
     assert(b3 != None)
+
+    assert(b3 == few)
+    assert(b2 != few)
+    assert(b3 != some)
+    assert(b3 != list(reversed(few)))
 
     print('Tests passed OK')
 
