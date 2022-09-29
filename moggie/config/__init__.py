@@ -1,5 +1,7 @@
 import binascii
 import base64
+import copy
+import hashlib
 import json
 import logging
 import math
@@ -196,6 +198,7 @@ class AccessConfig(ConfigSectionProxy):
         super().__init__(*args, **kwarg)
         self._role_dict = DictItemProxy(self.config, self.config_key, 'roles')
         self._token_dict = DictItemProxy(self.config, self.config_key, 'tokens')
+        self._live_token = None
 
     roles = property(lambda self: self._role_dict)
     tokens = property(lambda self: self._token_dict)
@@ -229,6 +232,21 @@ class AccessConfig(ConfigSectionProxy):
             return self.default_context
         for ctx, role in sorted(list(self.roles.items())):
             return ctx
+
+    def make_signature(self, *data, token=None):
+        sig = hashlib.sha1(bytes(token or self._live_token, 'utf-8'))
+        for d in data:
+            sig.update(bytes(d, 'utf-8'))
+        return sig.hexdigest()
+
+    def check_signature(self, sig, *data):
+        for t in self.tokens:
+            tsig = self.make_signature(*data, token=t)
+            if sig == tsig:
+                return True
+            else:
+                logging.debug('tsig=%s != %s (t=%s)' % (tsig, sig, t))
+        return False
 
     def grants(self, context, roles):
         role = self.roles.get(context, None)
@@ -504,6 +522,8 @@ class AppConfig(ConfigParser):
                 self._caches['tokens'] = token_cache
             acl = self._caches.get('tokens', {}).get(token)
         if acl is not None:
+            acl = copy.copy(acl)
+            acl._live_token = token
             return acl
         if _raise:
             raise PermissionError('No access granted')

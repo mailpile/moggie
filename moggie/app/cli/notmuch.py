@@ -190,7 +190,7 @@ class CommandSearch(CLICommand):
                 'files': fc,
                 'authors': authors,
                 'subject': top.get('subject', md.get('subject', '(no subject)')),
-                'query': ['id:%d' % mid for mid in msgs] + [None],
+                'query': [self.sign_id('id:%s' % ','.join('%d' % mid for mid in msgs))] + [None],
                 'tags': tags}
             info['_tag_list'] = ' (%s)' % (' '.join(tags)) if tags else ''
             info['_file_count'] = '(%d)' % fc if (fc > len(msgs)) else ''
@@ -205,7 +205,7 @@ class CommandSearch(CLICommand):
     async def as_messages(self, md):
         if md is not None:
             md = Metadata(*md)
-            yield ('%s', 'id:%8.8d' % md.idx)
+            yield ('%s', self.sign_id('id:%8.8d' % md.idx))
 
     async def as_tags(self, tag_info):
         if tag_info is not None:
@@ -390,6 +390,16 @@ class CommandSearch(CLICommand):
         limit = None
         if self.options.get('--limit=', [None])[-1]:
             limit = int(self.options['--limit='][-1])
+
+        if (self.access is not True) and self.access._live_token:
+            access_id = self.access.config_key[len(AppConfig.ACCESS_PREFIX):]
+            token = self.access._live_token
+            def id_signer(_id):
+                sig = self.access.make_signature(_id, token=token)
+                return '%s.%s.%s' % (_id, access_id, sig)
+            self.sign_id = id_signer
+        else:
+            self.sign_id = lambda _id: _id
 
         prev = None
         first = True
