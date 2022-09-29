@@ -14,6 +14,16 @@
 #    notmuch count --output=threads -- tag:<TAG> AND tag:unread
 #    notmuch show --format=json --include-html <THREADID>
 #
+#NOTES:
+#   - For 3rd party search integration, we need to include enough details
+#     in our results for a 3rd party app to construct working URLs to
+#     individual messages. We would rather 3rd parties not hard-code our
+#     URL structure, so we should provide these details.
+#   - These URLs used to access individual e-mails should be tied to the
+#     Access object, but without leaking the token itself. So some sort
+#     of simple signature which lets us revoke the URLs along with the
+#     access object.
+#
 import base64
 import copy
 import datetime
