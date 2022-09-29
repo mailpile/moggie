@@ -15,4 +15,4 @@ shift
     echo -n "$ARG"
     echo -n -e '\0'
 done) \
-|curl -sfN -H 'Accept: text/plain' -F 'argz=<-' $URL/cli/$APP
+|curl -sfN -H "Accept: ${MOGGIE_ACCEPT:-text/plain}" -F 'argz=<-' $URL/cli/$APP
