@@ -473,8 +473,9 @@ class CommandGrant(CLICommand):
                         ctxs[ctx] = role.strip()
 
                 tokens = sorted([
-                    (e, t if with_tokens else '(live)')
-                    for t, e in adata.get('tokens', {}).items()])
+                        (e, t if with_tokens else '(live)')
+                        for t, e in adata.get('tokens', {}).items()],
+                    key=lambda i: -int(i[0]))
                 urls = []
                 if with_tokens and tokens:
                     urls.extend((tokens[0][0], '%s/%s' % (u, tokens[0][1]))
@@ -486,7 +487,7 @@ class CommandGrant(CLICommand):
                         'name': adata['name'],
                         'urls': urls,
                         'contexts': ctxs,
-                        'tokens': [t[1] for t in reversed(tokens)]})
+                        'tokens': [t[1] for t in tokens]})
         return sorted(result, key=lambda r: r['key'])
 
     def _make_role_update(self):
