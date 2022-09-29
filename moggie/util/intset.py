@@ -127,6 +127,8 @@ class IntSet:
                 return True
             except StopIteration:
                 return False
+        elif isinstance(other, set):
+            return self.__ne__(sorted(list(other)))
         elif isinstance(other, IntSet):
             if (self.npa is None) and (other.npa is None):
                 return False
@@ -372,6 +374,7 @@ if __name__ == "__main__":
     assert(b1 != some)
     assert(b2 != many)
     assert(b3 == few)
+    assert(b3 == set(few))
     assert(b3 == IntSet(few))
     assert(b3 != 'hello')
     assert(b3 != None)
