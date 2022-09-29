@@ -136,6 +136,10 @@ to tag at import time will be more performant.
 (Note: The author does not recommend excluding vegetables from your diet,
 please eat your greens.)
 
+(TODO: Explain and demo tag namespaces; the tl;dr is they allow contexts
+to have separate tags which appear to share the same names, so inbox in
+one context is not the same as the inbox in another.)
+
 
 ## 4. Grant access to the Context
 
