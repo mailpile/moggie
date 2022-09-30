@@ -183,6 +183,8 @@ class MetadataStore(RecordStore):
         in_reply_to = metadata.get_raw_header('In-Reply-To')
         if not in_reply_to:
             return idx
+
+        in_reply_to = in_reply_to.split(';')[0]
         try:
             return self.key_to_index(in_reply_to)
         except KeyError:

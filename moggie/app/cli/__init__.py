@@ -4,7 +4,7 @@ from .command import CLICommand
 from .admin import CommandGrant, CommandContext
 from .admin import CommandUnlock, CommandEnableEncryption
 from .admin import CommandImport, CommandExport
-from .notmuch import CommandSearch, CommandAddress, CommandCount, CommandTag
+from .notmuch import CommandSearch, CommandAddress, CommandShow, CommandCount, CommandTag
 from .notmuch import CommandConfig
 from .help import TOPICS
 
@@ -102,6 +102,7 @@ CLI_COMMANDS = {
     CommandContext.NAME: CommandContext,
     CommandAddress.NAME: CommandAddress,
     CommandSearch.NAME: CommandSearch,
+    CommandShow.NAME: CommandShow,
     CommandCount.NAME: CommandCount,
     CommandTag.NAME: CommandTag,
     CommandExport.NAME: CommandExport,

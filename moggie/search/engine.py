@@ -674,8 +674,11 @@ class SearchEngine:
 
     def _search(self, term, tag_ns):
         if isinstance(term, tuple):
-            op = term[0]
-            return op(*[self._search(t, tag_ns) for t in term[1:]])
+            if len(term) > 1:
+                op = term[0]
+                return op(*[self._search(t, tag_ns) for t in term[1:]])
+            else:
+                return IntSet()
 
         if isinstance(term, str):
             # Treat tag: and is: prefixes as alternatives to in: for tags.

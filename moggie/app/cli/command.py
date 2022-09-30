@@ -68,7 +68,7 @@ class CLICommand:
         self.messages = []
         self.workdir = wd
 
-        if access is not True and not access:
+        if access is not True and not access and self.ROLES:
             raise PermissionError('Access denied')
         self.access = access
         if self.ROLES and '--context=' not in self.options:

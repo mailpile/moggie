@@ -82,7 +82,7 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE):
                 except UnicodeDecodeError:
                     logging.error('UNDECODABLE: %s in %s' % (val, ohdr))
                     raise
-            params[p.group(2).lower()] = val
+            params[p.group(2).lower()] = rfc2074_unquote(val)
         else:
             c = HWP_COMMENT_RE.match(hdr)
             if c:

@@ -513,10 +513,15 @@ main app worker. Hints:
 
 
     async def api_jmap_email(self, conn_id, access, jmap_request):
+        ctx = jmap_request.get('context') or self.config.CONTEXT_ZERO
+        # Will raise ValueError or NameError if access denied
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_READ)
+
         # FIXME: Does this user have access to this email?
         #        How will that be determined? Probably a token that
         #        comes from viewing a search result or mailbox?
         #        Seems we should decide that before making any efforts
+
         def get_email():
             return self.storage.with_caller(conn_id).email(
                 jmap_request['metadata'],

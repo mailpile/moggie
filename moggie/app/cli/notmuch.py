@@ -28,16 +28,20 @@ import base64
 import copy
 import datetime
 import json
+import logging
 import io
 import os
+import re
 import sys
 import time
 
 from .command import Nonsense, CLICommand, AccessConfig
+from ...config import AppConfig
 from ...email.metadata import Metadata
 from ...jmap.requests import RequestSearch, RequestMailbox, RequestEmail
 from ...storage.exporters.mbox import MboxExporter
 from ...storage.exporters.maildir import MaildirExporter, EmlExporter
+from ...util.dumbcode import dumb_decode
 
 
 class CommandSearch(CLICommand):
@@ -102,6 +106,7 @@ class CommandSearch(CLICommand):
         '--output=':         ['default'],
         '--offset=':         ['0'],
         '--limit=':          [''],
+        '--entire-thread=':  [],
         # These are notmuch options which we currently ignore
         '--sort=':           ['newest-first'],
         '--format-version=': [''],
@@ -145,7 +150,7 @@ class CommandSearch(CLICommand):
     def _as_thread(self, result):
         if 'thread' in result:
             return result
-        fake_tid = self.fake_tid
+        fake_tid = result[Metadata.OFS_IDX] or self.fake_tid
         self.fake_tid += 1
         return {
             'thread': fake_tid,
@@ -155,6 +160,10 @@ class CommandSearch(CLICommand):
     async def as_threads(self, thread):
         if thread is not None:
             yield ('%s', 'thread:%8.8d' % self._as_thread(thread)['thread'])
+
+    def _relative_date(self, ts):
+        dt = datetime.datetime.fromtimestamp(ts)
+        return '%4.4d-%2.2d-%2.2d' % (dt.year, dt.month, dt.day)
 
     async def as_summary(self, thread):
         if thread is None:
@@ -169,9 +178,7 @@ class CommandSearch(CLICommand):
             md = msgs[thread['hits'][0]]
 
             ts = min(msgs[i]['ts'] for i in thread['hits'])
-            dt = datetime.datetime.fromtimestamp(ts)
             fc = sum(len(m['ptrs']) for m in msgs.values())
-            date = '%4.4d-%2.2d-%2.2d' % (dt.year, dt.month, dt.day)
 
             tags = []
             for msg in msgs.values():
@@ -184,7 +191,7 @@ class CommandSearch(CLICommand):
             info = {
                 'thread': '%8.8d' % tid,
                 'timestamp': ts,
-                'date_relative': date,
+                'date_relative': self._relative_date(ts),
                 'matched': len(thread['hits']),
                 'total': len(msgs),
                 'files': fc,
@@ -219,7 +226,6 @@ class CommandSearch(CLICommand):
                 'hits': tag_info[1][1]})
 
     async def as_files(self, md):
-        from ...util.dumbcode import dumb_decode
         # FIXME: File paths are BINARY BLOBS. We need to output them as
         #        such, if possible. Especially in text mode!
         if md is not None:
@@ -232,38 +238,158 @@ class CommandSearch(CLICommand):
                     fn_str = str(fn, 'latin-1')
                 yield (fn, fn_str)
 
-    async def as_emails(self, md):
-        if md is not None:
-            query = RequestEmail(
-                metadata=md,
-                full_raw=True)
-            msg = await self.worker.async_jmap(self.access, query)
-            if msg and (msg.get('email') or {}).get('_RAW'):
-                yield ('%s', {'metadata': md, 'parsed': msg})
+    async def as_emails(self, thread):
+        def _as_text(r):
+            headers = '\n'.join('%s: %s' % (h,v) for h, v in r['headers'].items())
+            def _parts(p):
+                p['_ct'] = p.get('content-type', 'text/plain')
+                if 'content' in p:
+                    if isinstance(p['content'], list):
+                        p['content'] = '\n'.join(_parts(sp) for sp in p['content'])
+                else:
+                    p['content'] = ('Non-text part: ' + p['_ct'])
+                p['_fn'] = ''
+                if 'filename' in p:
+                    p['_fn'] = 'Filename: %s, ' % p['filename']
+                return ("""\
+\x0cpart{ ID: %(id)s, %(_fn)sContent-type: %(_ct)s
+%(content)s
+\x0cpart}""" % p)
+            return ("""\
+\x0cmessage{ id:%(i)s depth:%(d)d match:%(m)d excluded:%(e)s filename:%(f)s
+\x0cheader{
+%(a)s (%(r)s) (%(t)s)
+%(h)s
+\x0cheader}
+\x0cbody{
+%(b)s
+\x0cbody}
+\x0cmessage}""") % {
+                'd': r['_depth'],
+                'i': r['id'],
+                'm': 1 if r['match'] else 0,
+                'e': 1 if r['excluded'] else 0,
+                'f': r['filename'][0] if r['filename'] else '',
+                'a': r['headers'].get('From', '(unknown)'),
+                'r': r['date_relative'],
+                't': ' '.join(r['tags']),
+                'h': headers,
+                'b': '\n'.join(_parts(sp) for sp in r['body'])}
+        if thread is not None:
+            fmt = self.options['--format='][-1]
+            raw = (fmt in ('mbox', 'maildir', 'raw', 'zip'))
+            want_body = raw or self.options['--body='][-1] != 'false'
+            want_html = self.options.get('--include-html')
+            shown_types = ('text/plain', 'text/html') if want_html else ('text/plain',)
+
+            thread = self._as_thread(thread)
+            for md in thread['messages']:
+                md = Metadata(*md)
+                if want_body:
+                    query = RequestEmail(metadata=md, text=(not raw), full_raw=raw)
+                    msg = await self.worker.async_jmap(self.access, query)
+                else:
+                    msg = {'email': md.parsed()}
+
+                if raw and msg and (msg.get('email') or {}).get('_RAW'):
+                    yield ('%s', {'_metadata': md, '_parsed': msg})
+
+                elif msg and msg.get('email'):
+                    headers = {}
+                    for hdr in ('Subject', 'From', 'To', 'Cc', 'Date'):
+                        val = msg['email'].get(hdr.lower())
+                        if isinstance(val, str):
+                            headers[hdr] = val
+                        elif isinstance(val, dict):
+                            headers[hdr] = ('%s <%s>' % (val['fn'], val['address'])).strip()
+                        elif isinstance(val, list) and val:
+                            if isinstance(val[0], str):
+                                headers[hdr] = ', '.join(val)
+                            else:
+                                headers[hdr] = ', '.join(
+                                    ('%s <%s>' % (v['fn'], v['address'])).strip()
+                                    for v in val)
+                    body = []
+                    if '_PARTS' in msg['email']:
+                        partstack = [body]
+                        depth = 0
+                        for i, part in enumerate(msg['email']['_PARTS']):
+                            info = {
+                                'id': i+1,
+                                'content-type': part.get('content-type', ['text/plain'])[0]}
+
+                            disp = part.get('content-disposition')
+                            if isinstance(disp, list):
+                                info['content-disposition'] = disp[0]
+                                if 'filename' in disp[1]:
+                                    info['filename'] = disp[1]['filename']
+                                cte = part.get('content-transfer-encoding')
+                                if cte:
+                                    info['content-transfer-encoding'] = cte
+                                info['content-length'] = (part['_BYTES'][2] - part['_BYTES'][1])
+                            while part['_DEPTH'] < depth:
+                                partstack.pop(-1)
+                                depth -= 1
+                            if info['content-type'] != 'text/x-mime-postamble':
+                                partstack[-1].append(info)
+                            if '_TEXT' in part and info['content-type'] in shown_types:
+                                info['content'] = part['_TEXT']
+                            elif info['content-type'].startswith('multipart/'):
+                                info['content'] = []
+                                partstack.append(info['content'])
+                                depth += 1
+
+                    yield (_as_text, {
+                        'id': self.sign_id('id:%s' % md.idx)[3:],
+                        'match': md.idx in thread['hits'],
+                        'excluded': False,
+                        'timestamp': md.timestamp,
+                        'filename': [p async for t, p in self.as_files(md)],
+                        'date_relative': self._relative_date(md.timestamp),
+                        'tags': [t.split(':')[-1] for t in (md.more.get('tags') or [])],
+                        'body': body,
+                        'crypto': {},
+                        'headers': headers,
+                        '_id': md.idx,
+                        '_thread_id': md.thread_id,
+                        '_parent_id': md.parent_id,
+                        '_depth': 0,
+                        '_fn': 'FIXME',
+                        '_header': 'FIXME',
+                        '_metadata': md,
+                        '_parsed': msg})
 
     async def emit_result_text(self, result, first=False, last=False):
         if result is not None:
             if isinstance(result[0], bytes):
                 self.write_reply(result[0] + b'\n')
-            else:
+            elif isinstance(result[0], str):
                 self.print(result[0] % result[1])
+            else:
+                self.print(result[0](result[1]))
 
     async def emit_result_text0(self, result, first=False, last=False):
         if result is not None:
             if isinstance(result[0], bytes):
                 self.write_reply(result[0] + b'\0')
-            else:
+            elif isinstance(result[0], str):
                 self.write_reply((result[0] % result[1]) + '\0')
+            else:
+                self.write_reply(result[0](result[1]) + '\0')
 
-    async def emit_result_json(self, result, first=False, last=False):
-        if result is None:
-            return
+    def _json_sanitize(self, result):
         if isinstance(result[1], dict):
             result1, keys = copy.copy(result[1]), result[1].keys()
             for k in keys:
                 if k[:1] == '_':
                     del result1[k]
             result = (None, result1)
+        return result
+
+    async def emit_result_json(self, result, first=False, last=False):
+        if result is None:
+            return
+        result = self._json_sanitize(result)
         self.print(''.join([
             '[' if first else ' ',
             json.dumps(result[1]) if result else '',
@@ -282,10 +408,10 @@ class CommandSearch(CLICommand):
             self.exporter = cls(_wwrap())
         return self.exporter
 
-    def _export(self, exporter, result,  first, last):
+    def _export(self, exporter, result, first, last):
         if result is not None:
-            metadata = Metadata(*result[1]['metadata'])
-            raw_email = base64.b64decode(result[1]['parsed']['email']['_RAW'])
+            metadata = result[1]['_metadata']
+            raw_email = base64.b64decode(result[1]['_parsed']['email']['_RAW'])
             exporter.export(metadata, raw_email)
         if last:
             exporter.close()
@@ -333,7 +459,7 @@ class CommandSearch(CLICommand):
             return self.emit_result_json
         elif fmt == 'text0':
             return self.emit_result_text0
-        elif fmt == 'text':
+        elif fmt in ('text', 'raw'):
             return self.emit_result_text
         elif fmt == 'mbox':
             return self.emit_result_mbox
@@ -350,7 +476,6 @@ class CommandSearch(CLICommand):
             if self.options['--output='][-1] not in valid_outputs:
                 raise Nonsense('Need --output=X, with X one of: %s'
                     % ', '.join(valid_outputs))
-            #self.default_output = 'metadata'
             query = RequestMailbox(
                 context=self.context,
                 mailbox=self.terms[8:])
@@ -372,6 +497,9 @@ class CommandSearch(CLICommand):
         elif output == 'threads':
             query['threads'] = True
             query['only_ids'] = True
+        elif output == 'emails':
+            if (self.options.get('--entire-thread=') or ['false'])[-1] != 'false':
+                query['threads'] = True
         elif output in ('tags', 'tag_info'):
             query['uncooked'] = True
             if query['skip'] or self.options.get('--limit=', [None])[-1]:
@@ -380,26 +508,15 @@ class CommandSearch(CLICommand):
         return query
 
     async def run(self):
-        from ...config import AppConfig
-
         query = self.get_query()  # Note: May alter self.default_output
 
         formatter = self.get_formatter()
         emitter = self.get_emitter()
+        self.sign_id = self.make_signer()
 
         limit = None
         if self.options.get('--limit=', [None])[-1]:
             limit = int(self.options['--limit='][-1])
-
-        if (self.access is not True) and self.access._live_token:
-            access_id = self.access.config_key[len(AppConfig.ACCESS_PREFIX):]
-            token = self.access._live_token
-            def id_signer(_id):
-                sig = self.access.make_signature(_id, token=token)
-                return '%s.%s.%s' % (_id, access_id, sig)
-            self.sign_id = id_signer
-        else:
-            self.sign_id = lambda _id: _id
 
         prev = None
         first = True
@@ -409,6 +526,17 @@ class CommandSearch(CLICommand):
                 first = False
             prev = result
         await emitter(prev, first=first, last=True)
+
+    def make_signer(self):
+        if (self.access is not True) and self.access._live_token:
+            access_id = self.access.config_key[len(AppConfig.ACCESS_PREFIX):]
+            token = self.access._live_token
+            def id_signer(_id):
+                sig = self.access.make_signature(_id, token=token)
+                return '%s.%s.%s' % (_id, access_id, sig)
+            return id_signer
+        else:
+            return lambda _id: _id
 
     async def perform_query(self, query, batch, limit):
         query['limit'] = min(batch, limit or batch)
@@ -551,6 +679,123 @@ class CommandAddress(CommandSearch):
                 for r in _formatter(md):
                     pass
         return _counter
+
+
+class CommandShow(CommandSearch):
+    """moggie show [options] <terms>
+
+
+
+    JSON output:
+
+      message_dict = { id: match: excluded: filename:[]
+                       timestamp: date_relative: tags:[]
+                       body[{id: content-type: content:}*]
+                       crypto:{} headers:{} }
+
+      message_tuple = ( message_dict, [ message_tuple* ] )
+
+      list of message_tuples
+
+    """
+    NAME = 'show'
+    ROLES = None
+    REAL_ROLES = AccessConfig.GRANT_READ
+    WEB_EXPOSE = True
+
+    RE_SIGNED_ID = re.compile(r'^id:[0-9a-f,]+\.[0-9a-zA-Z]+\.[0-9a-f]+$')
+
+    OPTIONS = {
+        # These are moggie specific
+        '--context=':        ['default'],
+        '--q=':              [],
+        # These are notmuch options which we implement
+        '--format=':         ['text'],
+        '--offset=':         ['0'],
+        '--limit=':          [''],
+        '--part=':           [],
+        '--entire-thread=':  [],
+        '--include-html':    [],
+        '--body=':           ['true'],
+        # These are notmuch options which we currently ignore
+        '--verify':          [],
+        '--decrypt=':        [],
+        '--part=':           [],  # FIXME, this one is important!
+        '--format-version=': [''],
+        '--exclude=':        ['true'],
+        '--duplicate=':      ['']}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        if self.RE_SIGNED_ID.match(self.terms):
+            self.terms, aid, sig = self.terms.split('.')
+            if self.worker and self.worker.app and not self.access:
+                aid = self.worker.app.config.ACCESS_PREFIX + aid
+                acc = self.worker.app.config.all_access.get(aid)
+                if acc:
+                    token = acc.check_signature(sig, self.terms)
+                    if token:
+                        self.access = acc
+                        self.access._live_token = token
+                if not self.access:
+                    logging.warning('Rejecting ID signature: %s (%s, %s)'
+                        % (sig, aid, self.terms))
+
+        if not self.access:
+            raise PermissionError('Access denied')
+
+        if self.access and self.access is not True:
+            if not self.access.grants(self.context, self.REAL_ROLES):
+                raise PermissionError('Access denied')
+
+        self.threads = {}
+
+    async def emit_result_json(self, result, first=False, last=False):
+        result = result[1]
+        idx, pid, tid = result['_id'], result['_parent_id'], result['_thread_id']
+
+        if tid not in self.threads:
+            self.threads[tid] = {}
+        thread = self.threads[tid]
+        thread[idx] = [result, []]
+
+        if last:
+            threads = []
+            for thread in self.threads.values():
+                def _rank(k):
+                     r = thread[k][0]
+                     if (r['_id'] != r['_parent_id']) and (r['_parent_id'] in thread):
+                         return _rank(r['_parent_id']) - 1
+                     return 0
+
+                idxs = list(thread.keys())
+                idxs.sort(key=_rank)
+                for i in idxs:
+                    result, kids = thread[i]
+                    clean = self._json_sanitize((None, result))[1]
+                    idx, pid = result['_id'], result['_parent_id']
+                    if (idx != pid) and pid in thread:
+                        thread[pid][1].append([clean, kids])
+                        del thread[i]
+                    else:
+                        thread[i][0] = clean
+
+                threads.append(list(thread.values()))
+
+            self.print(json.dumps(threads))
+
+    def configure(self, *args, **kwargs):
+        args = super().configure(*args, **kwargs)
+        self.options['--output='] = ['emails']
+        if not self.terms:
+            raise Nonsense('Show what?')
+        return args
+
+    async def run(self):
+        if self.options['--format='][-1] in ('json', 'sexp'):
+            self.options['--entire-thread='][:0] = ['true']
+        return await super().run()
 
 
 class CommandCount(CLICommand):
@@ -716,7 +961,6 @@ class CommandTag(CLICommand):
 
 
 def CommandConfig(wd, args):
-    from ...config import AppConfig
     cfg = AppConfig(wd)
     if len(args) < 1:
         print('%s' % cfg.filepath)

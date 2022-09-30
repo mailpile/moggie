@@ -243,9 +243,7 @@ class AccessConfig(ConfigSectionProxy):
         for t in self.tokens:
             tsig = self.make_signature(*data, token=t)
             if sig == tsig:
-                return True
-            else:
-                logging.debug('tsig=%s != %s (t=%s)' % (tsig, sig, t))
+                return t
         return False
 
     def grants(self, context, roles):

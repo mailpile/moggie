@@ -33,7 +33,6 @@ from .public import PublicWorker, RequestTimer
 async def web_cli(req_env):
     conn = req_env['conn']
     frame = req_env['frame']
-    access = req_env['worker'].get_auth(req_env, secure_transport=True)
 
     args = req_env.request_path.split('/')
     while args.pop(0) != 'cli':
@@ -44,6 +43,10 @@ async def web_cli(req_env):
     command = CLI_COMMANDS.get(args.pop(0))
     if not (hasattr(command, 'WEB_EXPOSE') and command.WEB_EXPOSE):
         return {'code': 404, 'msg': 'No such command'}
+
+    access = req_env['worker'].get_auth(req_env,
+        allow_anonymous=(hasattr(command, 'ROLES') and not command.ROLES),
+        secure_transport=True)
 
     post_vars = req_env.post_vars
     if 'argz' in post_vars:
@@ -66,8 +69,9 @@ async def web_cli(req_env):
     try:
         cmd = await command.WebRunnable(
             req_env['worker'], access, frame, conn, req_env, args)
-    except PermissionError:
-        return {'code': 403, 'msg': 'Access denied'}
+    except PermissionError as e:
+        logging.debug('PermissionError in WebRunnable: %s' % e)
+        return {'code': 403, 'msg': str(e), 'body': str(e)}
 
     asyncio.get_event_loop().create_task(cmd.web_run())
     return {'mimetype': cmd.mimetype, 'eof': False}
@@ -211,7 +215,7 @@ class AppWorker(PublicWorker):
 
     KIND = 'app'
     PUBLIC_PATHS = ['/', '/ws', '/jmap']
-    PUBLIC_PREFIXES = ['/pile', '/.well-known/']
+    PUBLIC_PREFIXES = ['/pile', '/.well-known/', '/cli/help', '/cli/show']
     CONFIG_SECTION = 'App'
 
     def __init__(self, *args, **kwargs):
@@ -285,9 +289,10 @@ class AppWorker(PublicWorker):
     def _check_access(self, secret, path):
         if (secret == self._secret):
             return self.app.config.access_zero()
-        return self.app.config.access_from_token(str(secret, 'utf-8'), _raise=False)
+        return self.app.config.access_from_token(str(secret, 'utf-8'),
+            _raise=False)
 
-    def get_auth(self, req_env, **req_kwargs):
+    def get_auth(self, req_env, allow_anonymous=False, **req_kwargs):
         # Set req_env[auth_*], or raise PermissionError
         access_requires(req_env, **req_kwargs)
         req_acl = req_env.get('access')
@@ -302,6 +307,8 @@ class AppWorker(PublicWorker):
         elif req_acl:
             logging.debug('Access: %s' % (req_acl,))
             return req_acl
+        elif allow_anonymous:
+            return None
         raise PermissionError('Please login')
 
 
