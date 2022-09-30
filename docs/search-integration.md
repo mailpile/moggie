@@ -15,12 +15,18 @@ summarized as the following process:
    3. Create a "Context", defining which e-mails (tags) can be accessed
    4. Grant access to the Context
    5. Inform the 3rd party tool of moggie's URL and access
+   6. Notes for developers
 
 Each of these steps is discussed in further detail below.
 
-(Note: `moggie` is used below as a shorthand for `python3 -m moggie`.
-Once the app has matured, it will have an installation procedure which
-creates the `moggie` command and places it on the user's PATH.)
+Notes:
+
+   * `moggie` is used below as a shorthand for `python3 -m moggie`. Once
+     the app has matured, it will have an installation procedure which
+     creates the `moggie` command and places it on the user's PATH.)
+   * These are the instructions for moggie *users* who want to enable such
+     3rd party integration. If you are a developer of a 3rd party app and
+     would like to integrate with moggie, skip to the end!
 
 
 ## 1. Import e-mail into moggie's database
@@ -194,4 +200,157 @@ In order to invalidate the URLs, you log the user out:
     $ moggie grant logout "Bjarni"
 
 
+## 6. Notes for developers
 
+Moggie is at an early stage of development, and its APIs are still in
+flux. It does not yet have a user-facing web interface, only APIs
+which are not yet fully stable and only partially documented.
+
+However, moggie's command-line interface aims to be mostly compatibile
+with the excellent `notmuch` search tool - and most of moggie's
+command-line interface is implemented as a web API.
+
+(Moggie's fast CLI tool, `lots`, is actually just a thin shell wrapper
+around curl. Lots is not notmuch.)
+
+
+### Searching for messages
+
+The API endpoint for searching is `/cli/search`, which takes the
+query string arguments `q=<search terms>` and `format=<format>`
+(among others). Examples:
+
+    http://localhost:8025/TOKEN/cli/search?q=bjarni&format=json
+
+    http://localhost:8025/TOKEN/cli/search?q=hello%20world&format=text
+
+The JSON output will look something like this:
+
+    [
+      {
+        "thread": "00016833",
+        "timestamp": 1236872620,
+        "date_relative": "2009-03-12",
+        "matched": 1,
+        "total": 1,
+        "files": 1,
+        "authors": "Joe Random",
+        "subject": "Welcome to Funland!",
+        "query": ["id:432.123.e1c951234123422e0d424b4f9a4ba73", null],
+        "tags": ["inbox", "unread"]
+      },
+      ...
+    ]
+
+(This format is deliberately similar to the JSON output of the `notmuch
+search` command, and in the interest of compatibility, moggie's search
+takes most of the same arguments as notmuch.)
+
+In particular, note the `query` element of the JSON object; it is a list
+of IDs which can be passed to `/cli/show` to fetch the message itself.
+
+For more details about what kinds of searches can be performed, consult
+the output of `moggie help search`. The man page for `notmuch-search` may
+also be of use.
+
+
+### Fetching entire messages or threads
+
+The API endpoint for downloading an e-mail is `/cli/show`.
+
+Like `notmuch show`, moggie's show method will output messages matching
+arbitrary search queries.
+
+However, the most common use for this endpoint is to display a message
+or thread after discovering it using the `/cli/search` method, by
+passing it the ID provided in the search result. Depending on how the
+search was performed, the IDs may be short (id:nnn) or long
+(id:nnn.mmm.ssss).
+
+Long IDs are cryptographically signed and can be used with `/cli/show`
+without an authentication token, which will allow an app to pass message
+URLS on to the user, without leaking the access token itself. Even
+though moggie does not yet have a user-facing web interfaace, this may
+still be useful today for dowloading an `mbox` formatted collection of
+matching messages. Signed IDs become invalid when the access token used
+to generate them is revoked or expired.
+
+These are example URLs including the token:
+
+    http://localhost:8025/TOKEN/cli/show?q=id:1234&format=json
+
+    http://localhost:8025/TOKEN/cli/show/id:1234?format=mbox
+
+Examples without the token:
+
+    http://localhost:8025/cli/show/id:1234.123.21341234124?format=json
+
+    http://localhost:8025/cli/show/id:1234.123.21341234124
+
+The available formats are `text`, `json` and `mbox`, with JSON
+and mbox formats being most useful for integration.
+
+The JSON format looks a bit like this:
+
+    [            <-- This is a list of threads
+     [           <-- This is a list of messages
+      [          <-- This is a (message info, replies) pair
+       {
+        "id": "183081.16c6.dd22d258d24dab22507290b9d8c80767684e9175",
+        "match": true,
+        "timestamp": 1661171873,
+        "date_relative": "2022-08-22",
+        "headers": {
+          "Subject: Hello, this is a test",
+          "From": "Bjarni R. E. <bre@example.org>",
+          "To": "Clever Jane <jane@example.org",
+          "Date": "Mon, 22 Aug 2022 12:37:53 -0000"
+        },
+        "body": [
+          {
+            "id": 1,
+            "content-type": "multipart/related",
+            "content": [
+              {
+                "id": 2,
+                "content-type": "multipart/alternative",
+                "content": [
+                  {
+                    "id": 3,
+                    "content-type": "text/plain",
+                    "content": "Hello world!"
+                  },
+                  {
+                    "id": 4,
+                    "content-type": "text/html"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "tags": [
+          "inbox",
+          "unread",
+        ],
+        "crypto": {}
+       },
+       [ ... ]   <-- Replies to this message would appear in this list
+      ],
+      ...
+     ],
+     ...
+    ]
+
+There is a significant amount of nesting, in order to represent both
+the tree-structure of conversation threads, and the internal structure
+of the e-mail.
+
+By default, the JSON output will also include information about other
+messages in the thread, even if they did not mach the original query.
+Messages that did match will have `"match": True` set.
+
+For more details about what kinds of searches can be performed, consult
+the output of `moggie help show`. The man page for `notmuch-show` may
+also be of use, since this method also strives to be compatible with
+its notmuch counterpart.

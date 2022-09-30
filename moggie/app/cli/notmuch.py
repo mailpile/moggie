@@ -4,6 +4,8 @@
 # FIXME: Most of the complex logic in here should probably be moved to the
 #        back-end, so we can expose the same API via the web.
 #
+# TODO: Look into tabular
+#
 # These are the commands used by the dodo mail client:
 #    notmuch new
 #    notmuch tag +replied -- id:<MSGID>
