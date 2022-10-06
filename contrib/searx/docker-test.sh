@@ -40,7 +40,6 @@ python3 -m moggie start
 python3 -m moggie import /root/test.mbx
 lots context create Testspace --tag-namespace=Testspace
 lots grant create Tester user --context=Testspace
-lots tag +@Testspace -- all:mail
 MOGGIE_URL=$(lots grant login Tester --output=urls |grep http: |cut -b40- |tail -1)
 
 
@@ -70,6 +69,10 @@ sed -i -e "s/8888/32080/g"                             $SEARX_SETTINGS_PATH
 sed -i -e "s,base_url.*YOUR_SECRET_TOKEN/',base_url : '$MOGGIE_URL/',g" \
     /root/searx/searx/settings.yml
 python3 searx/webapp.py >/root/logs/searx.log 2>&1 &
+
+
+# The import is probably done by now, tag messages into the Testspace
+lots tag +@Testspace -- all:mail
 
 
 set +x

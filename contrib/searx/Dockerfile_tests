@@ -1,11 +1,10 @@
 FROM ubuntu:devel
 MAINTAINER Bjarni R. Einarsson <bre@mailpile.is>
 
-EXPOSE 32025
-EXPOSE 32080
-
+# This is deliberately the same is tools/Dockerfile_tests, to reuse
+# the docker cache.
 RUN apt-get update \
-    && apt install -y git curl vim iproute2 \
+    && apt install -y git curl vim net-tools iproute2 \
         python3-cryptography \
         python3-urwid \
         python3-websockets \
@@ -15,6 +14,9 @@ RUN apt-get update \
 
 RUN curl 'https://lists.apache.org/api/mbox.lua?list=dev@age.apache.org&date=2022-01' \
         >/root/test.mbx
+
+EXPOSE 32025
+EXPOSE 32080
 
 ARG DEBIAN_FRONTEND=noninteractive
 RUN apt-get update \

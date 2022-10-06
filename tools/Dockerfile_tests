@@ -2,7 +2,7 @@ FROM ubuntu:devel
 MAINTAINER Bjarni R. Einarsson <bre@mailpile.is>
 
 RUN apt-get update \
-    && apt install -y git curl vim \
+    && apt install -y git curl vim net-tools iproute2 \
         python3-cryptography \
         python3-urwid \
         python3-websockets \
@@ -15,4 +15,4 @@ RUN curl 'https://lists.apache.org/api/mbox.lua?list=dev@age.apache.org&date=202
 
 VOLUME /mnt/code
 WORKDIR /root
-CMD /mnt/code/tools/docker-internal.sh
+CMD /mnt/code/tools/docker-test.sh --internal

@@ -11,6 +11,7 @@ mp-virtualenv
 .idea
 .*deps
 .tox
+.docker-test-wait
 mailpile.egg-info/
 mailpile-tmp.py
 static/default/plugins/
