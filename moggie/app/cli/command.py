@@ -67,12 +67,13 @@ class CLICommand:
         self.connected = False
         self.messages = []
         self.workdir = wd
+        self.context = None
 
         if access is not True and not access and self.ROLES:
             raise PermissionError('Access denied')
         self.access = access
         if self.ROLES and '--context=' not in self.options:
-            self.get_context('default')
+            self.context = self.get_context('default')
 
         self.mimetype = 'text/plain; charset=utf-8'
         def _writer(stuff):

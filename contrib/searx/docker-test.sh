@@ -30,6 +30,7 @@ mkdir -p .local/share/Moggie/default/logs
 ln -fs /root/.local/share/Moggie/default/logs logs
 cat >/root/.local/share/Moggie/default/config.rc <<tac
 [App]
+port = 32025
 log_level = 10
 tac
 

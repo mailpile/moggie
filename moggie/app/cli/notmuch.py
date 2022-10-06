@@ -289,6 +289,7 @@ class CommandSearch(CLICommand):
                 md = Metadata(*md)
                 if want_body:
                     query = RequestEmail(metadata=md, text=(not raw), full_raw=raw)
+                    query['context'] = self.context
                     msg = await self.worker.async_jmap(self.access, query)
                 else:
                     msg = {'email': md.parsed()}
@@ -740,6 +741,8 @@ class CommandShow(CommandSearch):
                     if token:
                         self.access = acc
                         self.access._live_token = token
+                        self.context = self.get_context()
+                        logging.debug('Granted %s on %s' % (self.access, self.context))
                 if not self.access:
                     logging.warning('Rejecting ID signature: %s (%s, %s)'
                         % (sig, aid, self.terms))
@@ -749,6 +752,7 @@ class CommandShow(CommandSearch):
 
         if self.access and self.access is not True:
             if not self.access.grants(self.context, self.REAL_ROLES):
+                logging.warning('No access to %s, %s' % (self.context, self.REAL_ROLES))
                 raise PermissionError('Access denied')
 
         self.threads = {}
