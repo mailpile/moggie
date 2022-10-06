@@ -527,6 +527,7 @@ main app worker. Hints:
                 jmap_request['metadata'],
                 text=jmap_request.get('text', False),
                 data=jmap_request.get('data', False),
+                parts=jmap_request.get('parts', None),
                 full_raw=jmap_request.get('full_raw', False))
         info = await async_run_in_thread(get_email)
         return ResponseEmail(jmap_request, info)

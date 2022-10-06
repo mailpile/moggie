@@ -108,13 +108,6 @@ class StorageWorker(BaseWorker):
             'skip': skip,
             'limit': limit})
 
-    def email(self, metadata, text=False, data=False, full_raw=False):
-        return self.call('email', qs={
-            'metadata': metadata[:Metadata.OFS_HEADERS],
-            'text': text,
-            'data': data,
-            'full_raw': full_raw})
-
     def get(self, key, *args, dumbcode=None):
         if dumbcode is not None:
             return self.call('get', key, *args, qs={'dumbcode': dumbcode})
@@ -185,14 +178,17 @@ class StorageWorker(BaseWorker):
         else:
             self.parsed_mailboxes[key][1] = True
 
-    def api_email(self,
-           metadata=None, text=False, data=False, full_raw=False, method=None):
+    def email(self, metadata, text=False, data=False, full_raw=False, parts=None):
+        return self.call('email',
+            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts)
+
+    def api_email(self, metadata, text, data, full_raw, parts, method=None):
         metadata = Metadata(*(metadata[:Metadata.OFS_HEADERS] + [b'']))
         parsed = self.backend.parse_message(metadata)
         if text:
             parsed.with_text()
-        if data:
-            parsed.with_data()
+        if data or parts:
+            parsed.with_data(only=(parts or None))
         if full_raw:
             parsed.with_full_raw()
         self.reply_json(parsed)

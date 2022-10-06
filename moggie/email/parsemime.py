@@ -230,18 +230,21 @@ class MessagePart(dict):
                 part['_TEXT'] = self._text(part)
         return self
 
-    def with_data(self, multipart=False, text=False, recurse=True):
+    def with_data(self, multipart=False, text=False, recurse=True, only=None):
         """
         Add _DATA elements to each part (except multipart/ and text parts,
         unless explicitly requested) containing a base64-encoded copy of the
         decoded part body.
         """
         self.with_structure(recurse=recurse)
-        for part in self['_PARTS']:
-            ct, ctp = part.get('content-type', ['', {}])
-            if ((multipart or not ct.startswith('multipart/')) and
-                    (text or not ct in ('text/plain', 'text/html'))):
+        for i, part in enumerate(self['_PARTS']):
+            if only and (i in only):
                 part['_DATA'] = str(self._base64(part), 'latin-1')
+            else:
+                ct, ctp = part.get('content-type', ['', {}])
+                if ((multipart or not ct.startswith('multipart/')) and
+                        (text or not ct in ('text/plain', 'text/html'))):
+                    part['_DATA'] = str(self._base64(part), 'latin-1')
         return self
 
     def with_full_raw(self):

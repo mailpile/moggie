@@ -85,12 +85,14 @@ class RequestMailbox(RequestBase):
 
 class RequestEmail(RequestBase):
     def __init__(self,
-            metadata=[], text=False, data=False, full_raw=False, req_id=None):
+            metadata=[], text=False, data=False, full_raw=False, parts=None,
+            req_id=None):
         self.update({
             'prototype': 'email',
             'metadata': metadata[:Metadata.OFS_HEADERS],
             'text': text,
             'data': data,
+            'parts': parts,
             'full_raw': full_raw,
         }, req_id=req_id)
 

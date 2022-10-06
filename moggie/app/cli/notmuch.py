@@ -279,8 +279,9 @@ class CommandSearch(CLICommand):
                 'b': '\n'.join(_parts(sp) for sp in r['body'])}
         if thread is not None:
             fmt = self.options['--format='][-1]
+            part = int((self.options.get('--part=') or [0])[-1])
             raw = (fmt in ('mbox', 'maildir', 'raw', 'zip'))
-            want_body = raw or self.options['--body='][-1] != 'false'
+            want_body = raw or (self.options['--body='][-1] != 'false')
             want_html = self.options.get('--include-html')
             shown_types = ('text/plain', 'text/html') if want_html else ('text/plain',)
 
@@ -288,16 +289,30 @@ class CommandSearch(CLICommand):
             for md in thread['messages']:
                 md = Metadata(*md)
                 if want_body:
-                    query = RequestEmail(metadata=md, text=(not raw), full_raw=raw)
+                    query = RequestEmail(
+                        metadata=md,
+                        text=(not raw or part),
+                        data=(True if part else False),
+                        parts=([part-1] if part else None),
+                        full_raw=(raw and not part))
                     query['context'] = self.context
                     msg = await self.worker.async_jmap(self.access, query)
                 else:
                     msg = {'email': md.parsed()}
 
-                if raw and msg and (msg.get('email') or {}).get('_RAW'):
-                    yield ('%s', {'_metadata': md, '_parsed': msg})
+                if not msg or not msg.get('email'):
+                    pass
 
-                elif msg and msg.get('email'):
+                elif part:
+                    part = msg['email']['_PARTS'][part-1]
+                    yield (part.get('_TEXT'),
+                        {'_metadata': md, '_data': part.get('_DATA')})
+
+                elif raw and msg['email'].get('_RAW'):
+                    yield ('',
+                        {'_metadata': md, '_data': msg['email'].get('_RAW')})
+
+                else:
                     headers = {}
                     for hdr in ('Subject', 'From', 'To', 'Cc', 'Date'):
                         val = msg['email'].get(hdr.lower())
@@ -362,6 +377,12 @@ class CommandSearch(CLICommand):
                         '_metadata': md,
                         '_parsed': msg})
 
+    async def emit_result_raw(self, result, first=False, last=False):
+        if result is not None:
+            raw = result[1] and result[1].get('_data')
+            data = base64.b64decode(raw) if raw else result[0] or ''
+            self.write_reply(data)
+
     async def emit_result_text(self, result, first=False, last=False):
         if result is not None:
             if isinstance(result[0], bytes):
@@ -414,7 +435,7 @@ class CommandSearch(CLICommand):
     def _export(self, exporter, result, first, last):
         if result is not None:
             metadata = result[1]['_metadata']
-            raw_email = base64.b64decode(result[1]['_parsed']['email']['_RAW'])
+            raw_email = base64.b64decode(result[1]['_data'])
             exporter.export(metadata, raw_email)
         if last:
             exporter.close()
@@ -462,8 +483,10 @@ class CommandSearch(CLICommand):
             return self.emit_result_json
         elif fmt == 'text0':
             return self.emit_result_text0
-        elif fmt in ('text', 'raw'):
+        elif fmt in 'text':
             return self.emit_result_text
+        elif fmt in 'raw':
+            return self.emit_result_raw
         elif fmt == 'mbox':
             return self.emit_result_mbox
         elif fmt == 'maildir':
@@ -533,10 +556,12 @@ class CommandSearch(CLICommand):
     def make_signer(self):
         if (self.access is not True) and self.access._live_token:
             access_id = self.access.config_key[len(AppConfig.ACCESS_PREFIX):]
+            context_id = self.context[len(AppConfig.CONTEXT_PREFIX):]
             token = self.access._live_token
             def id_signer(_id):
+                _id = '%s.%s.%s' % (_id, access_id, context_id)
                 sig = self.access.make_signature(_id, token=token)
-                return '%s.%s.%s' % (_id, access_id, sig)
+                return '%s.%s' % (_id, sig)
             return id_signer
         else:
             return lambda _id: _id
@@ -688,7 +713,6 @@ class CommandShow(CommandSearch):
     """moggie show [options] <terms>
 
 
-
     JSON output:
 
       message_dict = { id: match: excluded: filename:[]
@@ -706,7 +730,7 @@ class CommandShow(CommandSearch):
     REAL_ROLES = AccessConfig.GRANT_READ
     WEB_EXPOSE = True
 
-    RE_SIGNED_ID = re.compile(r'^id:[0-9a-f,]+\.[0-9a-zA-Z]+\.[0-9a-f]+$')
+    RE_SIGNED_ID = re.compile(r'^id:[0-9a-f,]+\.[0-9a-zA-Z]+\.[0-9a-zA-Z]+\.[0-9a-f]+$')
 
     OPTIONS = {
         # These are moggie specific
@@ -723,7 +747,6 @@ class CommandShow(CommandSearch):
         # These are notmuch options which we currently ignore
         '--verify':          [],
         '--decrypt=':        [],
-        '--part=':           [],  # FIXME, this one is important!
         '--format-version=': [''],
         '--exclude=':        ['true'],
         '--duplicate=':      ['']}
@@ -732,16 +755,21 @@ class CommandShow(CommandSearch):
         super().__init__(*args, **kwargs)
 
         if self.RE_SIGNED_ID.match(self.terms):
-            self.terms, aid, sig = self.terms.split('.')
+            # First we just extract the ID and update self.terms so signed IDs
+            # can be used by authenticated users.
+            _id, sig = self.terms.rsplit('.', 1)
+            self.terms, aid, ctx = _id.split('.')
+            # If auth is lacking, we validate the signature and update...
             if self.worker and self.worker.app and not self.access:
                 aid = self.worker.app.config.ACCESS_PREFIX + aid
+                ctx = self.worker.app.config.CONTEXT_PREFIX + ctx
                 acc = self.worker.app.config.all_access.get(aid)
                 if acc:
-                    token = acc.check_signature(sig, self.terms)
+                    token = acc.check_signature(sig, _id)
                     if token:
                         self.access = acc
                         self.access._live_token = token
-                        self.context = self.get_context()
+                        self.context = ctx
                         logging.debug('Granted %s on %s' % (self.access, self.context))
                 if not self.access:
                     logging.warning('Rejecting ID signature: %s (%s, %s)'
@@ -799,6 +827,8 @@ class CommandShow(CommandSearch):
         return args
 
     async def run(self):
+        if self.options.get('--part='):
+            self.options['--format='] = ['raw']
         if self.options['--format='][-1] in ('json', 'sexp'):
             self.options['--entire-thread='][:0] = ['true']
         return await super().run()
