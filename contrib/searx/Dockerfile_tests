@@ -1,0 +1,29 @@
+FROM ubuntu:devel
+MAINTAINER Bjarni R. Einarsson <bre@mailpile.is>
+
+EXPOSE 32025
+EXPOSE 32080
+
+RUN apt-get update \
+    && apt install -y git curl vim iproute2 \
+        python3-cryptography \
+        python3-urwid \
+        python3-websockets \
+        python3-numpy \
+        python3-appdirs \
+        python3-setproctitle
+
+RUN curl 'https://lists.apache.org/api/mbox.lua?list=dev@age.apache.org&date=2022-01' \
+        >/root/test.mbx
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install -y tzdata \
+    && apt-get install -y python3-dev python3-babel python3-venv \
+        uwsgi uwsgi-plugin-python3 \
+        git build-essential libxslt-dev zlib1g-dev libffi-dev libssl-dev \
+        shellcheck
+
+VOLUME /mnt/code
+WORKDIR /root
+CMD /mnt/code/contrib/searx/docker-test.sh --internal
