@@ -200,25 +200,31 @@ class PublicWorker(BaseWorker):
 
     @classmethod
     def FromArgs(cls, workdir, args):
-        port = 0
+        host = 'localhost'
+        port = '0'
         kite_name = kite_secret = None
         cfg = AppConfig(workdir)
 
         log_level = cfg.get(cfg.GENERAL, 'log_level', fallback=logging.ERROR)
 
         if cls.CONFIG_SECTION:
-            port = int(cfg.get(cls.CONFIG_SECTION, 'port', fallback=port))
+            port = cfg.get(cls.CONFIG_SECTION, 'port', fallback=port)
+            port = cfg.get(cls.CONFIG_SECTION, 'listen', fallback=port)
             kite_name = cfg.get(cls.CONFIG_SECTION, 'kite_name', fallback=kite_name)
             kite_secret = cfg.get(cls.CONFIG_SECTION, 'kite_secret', fallback=kite_secret)
 
         if len(args) >= 1:
-            port = int(args.pop(0))
+            port = args.pop(0)
+        if ':' in port:
+            host, port = port.split(':')
+
         if len(args) >= 2:
             kite_name = args.pop(0)
             kite_secret = args.pop(0)
 
         return cls(workdir,
-            port=port, kite_name=kite_name, kite_secret=kite_secret,
+            host=host, port=int(port),
+            kite_name=kite_name, kite_secret=kite_secret,
             log_level=int(log_level))
 
     def get_app(self):
