@@ -39,7 +39,7 @@ class SearchWorker(BaseWorker):
     def Connect(cls, status_dir):
         return cls(status_dir, None, None, None).connect(autostart=False)
 
-    def __init__(self, status_dir, engine_dir, maxint, encryption_keys,
+    def __init__(self, status_dir, engine_dir, metadata, encryption_keys,
             name=KIND, defaults=None, notify=None, log_level=logging.ERROR):
 
         BaseWorker.__init__(self, status_dir,
@@ -58,7 +58,8 @@ class SearchWorker(BaseWorker):
         self.encryption_keys = encryption_keys
         self.engine_dir = engine_dir
         self.defaults = defaults
-        self.maxint = maxint
+        self.metadata = metadata
+        self.maxint = metadata.info()['maxint']
         self._engine = None
 
     def quit(self, *args, **kwargs):
@@ -75,6 +76,10 @@ class SearchWorker(BaseWorker):
             defaults=self.defaults,
             maxint=self.maxint)
 
+        self._engine.magic_term_map.update({
+            'tid': self._magic_thread,
+            'thread': self._magic_thread})
+
         for dpath in self.SYS_DICTIONARY_PATHS:
             if os.path.exists(dpath):
                 try:
@@ -86,6 +91,18 @@ class SearchWorker(BaseWorker):
         del self.encryption_keys
 
         return super()._main_httpd_loop()
+
+    def _magic_thread(self, thread_id):
+        tid = None
+        try:
+            tid = int(thread_id.split(':')[-1])
+            info = self.metadata.metadata([tid], threads=True, only_ids=True)
+            if info:
+                ids = ','.join(('%s' % i) for i in info[0]['messages'])
+                return 'id:%s' % ids
+        except:
+            logging.warning('Failed to load thread message IDs for %s' % thread_id)
+        return thread_id if tid is None else 'id:%s' % (tid)
 
     def add_results(self, results, callback_chain=None, wait=True):
         return self.call('add_results', results, callback_chain, wait)

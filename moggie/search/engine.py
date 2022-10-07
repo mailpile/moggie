@@ -256,8 +256,6 @@ class SearchEngine:
 
         from .dates import date_term_magic
         self.magic_term_map = {
-            # FIXME: 'tid': self.magic_thread,
-            # FIXME: 'thread': self.magic_thread,
             'date': date_term_magic,
             'dates': date_term_magic}
 
@@ -776,8 +774,8 @@ class SearchEngine:
             return magic(term)
 
         # FIXME: Convert to:me, from:me into e-mail searches
-        # FIXME: Also: thread:<id> mid:<mid> and id:<mid>
-        #        Notmuch's thread-subqueries are kinda neat, implement them?
+
+        # Notmuch's thread-subqueries are kinda neat, implement them?
 
         return term
 

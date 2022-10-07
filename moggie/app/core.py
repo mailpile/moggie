@@ -136,7 +136,7 @@ main app worker. Hints:
         if self.search is None:
             self.search = SearchWorker(self.worker.worker_dir,
                 self.worker.profile_dir,
-                self.metadata.info()['maxint'],
+                self.metadata,
                 aes_keys,
                 notify=notify_url,
                 name='search',

@@ -203,9 +203,11 @@ class CommandSearch(CLICommand):
                 'tags': tags}
             info['_tag_list'] = ' (%s)' % (' '.join(tags)) if tags else ''
             info['_file_count'] = '(%d)' % fc if (fc > len(msgs)) else ''
-            info['_thread'] = thread
+            info['_id'] = (
+                ('id:%12.12d' % tid) if (len(msgs) == 1) else
+                ('thread:' + info['thread']))
             yield (
-                'thread:%(thread)s %(date_relative)s'
+                '%(_id)s %(date_relative)s'
                 ' [%(matched)s/%(total)s%(_file_count)s]'
                 ' %(authors)s;'
                 ' %(subject)s%(_tag_list)s',
@@ -304,9 +306,9 @@ class CommandSearch(CLICommand):
                     pass
 
                 elif part:
-                    part = msg['email']['_PARTS'][part-1]
-                    yield (part.get('_TEXT'),
-                        {'_metadata': md, '_data': part.get('_DATA')})
+                    _part = msg['email']['_PARTS'][part-1]
+                    yield (_part.get('_TEXT'),
+                        {'_metadata': md, '_data': _part.get('_DATA')})
 
                 elif raw and msg['email'].get('_RAW'):
                     yield ('',
@@ -331,27 +333,27 @@ class CommandSearch(CLICommand):
                     if '_PARTS' in msg['email']:
                         partstack = [body]
                         depth = 0
-                        for i, part in enumerate(msg['email']['_PARTS']):
+                        for i, _part in enumerate(msg['email']['_PARTS']):
                             info = {
                                 'id': i+1,
-                                'content-type': part.get('content-type', ['text/plain'])[0]}
+                                'content-type': _part.get('content-type', ['text/plain'])[0]}
 
-                            disp = part.get('content-disposition')
+                            disp = _part.get('content-disposition')
                             if isinstance(disp, list):
                                 info['content-disposition'] = disp[0]
                                 if 'filename' in disp[1]:
                                     info['filename'] = disp[1]['filename']
-                                cte = part.get('content-transfer-encoding')
+                                cte = _part.get('content-transfer-encoding')
                                 if cte:
                                     info['content-transfer-encoding'] = cte
-                                info['content-length'] = (part['_BYTES'][2] - part['_BYTES'][1])
-                            while part['_DEPTH'] < depth:
+                                info['content-length'] = (_part['_BYTES'][2] - _part['_BYTES'][1])
+                            while _part['_DEPTH'] < depth:
                                 partstack.pop(-1)
                                 depth -= 1
                             if info['content-type'] != 'text/x-mime-postamble':
                                 partstack[-1].append(info)
-                            if '_TEXT' in part and info['content-type'] in shown_types:
-                                info['content'] = part['_TEXT']
+                            if '_TEXT' in _part and info['content-type'] in shown_types:
+                                info['content'] = _part['_TEXT']
                             elif info['content-type'].startswith('multipart/'):
                                 info['content'] = []
                                 partstack.append(info['content'])
@@ -786,6 +788,9 @@ class CommandShow(CommandSearch):
         self.threads = {}
 
     async def emit_result_json(self, result, first=False, last=False):
+        if result is None:
+            return
+
         result = result[1]
         idx, pid, tid = result['_id'], result['_parent_id'], result['_thread_id']
 

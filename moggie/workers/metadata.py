@@ -168,7 +168,9 @@ class MetadataWorker(BaseWorker):
             for tag in tags:
                 tags[tag] = dumb_decode(tags[tag][1])
             def _metadata(i):
-                md = self._metadata.get(i, default=i)
+                md = self._metadata.get(i, default=None)
+                if md is None:
+                    return None
                 md.more['tags'] = tlist = []
                 for tag in tags:
                     if i in tags[tag]:
@@ -176,7 +178,9 @@ class MetadataWorker(BaseWorker):
                 return md
         else:
             def _metadata(i):
-                md = self._metadata.get(i, default=i)
+                md = self._metadata.get(i, default=None)
+                if md is None:
+                    return None
                 if 'tags' in md.more:
                     del md.more['tags']
                 return md
@@ -190,10 +194,14 @@ class MetadataWorker(BaseWorker):
             else:
                 for grp in result:
                     del grp['_ts']
-                    grp['messages'] = [_metadata(i)
-                        for i in self._metadata.get_thread_idxs(grp['thread'])]
+                    grp['messages'] = [idx
+                        for idx in (_metadata(i) for i
+                            in self._metadata.get_thread_idxs(grp['thread']))
+                        if idx is not None]
         elif not only_ids:
-            result = [_metadata(i) for i in result]
+            result = [idx
+                for idx in (_metadata(i) for i in result)
+                if idx is not None]
 
         self.reply_json(result)
 
