@@ -29,7 +29,6 @@
 import base64
 import copy
 import datetime
-import json
 import logging
 import io
 import os
@@ -416,10 +415,21 @@ class CommandSearch(CLICommand):
         if result is None:
             return
         result = self._json_sanitize(result)
-        self.print(''.join([
-            '[' if first else ' ',
-            json.dumps(result[1]) if result else '',
-            ']' if last else ',']))
+        if first:
+            self.print('[', nl='')
+        if result:
+            self.print_json(result[1], nl='')
+        self.print(']' if last else ',')
+
+    async def emit_result_sexp(self, result, first=False, last=False):
+        if result is None:
+            return
+        result = self._json_sanitize(result)
+        if first:
+            self.print('[', nl='')
+        if result:
+            self.print_sexp(result[1], nl='')
+        self.print(']' if last else ',')
 
     def _get_exporter(self, cls):
         if self.exporter is None:
@@ -487,6 +497,8 @@ class CommandSearch(CLICommand):
             return self.emit_result_text0
         elif fmt in 'text':
             return self.emit_result_text
+        elif fmt == 'sexp':
+            return self.emit_result_sexp
         elif fmt in 'raw':
             return self.emit_result_raw
         elif fmt == 'mbox':
@@ -787,10 +799,21 @@ class CommandShow(CommandSearch):
 
         self.threads = {}
 
+    async def emit_result_sexp(self, result, first=False, last=False):
+        if result is None:
+            return
+        emitting = await self._buffered_emit(result, first, last)
+        if emitting is not None:
+            self.print_sexp(emitting)
+
     async def emit_result_json(self, result, first=False, last=False):
         if result is None:
             return
+        emitting = await self._buffered_emit(result, first, last)
+        if emitting is not None:
+            self.print_json(emitting)
 
+    async def _buffered_emit(self, result, first, last):
         result = result[1]
         idx, pid, tid = result['_id'], result['_parent_id'], result['_thread_id']
 
@@ -822,7 +845,9 @@ class CommandShow(CommandSearch):
 
                 threads.append(list(thread.values()))
 
-            self.print(json.dumps(threads))
+            return threads
+        else:
+            return None
 
     def configure(self, *args, **kwargs):
         args = super().configure(*args, **kwargs)
@@ -890,7 +915,7 @@ class CommandCount(CLICommand):
             suffix = ''
 
         if self.options['--format='][-1] == 'json':
-            self.print(json.dumps(msg['counts']))
+            self.print_json(msg['counts'])
         else:
             for term in self.terms:
                 count = msg.get('counts', {}).get(term, 0)

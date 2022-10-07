@@ -111,11 +111,34 @@ class CLICommand:
             elif ('json' in at) or ('Mozilla' not in ua):
                 self.options['--format='][:1] = ['json']
 
-    def print(self, *args):
-        self.write_reply(' '.join(args) + '\n')
+    def print_sexp(self, data, nl='\n'):
+        def _sexp(exp):
+            out = ''
+            if isinstance(exp, (list, tuple)):
+                out += '(' + ' '.join(_sexp(x) for x in exp) + ')'
+            elif isinstance(exp, dict):
+                out += ('(' + ' '.join(
+                        ':%s %s' % (k, _sexp(v)) for k, v in exp.items())
+                    + ')')
+            elif isinstance(exp, str):
+                out += '"%s"' % repr(exp)[1:-1].replace('"', '\"')
+            elif exp in (False, None):
+                out += 'nil'
+            elif exp is True:
+                out += 't'
+            else:
+                out += '%s' % exp
+            return out
+        self.write_reply(_sexp(data) + nl)
 
-    def error(self, *args):
-        self.write_error(' '.join(args) + '\n')
+    def print_json(self, data, nl='\n'):
+        self.write_reply(json.dumps(data) + nl)
+
+    def print(self, *args, nl='\n'):
+        self.write_reply(' '.join(args) + nl)
+
+    def error(self, *args, nl='\n'):
+        self.write_error(' '.join(args) + nl)
 
     async def _await_connection(self):
         sleeptime, deadline = 0, (time.time() + 10)
