@@ -426,10 +426,10 @@ class CommandSearch(CLICommand):
             return
         result = self._json_sanitize(result)
         if first:
-            self.print('[', nl='')
+            self.print('(', nl='')
         if result:
             self.print_sexp(result[1], nl='')
-        self.print(']' if last else ',')
+        self.print(')' if last else ' ')
 
     def _get_exporter(self, cls):
         if self.exporter is None:
@@ -872,7 +872,7 @@ class CommandCount(CLICommand):
         # These are moggie specific
         '--context=':        ['default'],
         '--multi':           [],          # Multiple terms as arguments?
-        '--format=':         ['text'],    # Also json!
+        '--format=':         ['text'],    # Also json, sexp!
         # These are notmuch options which we implement
         '--batch':           [],
         '--input=':          [],
@@ -916,6 +916,8 @@ class CommandCount(CLICommand):
 
         if self.options['--format='][-1] == 'json':
             self.print_json(msg['counts'])
+        elif self.options['--format='][-1] == 'sexp':
+            self.print_sexp(msg['counts'])
         else:
             for term in self.terms:
                 count = msg.get('counts', {}).get(term, 0)
