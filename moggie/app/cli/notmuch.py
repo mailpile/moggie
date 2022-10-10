@@ -61,10 +61,11 @@ class CommandSearch(CLICommand):
 
       moggie search dates:2022-08 --format=mbox > August2022.mbx  # Export!
 
-    Options:
+    Options:                                   (defaults are marked with a *)
+
       --context=<ctx>   Choose which context to search within.
-      --format=<fmt>    Result format: text, text0, json, zip, maildir, mbox
-      --output=<data>   Result output: summary, threads, messages, files,
+      --format=<fmt>    Result format: text*, text0, json, zip, maildir, mbox
+      --output=<data>   Result output: summary*, threads, messages, files,
                                        tags, emails, thread_emails.
       --offset=<N>      Skip the first N results
       --limit=<N>       Output at most N results
@@ -617,6 +618,32 @@ class CommandSearch(CLICommand):
 
 
 class CommandAddress(CommandSearch):
+    """# moggie address [options] <search terms ...>
+
+    Search for emails or threads matching the given search terms and display
+    addresses related to them (senders, recipients or both). Examples:
+
+      moggie address to:bre dates:2022-09
+      moggie address --output=recipients from:bre dates:2022-09
+
+    Options:                                   (defaults are marked with a *)
+
+      --format=<F>       One of text*, text0, json or sexp
+      --output=<O>       One or more of sender*, recipients, address, count
+      --deduplicate=<D>  One of no, mailbox*, address
+
+    When choosing output formats, multiple options can be specified at once.
+    When `sender` is requested, the output will include all senders.  The
+    output from `recipients` includes the messages in To: and Cc: headers.
+    Requesting `--output=address` will omit the names from e-mail addresses,
+    and `--output=count` will include a count of how often each address was
+    seen.
+
+    See also `moggie help search` and `moggie help how-to-search` for details
+    about how to search for mail. This command should be compatible with its
+    `notmuch` counterpart, so the man-page for `notmuch address` may also
+    provide useful insights.
+    """
     NAME = 'address'
     ROLES = AccessConfig.GRANT_READ
     WEB_EXPOSE = True

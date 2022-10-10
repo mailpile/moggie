@@ -9,7 +9,6 @@ from .notmuch import CommandConfig
 from .help import TOPICS
 
 
-# FIXME: Here we really should think about i18n
 class CommandHelp(CLICommand):
     """# moggie help [command]
 
@@ -21,13 +20,18 @@ class CommandHelp(CLICommand):
     CONNECT = False
     WEBSOCKET = False
     WEB_EXPOSE = True
+    OPTIONS = {'--format=': ['text']}
 
     def configure(self, args):
-        self.arglist = args
+        self.arglist = self.strip_options(args)
         return []
 
     async def run(self):
         global CLI_COMMANDS
+
+        # FIXME: The TOPICS variable is our key to i18n of the documentation;
+        #        it will override anything builtin, if the topic exists in the
+        #        dict.
 
         def _wrap(line, prefix=''):
             words = line.split(' ')
@@ -38,6 +42,23 @@ class CommandHelp(CLICommand):
                 lines[-1] += (word + ' ')
             return '\n'.join(lines).rstrip()
 
+        def _unindent(lines):
+            return (lines
+                 .replace('\n    # ', '\n# ')
+                 .replace('\n    ## ', '\n## ')
+                 .replace('\n    ### ', '\n  ### ')
+                 .replace('\n    ', '\n  '))
+
+        def _html_safe(text):
+            return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+
+        chunks = []
+        output = {}
+        def _print(*chunk_list):
+            chunks.append(''.join(chunk_list))
+
+        if not self.arglist:
+            self.arglist = ['_synopsis']
         if len(self.arglist) == 1:
             arg = self.arglist[0]
             cmd = CLI_COMMANDS.get(arg)
@@ -47,54 +68,45 @@ class CommandHelp(CLICommand):
                     if CLI_COMMANDS[k].__doc__ or k in TOPICS))
                 topics = ', '.join(sorted(
                     t for t in TOPICS.keys()
-                    if t not in CLI_COMMANDS))
+                    if t not in CLI_COMMANDS and not t[:1] == '_'))
 
-                self.print('# moggie help topics\n')
+                _print('# moggie help topics\n')
                 if cmds:
-                    self.print('## Commands:\n\n' + _wrap(cmds, '  ') + '\n')
+                    _print('## Commands:\n\n' + _wrap(cmds, '  '), '\n')
                 if topics:
-                    self.print('## Other topics:\n\n' + _wrap(topics, '  ') + '\n')
+                    _print('## Other topics:\n\n' + _wrap(topics, '  '), '\n')
 
             elif arg in TOPICS:
-                self.print(TOPICS[arg], '\n')
+                _print(_unindent(TOPICS[arg]), '\n')
 
             elif cmd is not None and cmd.__doc__:
-                self.print(cmd.__doc__.strip(), '\n')
+                _print(_unindent(cmd.__doc__.strip()), '\n')
 
             else:
-                self.print("""\
+                _print("""\
 Unknown topic: %s
 
 Try `moggie help topics` for a list of what help has been written.
 """ % arg)
                 return False
 
+
+        fmt = self.options['--format='][-1]
+        output['text'] = '\n'.join(chunks)
+        if fmt == 'text':
+            return self.print(output['text'])
         else:
-            self.print("""\
-# Welcome to Moggie!
-
-Some useful commands:
-
-   moggie start [--cli|--wait]       Launch the Moggie background workers
-   moggie unlock                     Unlock a running, encrypted Moggie
-   moggie stop                       Stop Moggie
-   moggie encrypt                    Enable encryption of local data
-   moggie compact                    Perform housekeeping to free up disk space
-   moggie import </path/to/mailbox>  Add some mail to the search index
-
- * moggie count [--multi] <terms>    Search, returns number of matches
- * moggie search <terms>             Search for mail, summarize results
- * moggie address <terms>            Search for mail, lists senders
-
- * moggie help <command>             Learn more about a specific command.
- * moggie help topics                List all available topics
-
-Bearing in mind that imitation is the sincerest form of flattery, Moggie tries
-to implement (most of) the command-line interfaces of both mutt and notmuch.
-
-*) Commands prefixed with an asterisk (*) can also be invoked using the faster
-   `lots` commmand-line tool, instead of `moggie` itself.
-""")
+            # FIXME: Linkify moggie commands?
+            output['html'] = (
+                '<pre class="moggie_help">' +
+                _html_safe(output['text']) +
+                '</pre>')
+        if fmt == 'html':
+            self.print(output['html'])
+        elif fmt == 'json':
+            self.print_json(output)
+        elif fmt == 'sexp':
+            self.print_json(output)
 
 
 CLI_COMMANDS = {
