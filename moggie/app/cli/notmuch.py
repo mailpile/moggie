@@ -623,7 +623,7 @@ class CommandAddress(CommandSearch):
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
-        '--source=':         [],
+        '--q=':              [],
         # These are notmuch options which we implement
         '--format=':         ['text'],
         '--output=':         [],
@@ -643,6 +643,9 @@ class CommandAddress(CommandSearch):
         args = super().configure(args)
         if not self.options['--output=']:
             self.options['--output='].append('sender')
+        if (self.options['--deduplicate='][-1] == 'no'
+                and 'count' in self.options['--output=']):
+            raise Nonsense('Counting requires deduplication')
         return args
 
     def is_new(self, addr, output):
@@ -662,7 +665,7 @@ class CommandAddress(CommandSearch):
                 self.result_cache[d] = output
             return True
 
-    def emit_sender(self, md):
+    async def emit_sender(self, md):
         addr = Metadata(*md).parsed().get('from')
         result = {
             'address': addr.address,
@@ -671,7 +674,7 @@ class CommandAddress(CommandSearch):
         if addr and self.is_new(addr, result):
             yield (self.fmt, result)
 
-    def emit_recipients(self, md):
+    async def emit_recipients(self, md):
         mdp = Metadata(*md).parsed()
         for hdr in ('to', 'cc', 'bcc'):
             for addr in mdp.get(hdr, []):
@@ -693,7 +696,7 @@ class CommandAddress(CommandSearch):
                 formatters.append(self.emit_sender)
             elif out == 'recipients':
                 formatters.append(self.emit_recipients)
-            elif out == 'address':
+            elif out in ('address', 'addresses'):
                 self.address_only = True
             elif out == 'count':
                 self.counts = True
@@ -703,22 +706,23 @@ class CommandAddress(CommandSearch):
             formatters.append(self.emit_sender)
 
         self.fmt = '%(address)s' if self.address_only else '%(name-addr)s'
-        def _formatter(md):
+        async def _formatter(md):
             if md is not None:
                 for _fmt in formatters:
-                    yield from _fmt(md)
+                    async for result in _fmt(md):
+                        yield result
         if not self.counts:
             return _formatter
 
         self.fmt = '%(count)s\t' + self.fmt
-        def _counter(md):
+        async def _counter(md):
             if md is None:
                 for key, count in self.displayed.items():
                     r = self.result_cache[key]
                     r['count'] = count
                     yield (self.fmt, r)
             else:
-                for r in _formatter(md):
+                async for r in _formatter(md):
                     pass
         return _counter
 
@@ -992,13 +996,15 @@ class CommandTag(CLICommand):
 
     def configure(self, args):
         self.tagops = []
-        self.desc = 'tag %s' % ' '.join(args)
+        argtext = 'tag %s' % ' '.join(args)
         if '--' in args:
             ofs = args.index('--')
             tags = self.strip_options(args[:ofs])
             terms = args[ofs+1:]
         else:
             tags, terms = self.strip_options(args), []
+
+        self.desc = self.options['--comment='][-1] or argtext
 
         if self.options['--batch'] and not self.options['--input=']:
             self.options['--input='].append('-')
@@ -1034,7 +1040,16 @@ class CommandTag(CLICommand):
             undoable=self.desc,
             tag_ops=self.tagops)
         msg = await self.worker.async_jmap(self.access, query)
-        self.print('%s' % msg)
+
+        fmt = self.options['--format='][-1]
+        if fmt == 'json':
+            self.print_json(msg['results'])
+        elif fmt == 'sexp':
+            self.print_sexp(msg['results'])
+        else:
+            self.print(
+                'Tagged:\t\t%(comment)s\nChange ID:\t%(id)s'
+                % msg['results']['history'])
 
 
 def CommandConfig(wd, args):
