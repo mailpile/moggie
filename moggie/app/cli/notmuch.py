@@ -873,6 +873,7 @@ class CommandCount(CLICommand):
         '--context=':        ['default'],
         '--multi':           [],          # Multiple terms as arguments?
         '--format=':         ['text'],    # Also json, sexp!
+        '--stdin=':          [],          # Allow lots to send us stdin
         # These are notmuch options which we implement
         '--batch':           [],
         '--input=':          [],
@@ -890,6 +891,8 @@ class CommandCount(CLICommand):
             self.terms = [' '.join(args)]
 
         if self.options['--batch']:
+            for stdin in self.options['--stdin=']:
+                self.terms.extend(ln.strip() for ln in stdin.splitlines())
             if self.options['--input=']:
                 for fn in self.options['--input=']:
                     if fn == '-':
@@ -897,7 +900,7 @@ class CommandCount(CLICommand):
                     else:
                         self.terms.extend(ln.strip() for ln in open(fn, 'r'))
             else:
-                self.terms.extend(ln.strip() for ln in sys.stdin)
+                self.terms.extend(ln.strip() for ln in self.stdin)
 
         return []
 
@@ -955,6 +958,9 @@ class CommandTag(CLICommand):
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
+        '--format=':         [None],
+        '--comment=':        [None],
+        '--stdin=':          [],          # Allow lots to send us stdin
         # These are notmuch options which we implement
         '--remove-all':      [],
         '--batch':           [],
@@ -998,7 +1004,10 @@ class CommandTag(CLICommand):
             self.options['--input='].append('-')
         for fn in set(self.options['--input=']):
             if fn == '-':
-                self.tagops.extend(self._batch_configure(sys.stdin))
+                for stdin in self.options['--stdin=']:
+                    self.tagops.extend(
+                        self._batch_configure(stdin.splitlines()))
+                self.tagops.extend(self._batch_configure(self.stdin))
             else:
                 with open(fn, 'r') as fd:
                     self.tagops.extend(self._batch_configure(fd))

@@ -68,6 +68,7 @@ class CLICommand:
         self.messages = []
         self.workdir = wd
         self.context = None
+        self.stdin = sys.stdin
 
         if access is not True and not access and self.ROLES:
             raise PermissionError('Access denied')
@@ -98,6 +99,7 @@ class CLICommand:
             self.ev_loop.run_until_complete(self._await_connection())
 
     def set_web_defaults(self, req_env):
+        self.stdin = []
         if '--format=' in self.options:
             ua = (req_env.http_headers.get('User-Agent')
                 or req_env.http_headers.get('user-agent')

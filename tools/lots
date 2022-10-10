@@ -8,11 +8,15 @@ if [ "$MOGGIE_URL" = "" ]; then
 else
   URL="$MOGGIE_URL"
 fi
+
 APP=$1
 shift
 
-(for ARG in "$@"; do
+(if [[ "$*" =~ '--batch' ]]; then
+    export STDIN_CONTENT="--stdin=$(</dev/stdin)"
+fi
+for ARG in "$@" "$STDIN_CONTENT"; do
     echo -n "$ARG"
     echo -n -e '\0'
 done) \
-|curl -sfN -H "Accept: ${MOGGIE_ACCEPT:-text/plain}" -F 'argz=<-' $URL/cli/$APP
+|curl -sfN -H "Accept: ${MOGGIE_ACCEPT:-text/plain}" -F 'argz=<-' $URL/cli/$APP \
