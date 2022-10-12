@@ -48,8 +48,7 @@ class CLICommand:
                     return conn.sync_reply(frame, bytes(msg, 'utf-8'), eof=eof)
         try:
             cmd_obj = cls(app.profile_dir, args,
-                access=access, appworker=app, connect=False)
-            cmd_obj.set_web_defaults(req_env)
+                access=access, appworker=app, connect=False, req_env=req_env)
             cmd_obj.write_reply = reply
             cmd_obj.write_error = reply
             return cmd_obj
@@ -59,7 +58,8 @@ class CLICommand:
             logging.exception('Failed %s' % cls.NAME)
             reply('', eof=True)
 
-    def __init__(self, wd, args, access=None, appworker=None, connect=True):
+    def __init__(self, wd, args,
+            access=None, appworker=None, connect=True, req_env=None):
         from ...workers.app import AppWorker
         from ...util.rpc import AsyncRPCBridge
 
@@ -76,7 +76,6 @@ class CLICommand:
         if self.ROLES and '--context=' not in self.options:
             self.context = self.get_context('default')
 
-        self.mimetype = 'text/plain; charset=utf-8'
         def _writer(stuff):
             if isinstance(stuff, str):
                 return sys.stdout.write(stuff)
@@ -84,6 +83,10 @@ class CLICommand:
                 return sys.stdout.buffer.write(stuff)
         self.write_reply = _writer
         self.write_error = _writer
+
+        self.mimetype = 'text/plain; charset=utf-8'
+        if req_env is not None:
+            self.set_web_defaults(req_env)
 
         if connect and self.CONNECT:
             self.worker = AppWorker.FromArgs(wd, self.configure(args))

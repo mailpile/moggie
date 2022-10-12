@@ -55,7 +55,15 @@ async def web_cli(req_env):
         if isinstance(argz, dict):
             argz = argz['value']
         if argz:
-            args.extend(argz.split('\0')[:-1])
+            # All argz args end with \0, so we know split gives us one
+            # too many for sure. Thus the -1.
+            argz = argz.split('\0')[:-1]
+            # We also know there may be a trailing blank arg, due to how
+            # --stdin= is implemented. So this sucks a bit, but is usually
+            # a win.
+            if argz and not argz[-1]:
+                argz.pop(-1)
+            args.extend(argz)
     else:
         for var, val in (
                 list(req_env.query_tuples) +

@@ -24,6 +24,11 @@ class CommandHelp(CLICommand):
 
     def configure(self, args):
         self.arglist = self.strip_options(args)
+        self.mimetype = {
+            'text': 'text/plain; charset=utf-8',
+            'html': 'text/html; charset=utf-8',
+            'json': 'application/json',
+            }.get(self.options['--format='][-1], 'application/octet-stream')
         return []
 
     async def run(self):
