@@ -63,14 +63,25 @@ class MetadataWorker(BaseWorker):
     def add_metadata(self, metadata, update=True):
         return self.call('add_metadata', update, metadata)
 
+    async def async_metadata(self, loop, hits,
+            tags=None, threads=False, only_ids=False,
+            sort=SORT_NONE, skip=0, limit=None, raw=False,
+            data_cb=None):
+        res = await self.async_call(loop, 'metadata',
+            hits, tags, threads, only_ids, sort, skip, limit,
+            data_cb=data_cb)
+        if only_ids or raw or (data_cb is not None):
+            return res
+        if threads:
+            for grp in res:
+                grp['messages'] = [Metadata(*m) for m in grp['messages']]
+            return res
+        else:
+            return (Metadata(*m) for m in res)
+
     def metadata(self, hits,
-            tags=None,
-            threads=False,
-            only_ids=False,
-            sort=SORT_NONE,
-            skip=0,
-            limit=None,
-            raw=False):
+            tags=None, threads=False, only_ids=False,
+            sort=SORT_NONE, skip=0, limit=None, raw=False):
         res = self.call('metadata',
             hits, tags, threads, only_ids, sort, skip, limit)
         if only_ids or raw:
@@ -199,11 +210,12 @@ class MetadataWorker(BaseWorker):
                             in self._metadata.get_thread_idxs(grp['thread']))
                         if idx is not None]
         elif not only_ids:
-            result = [idx
+            result = (idx
                 for idx in (_metadata(i) for i in result)
-                if idx is not None]
+                if idx is not None)
 
-        self.reply_json(result)
+        # FIXME: Make it possible to stream the results incrementally?
+        self.reply_json(list(result))
 
 
 if __name__ == '__main__':

@@ -436,8 +436,10 @@ main app worker. Hints:
         # Will raise ValueError or NameError if access denied
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_READ)
 
-        def perform_search():
-            s_result = self.search.with_caller(conn_id).search(
+        loop = asyncio.get_event_loop()
+        async def perform_search():
+            s_result = await self.search.with_caller(conn_id).async_search(
+                loop,
                 jmap_request['terms'],
                 tag_namespace=tag_ns,
                 mask_deleted=jmap_request.get('mask_deleted', True),
@@ -445,20 +447,22 @@ main app worker. Hints:
                 with_tags=(not jmap_request.get('only_ids', False)))
             if jmap_request.get('uncooked'):
                 return s_result
-            return (s_result, list(self.metadata.with_caller(conn_id).metadata(
-                s_result['hits'],
-                tags=s_result.get('tags'),
-                sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
-                only_ids=jmap_request.get('only_ids', False),
-                threads=jmap_request.get('threads', False),
-                skip=jmap_request['skip'],
-                limit=jmap_request['limit'],
-                raw=True)))
+            return (s_result, list(
+                await self.metadata.with_caller(conn_id).async_metadata(
+                    loop,
+                    s_result['hits'],
+                    tags=s_result.get('tags'),
+                    sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
+                    only_ids=jmap_request.get('only_ids', False),
+                    threads=jmap_request.get('threads', False),
+                    skip=jmap_request['skip'],
+                    limit=jmap_request['limit'],
+                    raw=True)))
 
         jmap_request['skip'] = jmap_request.get('skip') or 0
         jmap_request['limit'] = jmap_request.get('limit', None)
         if self.metadata and self.search:
-            results = await async_run_in_thread(perform_search)
+            results = await perform_search()
             if jmap_request.get('uncooked'):
                 return ResponseSearch(jmap_request, None, results)
             else:
@@ -471,10 +475,12 @@ main app worker. Hints:
         # Will raise ValueError or NameError if access denied
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_READ)
 
-        def perform_counts():
+        loop = asyncio.get_event_loop()
+        async def perform_counts():
             counts = {}
             for terms in jmap_request['terms_list']:
-                result = self.search.with_caller(conn_id).search(terms,
+                result = await self.search.with_caller(conn_id).async_search(
+                    loop, terms,
                     tag_namespace=tag_ns,
                     more_terms=scope_s,
                     mask_deleted=jmap_request.get('mask_deleted', True))
@@ -482,8 +488,7 @@ main app worker. Hints:
             return counts
 
         if self.search:
-            counts = await async_run_in_thread(perform_counts)
-            return ResponseCounts(jmap_request, counts)
+            return ResponseCounts(jmap_request, await perform_counts())
         else:
             return ResponsePleaseUnlock(jmap_request)
 
@@ -493,7 +498,8 @@ main app worker. Hints:
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
 
         if self.search:
-            results = self.search.with_caller(conn_id).tag(
+            loop = asyncio.get_event_loop()
+            results = await self.search.with_caller(conn_id).async_tag(loop,
                 jmap_request.get('tag_ops', []),
                 tag_namespace=tag_ns,
                 more_terms=scope_s,

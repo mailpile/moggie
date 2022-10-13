@@ -51,6 +51,7 @@ class BaseWorker(Process):
     LISTEN_QUEUE = 50
     LOCALHOST = 'localhost'
     PEEK_BYTES = 4096
+    READ_BYTES = 1024 * 64
     REQUEST_OVERHEAD = 128  # A conservative estimate
 
     BACKGROUND_TASK_SLEEP = 0.1
@@ -254,14 +255,16 @@ class BaseWorker(Process):
         return self.url
 
     def _conn(self, path,
-            method='POST', timeout=60, headers='', more=False, secret=None):
+            method='POST', timeout=60, headers='', more=False, secret=None,
+            prep_only=False):
         host, port, url_secret = self.url_parts
         if secret is not None:
             url_secret = '/' + secret
         if url_secret[-1:] != '/':
             url_secret += '/'
         return http1x_connect(host, port, url_secret + path,
-            method=method, timeout=timeout, more=more, headers=headers)
+            method=method, timeout=timeout, more=more, headers=headers,
+            prep_only=prep_only)
 
     def _ping(self, timeout=1):
         try:
@@ -405,10 +408,66 @@ class BaseWorker(Process):
                 self._caller_lock.release()
         return None
 
+    async def async_call(self, loop, fn,
+            *args, qs=None, method='POST', upload=None, data_cb=None):
+
+        upload, (conn, conn_args, on_connect) = self.call(fn, *args,
+            qs=qs, method=method, upload=upload,
+            prep_only=True)
+
+        # Actually make the connection: this is likely to block if the
+        # worker is busy or the server far away.
+        await loop.sock_connect(conn, conn_args)
+        # This sends a small amount of data, but is quite unlikely to
+        # block, so we don't bother making it async.
+        on_connect()
+
+        if upload:
+            logging.debug(
+                'async_call(%s), uploading %d bytes'  % (fn, len(upload)))
+            try:
+                await loop.sock_sendall(conn, upload)
+                conn.shutdown(socket.SHUT_WR)
+            except BrokenPipeError as e:
+                logging.warning('Upload(%s) failed: %s' % (path, e))
+                raise
+        else:
+            logging.debug('async_call(%s)'  % (fn,))
+
+        try:
+            peeked = await loop.sock_recv(conn, self.PEEK_BYTES)
+        except socket.timeout:
+            logging.warning('TIMED OUT: %s' % (fn,))
+            raise
+
+        if peeked.startswith(self.HTTP_200):
+            hdr, data = peeked.split(b'\r\n\r\n', 1)
+            if data_cb is not None:
+                data_cb(hdr, data)
+                while True:
+                    chunk = await loop.sock_recv(conn, self.READ_BYTES)
+                    if not chunk:
+                        break
+                    data_cb(None, chunk)
+            else:
+                while True:
+                    chunk = await loop.sock_recv(conn, self.READ_BYTES)
+                    if not chunk:
+                        break
+                    logging.debug('Read %d bytes' % len(chunk))
+                    data += chunk
+                if b'application/json' in hdr:
+                    return json.loads(data)
+                else:
+                    return (hdr, data)
+        else:
+            # FIXME: Parse the HTTP response code and raise better exceptions
+            raise PermissionError(str(peeked[:12], 'latin-1'))
+
     # FIXME: We really would like this to be available as async, so
     #        we can multiplex things while our workers work.
-    def call(self, fn, *args, qs=None, method='POST', upload=None):
-
+    def call(self, fn, *args,
+            qs=None, method='POST', upload=None, prep_only=False):
         fn = fn.encode('latin-1') if isinstance(fn, str) else fn
         remote = fn[:6] in (b'http:/', b'https:')
         if remote:
@@ -443,22 +502,27 @@ class BaseWorker(Process):
         else:
             conn = lambda **kw: self._conn(path, **kw)
 
-        #print('%s <= %s' % (path, upload))
-
         if upload:
             conn = conn(
                 method='POST',
                 headers=(self._auth_header
                     + 'Content-Length: %d\r\n' % len(upload)),
-                more=True)
+                more=True,
+                prep_only=prep_only)
+            if prep_only:
+                return upload, conn
             try:
                 for i in range(0, len(upload), 4096):
                     conn.send(upload[i:i+4096])
-            except BrokenPipeError:
-                pass
-            conn.shutdown(socket.SHUT_WR)
+                conn.shutdown(socket.SHUT_WR)
+            except BrokenPipeError as e:
+                logging.warning('Upload(%s) failed: %s' % (path, e))
+                raise
         else:
-            conn = conn(method=method, headers=self._auth_header)
+            conn = conn(method=method, headers=self._auth_header,
+                prep_only=prep_only)
+        if prep_only:
+            return upload, conn
 
         try:
             peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)

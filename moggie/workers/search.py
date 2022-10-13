@@ -122,21 +122,49 @@ class SearchWorker(BaseWorker):
     def explain(self, terms):
         return self.call('explain', terms)
 
+    async def async_search(self, loop, terms,
+            tag_namespace=None,
+            mask_deleted=True, mask_tags=None, more_terms=None,
+            with_tags=False):
+        return await self.async_call(loop, 'search', terms,
+            mask_deleted, mask_tags, more_terms, tag_namespace, with_tags)
+
     def search(self, terms,
             tag_namespace=None,
             mask_deleted=True, mask_tags=None, more_terms=None,
             with_tags=False):
         return self.call('search', terms,
-                         mask_deleted, mask_tags, more_terms,
-                         tag_namespace, with_tags)
+            mask_deleted, mask_tags, more_terms, tag_namespace, with_tags)
+
+    async def async_intersect(self, loop, terms, hits,
+            tag_namespace=None,
+            mask_deleted=True, mask_tags=None, more_terms=None):
+        srch = await self.async_call(loop, 'search', terms,
+            mask_deleted, mask_tags, more_terms, tag_namespace, False)
+        return IntSet.And(dumb_decode(srch['hits']), hits)
 
     def intersect(self, terms, hits,
             tag_namespace=None,
             mask_deleted=True, mask_tags=None, more_terms=None):
         srch = self.call('search', terms,
-                         mask_deleted, mask_tags, more_terms,
-                         tag_namespace, False)
+            mask_deleted, mask_tags, more_terms, tag_namespace, False)
         return IntSet.And(dumb_decode(srch['hits']), hits)
+
+    async def async_tag(self, loop, tag_op_sets, record_history=None,
+            tag_namespace=None,
+            mask_deleted=True, mask_tags=None, more_terms=None):
+        tag_op_sets = list(tag_op_sets)
+        for i, (tag_ops, m) in enumerate(tag_op_sets):
+            if isinstance(m, str):
+                m = await self.async_call(loop, 'search', m,
+                              mask_deleted, mask_tags, more_terms,
+                              tag_namespace, False)
+                tag_op_sets[i] = (tag_ops, m['hits'])
+            else:
+                tag_op_sets[i] = (tag_ops, dumb_encode_asc(IntSet(m)))
+        return await self.async_call(loop, 'tag',
+            tag_op_sets, record_history, tag_namespace,
+            mask_deleted, mask_tags, more_terms)
 
     def tag(self, tag_op_sets, record_history=None,
             tag_namespace=None,
