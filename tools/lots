@@ -19,4 +19,4 @@ for ARG in "$@" "$STDIN_CONTENT"; do
     echo -n "$ARG"
     echo -n -e '\0'
 done) \
-|curl -sfN -H "Accept: ${MOGGIE_ACCEPT:-text/plain}" -F 'argz=<-' $URL/cli/$APP \
+|curl -sfN ${MOGGIE_CURL_ARGS:-} -H "Accept: ${MOGGIE_ACCEPT:-text/plain}" -F 'argz=<-' $URL/cli/$APP \
