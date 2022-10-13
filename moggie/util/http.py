@@ -36,24 +36,3 @@ def http1x_connect(host, port, path,
     if not more:
         sock.shutdown(socket.SHUT_WR)
     return sock
-
-
-def http1x_jsonup(host, port, path, data, **conn_kwargs):
-    data = json.dump(data)
-    conn_kwargs.update({
-        'method': 'POST',
-        'more': True,
-        'ver': ver,
-        'headers': (
-            ('Content-Type: application/json\r\n') +
-            ('Content-Length: %d\r\n' % len(data)))})
-    sock = None
-    try:
-        sock = http1x_connect(host, port, path, **conn_kwargs)
-        for ofs in range(0, len(data), 4096):
-            sock.send(data[ofs:ofs+4096])
-        sock.shutdown(socket.SHUT_WR)
-        return sock.read()
-    finally:
-        if sock:
-            sock.close()
