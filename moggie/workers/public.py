@@ -9,7 +9,7 @@ import time
 import threading
 import traceback
 
-from upagekite import uPageKite, LocalHTTPKite
+from upagekite import uPageKite, uPageKiteConnPool, LocalHTTPKite
 from upagekite.httpd import HTTPD, url, async_url
 from upagekite.proto import uPageKiteDefaults
 from upagekite.web import process_post, http_require
@@ -47,6 +47,63 @@ class WorkerPageKiteSettings(uPageKiteDefaults):
     @classmethod
     async def network_send_sleep(uPK, sent):
       pass
+
+
+class MoggieConnPool(uPageKiteConnPool):
+    # FIXME: This should get pushed upstream to upagekite, it's not at all
+    #        moggie specific; any platform with real threads wants this.
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._loop = None
+        self._queue = None
+        self._poller = None
+
+    def event_queue(self):
+        if self._queue is None:
+            _id = '%x' % int(time.time())
+            self._loop = asyncio.get_event_loop()
+            self._queue = asyncio.Queue()
+            self._poller = threading.Thread(target=self._poll_t, args=(_id,))
+            self._poller.daemon = True
+            self._poller.start()
+        return self._queue
+
+    def _poll_t(self, _id):
+        timeout = 100
+        while self._queue:
+            # Hanging forever will prevent us from picking up new sockets.
+            # FIXME: This might still need more work.
+            polled = self.poll.poll(timeout)
+            if polled and self._queue:
+                if self.pk.uPK.trace:
+                    self.pk.uPK.trace('[%s] poll() returned: %s (timeout=%d)'
+                        % (_id, polled, timeout))
+                asyncio.run_coroutine_threadsafe(
+                    self._queue.put(polled), self._loop)
+                timeout = 50
+                time.sleep(0.01)
+            else:
+                timeout = min(timeout + 100, 60000)
+
+    def close(self):
+        self._queue = None
+
+    async def async_poll(self, timeout_ms):
+        queue = self.event_queue()
+        results = [[]]
+        async def getter():
+            results.append(await queue.get())
+        try:
+            await asyncio.wait_for(getter(), timeout=(timeout_ms / 1000.0))
+        except:
+            pass
+        return results[-1]
+
+
+class MoggiePageKiteManager(uPageKite):
+    def get_conn_pool(self, conns):
+        return MoggieConnPool(conns, self)
 
 
 class RequestTimer:
@@ -300,7 +357,7 @@ class PublicWorker(BaseWorker):
                 handler=self.httpd.handle_http_request)
             self.kite.listening_port = port
 
-            self.pk_manager = uPageKite([self.kite],
+            self.pk_manager = MoggiePageKiteManager([self.kite],
                 socks=[self.kite],
                 public=self._is_public(),
                 uPK=uPK)
