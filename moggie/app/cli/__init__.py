@@ -12,7 +12,7 @@ from .help import TOPICS
 class CommandHelp(CLICommand):
     """# moggie help [command]
 
-    Help on how to use Moggie (on the command-line). Run `moggie help`
+    Help on how to use moggie (on the command-line). Run `moggie help`
     without any arguments for a quick introduction and list of topics.
     """
     NAME = 'help'
@@ -21,6 +21,19 @@ class CommandHelp(CLICommand):
     WEBSOCKET = False
     WEB_EXPOSE = True
     OPTIONS = {'--format=': ['text']}
+
+    HTML_TEMPLATE = """\
+<html><head>
+  <title>%(title)s</title>
+</head><body>
+  <div style="float: right">(
+    <a href="/cli/help">top</a>,
+    <a href="?format=text">plain text</a>
+  )</div>
+  %(body)s
+<hr><a href="https://www.mailpile.is/">moggie is a mailpile project</a>
+</body></html>
+"""
 
     def configure(self, args):
         self.arglist = self.strip_options(args)
@@ -57,6 +70,7 @@ class CommandHelp(CLICommand):
         def _html_safe(text):
             return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
+        fmt = self.options['--format='][-1]
         chunks = []
         output = {}
         def _print(*chunk_list):
@@ -67,6 +81,12 @@ class CommandHelp(CLICommand):
         if len(self.arglist) == 1:
             arg = self.arglist[0]
             cmd = CLI_COMMANDS.get(arg)
+
+            arg_fmt = '%s:%s' % (arg, fmt)
+            if arg_fmt in TOPICS:
+                output[fmt] = TOPICS[arg_fmt]
+            output['title'] = 'moggie help %s' % arg
+
             if arg == 'topics':
                 cmds = ', '.join(sorted(
                     k for k in CLI_COMMANDS.keys()
@@ -80,6 +100,9 @@ class CommandHelp(CLICommand):
                     _print('## Commands:\n\n' + _wrap(cmds, '  '), '\n')
                 if topics:
                     _print('## Other topics:\n\n' + _wrap(topics, '  '), '\n')
+
+            elif arg_fmt in TOPICS:
+                _print(_unindent(TOPICS[arg_fmt]), '\n')
 
             elif arg in TOPICS:
                 _print(_unindent(TOPICS[arg]), '\n')
@@ -96,18 +119,17 @@ Try `moggie help topics` for a list of what help has been written.
                 return False
 
 
-        fmt = self.options['--format='][-1]
         output['text'] = '\n'.join(chunks)
         if fmt == 'text':
             return self.print(output['text'])
-        else:
+        elif 'html' not in output:
+            import markdown
             # FIXME: Linkify moggie commands?
-            output['html'] = (
-                '<pre class="moggie_help">' +
-                _html_safe(output['text']) +
-                '</pre>')
+            output['html'] = markdown.markdown(output['text'])
         if fmt == 'html':
-            self.print(output['html'])
+            self.print(self.HTML_TEMPLATE % {
+                'title': output['title'],
+                'body': output['html']})
         elif fmt == 'json':
             self.print_json(output)
         elif fmt == 'sexp':

@@ -51,44 +51,44 @@ class CommandSearch(CLICommand):
     Search for emails or threads matching the given search terms. Search
     terms are exact matches, unless the wildcard (*) is used. Examples:
 
-      moggie search bjarni                 # Exact match
-      moggie search bjarn*                 # Will match bjarni or bjarna
+        moggie search bjarni                 # Exact match
+        moggie search bjarn*                 # Will match bjarni or bjarna
 
-      moggie search in:inbox tag:unread    # Both in the inbox and unread
-      moggie search in:inbox -tag:unread   # In the inbox, not unread
-      moggie search in:inbox +tag:unread   # In the inbox, or unread
-      moggie search bjarni --format=json   # JSON for further processing...
+        moggie search in:inbox tag:unread    # Both in the inbox and unread
+        moggie search in:inbox -tag:unread   # In the inbox, not unread
+        moggie search in:inbox +tag:unread   # In the inbox, or unread
+        moggie search bjarni --format=json   # JSON for further processing...
 
-      moggie search dates:2022-08 --format=mbox > August2022.mbx  # Export!
+        moggie search dates:2022-08 --format=mbox > August2022.mbx  # Export!
 
     Options:                                   (defaults are marked with a *)
 
-      --context=<ctx>   Choose which context to search within.
-      --format=<fmt>    Result format: text*, text0, json, zip, maildir, mbox
-      --output=<data>   Result output: summary*, threads, messages, files,
-                                       tags, emails, thread_emails.
-      --offset=<N>      Skip the first N results
-      --limit=<N>       Output at most N results
-      --sort=<N>        Either newest-first (the default) or oldest-first.
+        --context=<ctx>  Choose which context to search within.
+        --format=<fmt>   Result format: text*, text0, json, zip, maildir, mbox
+        --output=<data>  Result output: summary*, threads, messages, files,
+                                        tags, emails, thread_emails.
+        --offset=<N>     Skip the first N results
+        --limit=<N>      Output at most N results
+        --sort=<N>       Either newest-first (the default) or oldest-first.
 
     The search command can emit various types of results in various formats.
     Some constraints and special cases:
 
-      * The default output is `summary`, unless something else is implied
-        by the format. The default format is `text`.
-      * The only valid outputs for zip, maildir and mbox are emails and
-        thread_emails.
-      * The maildir format actually generates a gzipped tar archive, which
-        contains the maildir.
-      * The headers of messages contained in mbox and zip results will be
-        modified to include Moggie metadata (tags, read/unread, etc.).
-      * Searching for `*` returns all known mail.
-      * Searching for `mailbox:/path/to/mailbox` can be used to extract
-        information from a mailbox directly.
-      * File listings may not encode to Unicode correctly, since *nix
-        filenames are in fact binary data, not UTF-8. This means JSON
-        formatting with `--output=files` may fail in some cases. Use
-        `--format=text0` for the most reliable results.
+       * The default output is `summary`, unless something else is implied
+         by the format. The default format is `text`.
+       * The only valid outputs for zip, maildir and mbox are emails and
+         thread_emails.
+       * The maildir format actually generates a gzipped tar archive, which
+         contains the maildir.
+       * The headers of messages contained in mbox and zip results will be
+         modified to include Moggie metadata (tags, read/unread, etc.).
+       * Searching for `*` returns all known mail.
+       * Searching for `mailbox:/path/to/mailbox` can be used to extract
+         information from a mailbox directly.
+       * File listings may not encode to Unicode correctly, since *nix
+         filenames are in fact binary data, not UTF-8. This means JSON
+         formatting with `--output=files` may fail in some cases. Use
+         `--format=text0` for the most reliable results.
 
     Where moggie and notmuch options overlap (see `man notmuch`), an attempt
     has been made to ensure compatibility. However, note that Moggie file
@@ -623,17 +623,17 @@ class CommandAddress(CommandSearch):
     Search for emails or threads matching the given search terms and display
     addresses related to them (senders, recipients or both). Examples:
 
-      moggie address to:bre dates:2022-09
-      moggie address --output=recipients from:bre dates:2022-09
+        moggie address to:bre dates:2022-09
+        moggie address --output=recipients from:bre dates:2022-09
 
     Options:                                   (defaults are marked with a *)
 
-      --format=<F>       One of text*, text0, json or sexp
-      --output=<O>       One or more of sender*, recipients, address, count
-      --deduplicate=<D>  One of no, mailbox*, address
+        --format=<F>       One of text*, text0, json or sexp
+        --output=<O>       One or more of sender*, recipients, address, count
+        --deduplicate=<D>  One of no, mailbox*, address
 
     When choosing output formats, multiple options can be specified at once.
-    When `sender` is requested, the output will include all senders.  The
+    When `sender` is requested, the output will include all senders. The
     output from `recipients` includes the messages in To: and Cc: headers.
     Requesting `--output=address` will omit the names from e-mail addresses,
     and `--output=count` will include a count of how often each address was

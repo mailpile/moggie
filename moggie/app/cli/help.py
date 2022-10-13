@@ -1,13 +1,13 @@
 TOPICS = {
 #############################################################################
                              '_synopsis': """\
-# Welcome to Moggie!
+# Welcome to moggie!
 
 Some useful commands:
 
-   moggie start [--cli|--wait]       Launch the Moggie background workers
-   moggie unlock                     Unlock a running, encrypted Moggie
-   moggie stop                       Stop Moggie
+   moggie start [--cli|--wait]       Launch the moggie background workers
+   moggie unlock                     Unlock a running, encrypted moggie
+   moggie stop                       Stop moggie
    moggie encrypt                    Enable encryption of local data
    moggie compact                    Perform housekeeping to free up disk space
    moggie import </path/to/mailbox>  Add some mail to the search index
@@ -20,11 +20,21 @@ Some useful commands:
  * moggie help topics                List all available commands and topics
  * moggie help <command>             Learn more about a specific command
 
-Bearing in mind that imitation is the sincerest form of flattery, Moggie tries
+Bearing in mind that imitation is the sincerest form of flattery, moggie tries
 to implement (most of) the command-line interfaces of both mutt and notmuch.
 
 *) Commands prefixed with an asterisk (*) can also be invoked using the faster
    `lots` commmand-line tool, instead of `moggie` itself.
+""",
+#############################################################################
+                             '_synopsis:html': """\
+<h1>Welcome to moggie!</h1>
+
+<p>Moggie is a search engine for email, which aims to eventually be a full
+blown mail client.</p>
+
+<p>... things and stuff!</p>
+
 """,
 #############################################################################
                              'how-to-search': """\
