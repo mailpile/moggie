@@ -259,6 +259,10 @@ class SearchEngine:
             'date': date_term_magic,
             'dates': date_term_magic}
 
+        self.magic_term_remap = {
+            'is:recent': 'date:recent',
+            'is:unread': 'in:unread'}
+
     def _allocate_history_slot(self):
         pos = self.history.get('pos', self.IDX_HISTORY_END) + 1
         if pos > self.IDX_HISTORY_END:
@@ -679,7 +683,7 @@ class SearchEngine:
                 return IntSet()
 
         if isinstance(term, str):
-            # Treat tag: and is: prefixes as alternatives to in: for tags.
+            # Treat tag: prefix as alternative to in: for tags.
             if term[:4] == 'tag:':
                term = 'in:' + term[4:]
 
@@ -768,13 +772,13 @@ class SearchEngine:
         return results
 
     def magic_terms(self, term):
+        term = self.magic_term_remap.get(term, term)
         what = term.split(':')[0].lower()
         magic = self.magic_term_map.get(what)
         if magic is not None:
             return magic(term)
 
         # FIXME: Convert to:me, from:me into e-mail searches
-
         # Notmuch's thread-subqueries are kinda neat, implement them?
 
         return term

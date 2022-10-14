@@ -478,7 +478,8 @@ class CommandGrant(CLICommand):
                     key=lambda i: -int(i[0]))
                 urls = []
                 if with_tokens and tokens:
-                    urls.extend((int(tokens[0][0]), '%s/%s' % (u, tokens[0][1]))
+                    urls.extend(
+                        (int(tokens[0][0]), '%s/@%s' % (u, tokens[0][1]))
                         for u in cfg['config']['urls'])
 
                 if ctxs:

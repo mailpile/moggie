@@ -191,11 +191,17 @@ class WorkerHTTPD(HTTPD):
                 break
 
         secret = ''
-        if not public:
+        logging.debug('headers=%s' % headers)
+        if headers.get('Cookie', '').startswith('moggie_token='):
+            secret = headers['Cookie'].split('=', 1)[-1]
+            if path.startswith('/' + secret):
+                path = path[len(secret)+1:]
+        if not public and (not secret or path[:2] == '/@'):
             try:
                 _, secret, path = path.split('/', 2)
             except ValueError:
-                raise PermissionError('Missing secret')
+                if not secret:
+                    raise PermissionError('Missing secret')
         path = '/' + path.lstrip('/')
 
         (func, fa) = HTTPD.get_handler(self, path, headers)
@@ -205,6 +211,8 @@ class WorkerHTTPD(HTTPD):
         if func is None:
             return None, fa
 
+        if secret[:1] == '@':
+            secret = secret[1:]
         access = self._worker._check_access(bytes(secret, 'utf-8'), path)
         if (func is not None) and (not public) and (not access):
             raise PermissionError('Bad secret')

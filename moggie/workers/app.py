@@ -15,6 +15,7 @@ import base64
 import json
 import logging
 import os
+import re
 import sys
 import traceback
 
@@ -217,8 +218,27 @@ async def web_jmap(req_env):
 
 @url('/favicon.ico')
 def web_favico(req_env):
-    global FAVICON_M
-    return FAVICON_M
+    return req_env['worker'].get_static('img/favicon.png')
+
+
+@url('/static/*')
+def web_static(req_env):
+    try:
+        # len('/static/') == 8
+        return req_env['worker'].get_static(req_env.request_path[8:])
+    except:
+        return {'code': 404, 'ttl': 3600, 'msg': 'Not Found'}
+
+
+@url('/themed/*')
+def web_themed(req_env):
+    try:
+        # len('/themed/') == 8
+        return req_env['worker'].get_static(req_env.request_path[8:],
+            themed=True)
+    except:
+        logging.exception('Theming failed')
+        return {'code': 404, 'ttl': 3600, 'msg': 'Not Found'}
 
 
 class AppWorker(PublicWorker):
@@ -230,8 +250,16 @@ class AppWorker(PublicWorker):
 
     KIND = 'app'
     PUBLIC_PATHS = ['/jmap', '/ws', '/', '/favicon.ico']
-    PUBLIC_PREFIXES = ['/pile', '/.well-known/', '/cli/help', '/cli/show']
+    PUBLIC_PREFIXES = ['/pile', '/static/', '/themed/', '/.well-known/',
+                       '/cli/help', '/cli/show']
     CONFIG_SECTION = 'App'
+
+    EXT_TO_MIME = {
+       'js': 'text/javascript',
+       'css': 'text/css',
+       'png': 'image/png',
+       'jpg': 'image/jpeg',
+       'svg': 'image/svg'}
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -239,6 +267,11 @@ class AppWorker(PublicWorker):
         self.sessions = {}
         self.auth_token = None
         self.want_cli = False
+        self.asset_path = os.path.normpath(os.path.join(
+            os.path.dirname(__file__), '..', '..', 'assets'))
+
+        # FIXME: Make this customizable somehow
+        self.theme = {'body_bg': '#fff'}
 
     @classmethod
     def FromArgs(cls, workdir, args):
@@ -306,6 +339,24 @@ class AppWorker(PublicWorker):
             return self.app.config.access_zero()
         return self.app.config.access_from_token(str(secret, 'utf-8'),
             _raise=False)
+
+    def apply_theme(self, data):
+        def _replacer(m):
+            key = str(m.group(2), 'utf-8')
+            val = bytes(self.theme.get(key, ''), 'utf-8') or m.group(1)
+            return b': %s;' % (val,)
+        return re.sub(b': +([^\n;]+); +/\* *@(\S+) *\*/', _replacer, data)
+
+    def get_static(self, path, themed=False):
+        filepath = os.path.join(self.asset_path, path)
+        mimetype = self.EXT_TO_MIME.get(path.rsplit('.', 1)[-1])
+        if '..' in path or not mimetype:
+            raise ValueError('Naughty path')
+        with open(filepath, 'rb') as fd:
+            data = fd.read()
+            if themed:
+                data = self.apply_theme(data)
+            return {'mimetype': mimetype, 'body': data, 'ttl': 24*3600}
 
     def get_auth(self, req_env, allow_anonymous=False, **req_kwargs):
         # Set req_env[auth_*], or raise PermissionError

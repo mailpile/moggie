@@ -24,6 +24,17 @@ class CLICommand:
     CONNECT = True
     WEBSOCKET = True
 
+    HTML_HEADER = """\
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>%(title)s - moggie</title>
+ <link rel=stylesheet href="/themed/css/webui.css">
+ <link rel=stylesheet href="/themed/css/%(command)s.css">
+ <script language=javascript>moggie_state = %(state)s;</script>
+</head><body><div class="content">
+"""
+    HTML_FOOTER = """
+</div><script language=javascript src='/static/js/webui.js'></script></body></html>"""
+
     @classmethod
     def Command(cls, wd, args):
         try:
@@ -85,6 +96,7 @@ class CLICommand:
         self.write_error = _writer
 
         self.mimetype = 'text/plain; charset=utf-8'
+        self.webui_state = {'command': self.NAME}
         if req_env is not None:
             self.set_web_defaults(req_env)
 
@@ -135,6 +147,46 @@ class CLICommand:
                 out += '%s' % exp
             return out
         self.write_reply(_sexp(data) + nl)
+
+    def print_html_start(self, html='', title=None, state=None):
+        self.write_reply((self.HTML_HEADER % {
+            'title': title or self.NAME,
+            'command': self.NAME,
+            'state': json.dumps(state or self.webui_state)}) + html)
+
+    def print_html_end(self, html=''):
+        self.print(html + self.HTML_FOOTER)
+
+    def print_html_tr(self, row, columns=None):
+        self.write_reply(self.format_html_tr(row, columns))
+
+    def format_html_tr(self, row, columns=None):
+        def _esc(data):
+            if isinstance(data, list):
+                return ' '.join(_esc(d) for d in data if d)
+            elif isinstance(data, int):
+                return '%d' % data
+            elif isinstance(data, float):
+                return '%.3f' % data
+            elif isinstance(data, str):
+                return (data
+                    .replace('&', '&amp;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;'))
+            else:
+                return ''
+
+        def _link(k, text):
+            url = row.get('_url_' + k)
+            if url:
+                return '<a href="%s">%s</a>' % (url, text)
+            else:
+                return text
+
+        columns = columns or row.keys()
+        return ('<tr>%s</tr>' % ''.join(
+            '<td class=%s>%s</td>' % (k, _link(k, _esc(row[k])))
+            for k in columns if k in row))
 
     def print_json(self, data, nl='\n'):
         self.write_reply(json.dumps(data) + nl)

@@ -29,6 +29,7 @@
 import base64
 import copy
 import datetime
+import json
 import logging
 import io
 import os
@@ -99,6 +100,8 @@ class CommandSearch(CLICommand):
     ROLES = AccessConfig.GRANT_READ
     WEBSOCKET = False
     WEB_EXPOSE = True
+    HTML_DEFAULT_LIMIT = 25
+    HTML_COLUMNS = ['thread', 'authors', 'subject', 'date_relative', 'tags']
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
@@ -131,14 +134,20 @@ class CommandSearch(CLICommand):
         terms.extend(self.options['--q='])
         self.terms = ' '.join(terms)
 
-        if self.options['--format='][-1] == 'json':
+        fmt = self.options['--format='][-1]
+        if fmt in ('json', 'jhtml'):
             self.mimetype = 'application/json'
-        elif self.options['--format='][-1] == 'mbox':
+        elif fmt == 'html':
+            self.mimetype = 'text/html; charset=utf-8'
+        elif fmt == 'mbox':
             self.mimetype = 'application/mbox'
-        elif self.options['--format='][-1] == 'zip':
+        elif fmt == 'zip':
             self.mimetype = 'application/mbox'
-        elif self.options['--format='][-1] == 'maildir':
+        elif fmt == 'maildir':
             self.mimetype = 'application/x-tgz'
+
+        if fmt in ('html', 'jhtml') and not self.options['--limit='][-1]:
+            self.options['--limit='].append(self.HTML_DEFAULT_LIMIT)
 
         if self.options['--format='][-1] in ('maildir', 'zip', 'mbox'):
             self.default_output = 'emails'
@@ -201,6 +210,7 @@ class CommandSearch(CLICommand):
                 'subject': top.get('subject', md.get('subject', '(no subject)')),
                 'query': [self.sign_id('id:%s' % ','.join('%d' % mid for mid in msgs))] + [None],
                 'tags': tags}
+            info['_url_thread'] = '/cli/show/%s' % info['query'][0]
             info['_tag_list'] = ' (%s)' % (' '.join(tags)) if tags else ''
             info['_file_count'] = '(%d)' % fc if (fc > len(msgs)) else ''
             info['_id'] = (
@@ -432,6 +442,27 @@ class CommandSearch(CLICommand):
             self.print_sexp(result[1], nl='')
         self.print(')' if last else ' ')
 
+    async def emit_result_jhtml(self, result, first=False, last=False):
+        if result is None:
+            return
+        if first:
+            self.print('{"state": %s, "html": "<table class=results>'
+                % json.dumps(self.webui_state), nl='')
+        self.print(
+            self.format_html_tr(result[1], columns=self.HTML_COLUMNS)
+            .replace('"', '\\"'), nl='')
+        if last:
+            self.print('</table>"}')
+
+    async def emit_result_html(self, result, first=False, last=False):
+        if result is None:
+            return
+        if first:
+            self.print_html_start('<table class=results>')
+        self.print_html_tr(result[1], columns=self.HTML_COLUMNS)
+        if last:
+            self.print_html_end('</table>')
+
     def _get_exporter(self, cls):
         if self.exporter is None:
             class _wwrap:
@@ -494,6 +525,10 @@ class CommandSearch(CLICommand):
         fmt = self.options['--format='][-1]
         if fmt == 'json':
             return self.emit_result_json
+        elif fmt == 'jhtml':
+            return self.emit_result_jhtml
+        elif fmt == 'html':
+            return self.emit_result_html
         elif fmt == 'text0':
             return self.emit_result_text0
         elif fmt in 'text':
@@ -511,10 +546,13 @@ class CommandSearch(CLICommand):
         raise Nonsense('Unknown output format: %s' % fmt)
 
     def get_query(self):
+        fmt = self.options['--format='][-1]
+        output = self.options['--output='][-1]
+
         if self.terms.startswith('mailbox:'):
             valid_outputs = ('default', 'threads', 'summary', 'metadata',
                              'files', 'emails')
-            if self.options['--output='][-1] not in valid_outputs:
+            if output not in valid_outputs:
                 raise Nonsense('Need --output=X, with X one of: %s'
                     % ', '.join(valid_outputs))
             query = RequestMailbox(
@@ -528,7 +566,6 @@ class CommandSearch(CLICommand):
         else:
             query['skip'] = 0
 
-        output = self.options['--output='][-1]
         if output == 'default':
             output = self.default_output
         if output == 'summary':
@@ -543,7 +580,8 @@ class CommandSearch(CLICommand):
                 query['threads'] = True
         elif output in ('tags', 'tag_info'):
             query['uncooked'] = True
-            if query['skip'] or self.options.get('--limit=', [None])[-1]:
+            if ((query['skip'] or self.options.get('--limit=', [None])[-1])
+                    and (fmt not in ('html', 'jhtml'))):
                 raise Nonsense('Offset and limit do not apply to tag searches')
 
         return query
@@ -647,6 +685,7 @@ class CommandAddress(CommandSearch):
     NAME = 'address'
     ROLES = AccessConfig.GRANT_READ
     WEB_EXPOSE = True
+    HTML_COLUMNS = ['address', 'name', 'count']
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
@@ -844,6 +883,14 @@ class CommandShow(CommandSearch):
         if emitting is not None:
             self.print_json(emitting)
 
+    async def emit_result_html(self, result, first=False, last=False):
+        if result is None:
+            return
+        emitting = await self._buffered_emit(result, first, last)
+        if emitting is not None:
+            for r in emitting:
+                await super().emit_result_html((None, r), False, False)
+
     async def _buffered_emit(self, result, first, last):
         result = result[1]
         idx, pid, tid = result['_id'], result['_parent_id'], result['_thread_id']
@@ -890,7 +937,7 @@ class CommandShow(CommandSearch):
     async def run(self):
         if self.options.get('--part='):
             self.options['--format='] = ['raw']
-        if self.options['--format='][-1] in ('json', 'sexp'):
+        if self.options['--format='][-1] in ('json', 'jhtml', 'html', 'sexp'):
             self.options['--entire-thread='][:0] = ['true']
         return await super().run()
 
@@ -1071,6 +1118,10 @@ class CommandTag(CLICommand):
         fmt = self.options['--format='][-1]
         if fmt == 'json':
             self.print_json(msg['results'])
+        elif fmt == 'jhtml':
+            self.print_jhtml(msg['results'])
+        elif fmt == 'html':
+            self.print_html(msg['results'])
         elif fmt == 'sexp':
             self.print_sexp(msg['results'])
         else:
