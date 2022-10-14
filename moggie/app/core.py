@@ -422,13 +422,15 @@ main app worker. Hints:
 
     async def api_jmap_mailbox(self, conn_id, access, jmap_request):
         # FIXME: Make sure access grants right to read mailboxes directly
-        def load_mailbox():
-            return self.storage.mailbox(
+
+        loop = asyncio.get_event_loop()
+        async def load_mailbox():
+            return await self.storage.async_mailbox(loop,
                 jmap_request['mailbox'],
                 limit=jmap_request['limit'],
                 skip=jmap_request['skip'])
-        info = await async_run_in_thread(load_mailbox)
         watched = False
+        info = await load_mailbox()
         return ResponseMailbox(jmap_request, info, watched)
 
     async def api_jmap_search(self, conn_id, access, jmap_request):
@@ -528,15 +530,15 @@ main app worker. Hints:
         #        comes from viewing a search result or mailbox?
         #        Seems we should decide that before making any efforts
 
-        def get_email():
-            return self.storage.with_caller(conn_id).email(
+        loop = asyncio.get_event_loop()
+        async def get_email():
+            return await self.storage.with_caller(conn_id).async_email(loop,
                 jmap_request['metadata'],
                 text=jmap_request.get('text', False),
                 data=jmap_request.get('data', False),
                 parts=jmap_request.get('parts', None),
                 full_raw=jmap_request.get('full_raw', False))
-        info = await async_run_in_thread(get_email)
-        return ResponseEmail(jmap_request, info)
+        return ResponseEmail(jmap_request, await get_email())
 
     async def api_jmap_contexts(self, conn_id, access, jmap_request):
         # FIXME: Only return contexts this access level grants use of

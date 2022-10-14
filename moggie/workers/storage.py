@@ -103,10 +103,11 @@ class StorageWorker(BaseWorker):
             return self.call('info', key, qs={'details': details})
         return self.call('info', key)
 
+    async def async_mailbox(self, loop, key, skip=0, limit=None):
+        return await self.async_call(loop, 'mailbox', key, skip, limit)
+
     def mailbox(self, key, skip=0, limit=None):
-        return self.call('mailbox', key, qs={
-            'skip': skip,
-            'limit': limit})
+        return self.call('mailbox', key, skip, limit)
 
     def get(self, key, *args, dumbcode=None):
         if dumbcode is not None:
@@ -136,7 +137,7 @@ class StorageWorker(BaseWorker):
     def api_info(self, key, details=False, method=None):
         self.reply_json(self.backend.info(key, details=details))
 
-    def api_mailbox(self, key, skip=0, limit=None, method=None):
+    def api_mailbox(self, key, skip, limit, method=None):
         self._expire_parse_cache()
         if key in self.parsed_mailboxes:
             while (not self.parsed_mailboxes[key][1]
@@ -178,7 +179,13 @@ class StorageWorker(BaseWorker):
         else:
             self.parsed_mailboxes[key][1] = True
 
-    def email(self, metadata, text=False, data=False, full_raw=False, parts=None):
+    async def async_email(self, loop, metadata,
+            text=False, data=False, full_raw=False, parts=None):
+        return await self.async_call(loop, 'email',
+            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts)
+
+    def email(self, metadata,
+            text=False, data=False, full_raw=False, parts=None):
         return self.call('email',
             metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts)
 
