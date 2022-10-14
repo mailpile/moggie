@@ -101,7 +101,8 @@ class CommandSearch(CLICommand):
     WEBSOCKET = False
     WEB_EXPOSE = True
     HTML_DEFAULT_LIMIT = 25
-    HTML_COLUMNS = ['thread', 'authors', 'subject', 'date_relative', 'tags']
+    HTML_COLUMNS = ['count', 'thread', 'address', 'name', 'authors',
+                    'tags', 'subject', 'date_relative']
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
@@ -174,7 +175,10 @@ class CommandSearch(CLICommand):
 
     def _relative_date(self, ts):
         dt = datetime.datetime.fromtimestamp(ts)
-        return '%4.4d-%2.2d-%2.2d' % (dt.year, dt.month, dt.day)
+        if (time.time() - ts) < (23 * 3600):
+            return '%2.2d:%2.2d' % (dt.hour, dt.minute)
+        else:
+            return '%4.4d-%2.2d-%2.2d' % (dt.year, dt.month, dt.day)
 
     async def as_summary(self, thread):
         if thread is None:
@@ -253,10 +257,10 @@ class CommandSearch(CLICommand):
                 yield (fn, fn_str)
 
     async def as_emails(self, thread):
-        def _as_text(r):
+        def _textify(r, esc, part_fmt, msg_fmt):
             headers = '\n'.join('%s: %s' % (h,v) for h, v in r['headers'].items())
             def _parts(p):
-                p['_ct'] = p.get('content-type', 'text/plain')
+                p['_ct'] = esc(p.get('content-type', 'text/plain'))
                 if 'content' in p:
                     if isinstance(p['content'], list):
                         p['content'] = '\n'.join(_parts(sp) for sp in p['content'])
@@ -264,12 +268,27 @@ class CommandSearch(CLICommand):
                     p['content'] = ('Non-text part: ' + p['_ct'])
                 p['_fn'] = ''
                 if 'filename' in p:
-                    p['_fn'] = 'Filename: %s, ' % p['filename']
-                return ("""\
+                    p['_fn'] = esc('Filename: %s, ' % p['filename'])
+                return (part_fmt % p)
+            return (msg_fmt % {
+                'd': r['_depth'],
+                'i': r['id'],
+                'm': 1 if r['match'] else 0,
+                'e': 1 if r['excluded'] else 0,
+                'f': esc(r['filename'][0] if r['filename'] else ''),
+                'a': esc(r['headers'].get('From', '(unknown)')),
+                'r': r['date_relative'],
+                't': ' '.join(r['tags']),
+                'h': esc(headers),
+                'b': '\n'.join(_parts(sp) for sp in r['body'])})
+
+        def _as_text(r):
+            return _textify(r, lambda t: t,
+                """\
 \x0cpart{ ID: %(id)s, %(_fn)sContent-type: %(_ct)s
 %(content)s
-\x0cpart}""" % p)
-            return ("""\
+\x0cpart}""",
+                """\
 \x0cmessage{ id:%(i)s depth:%(d)d match:%(m)d excluded:%(e)s filename:%(f)s
 \x0cheader{
 %(a)s (%(r)s) (%(t)s)
@@ -278,22 +297,39 @@ class CommandSearch(CLICommand):
 \x0cbody{
 %(b)s
 \x0cbody}
-\x0cmessage}""") % {
-                'd': r['_depth'],
-                'i': r['id'],
-                'm': 1 if r['match'] else 0,
-                'e': 1 if r['excluded'] else 0,
-                'f': r['filename'][0] if r['filename'] else '',
-                'a': r['headers'].get('From', '(unknown)'),
-                'r': r['date_relative'],
-                't': ' '.join(r['tags']),
-                'h': headers,
-                'b': '\n'.join(_parts(sp) for sp in r['body'])}
+\x0cmessage}""")
+        def _as_html(r):
+            def _html_quote(t):
+                return (t
+                    .replace('&', '&amp;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;'))
+            return _textify(r, _html_quote,
+                """
+    <div class=part m-part-id="%(id)s" m-mimetype="%(_ct)s">
+      %(content)s
+    </div>
+""",
+                """\
+<a name="id_%(i)s"></a>
+<div class=email m-id="%(i)s" m-match="%(m)d" m-depth="%(d)d" excluded="%(e)s">
+  <div class="email-summary">
+    <span class="">%(a)s</span>
+    <span class="">(%(r)s)</span>
+    <span class="">(%(t)s)</span>
+  </div>
+  <div class="email-header">
+%(h)s
+  </div>
+  <div class="email-body">%(b)s
+  </div>
+</div>""")
+
         if thread is not None:
             fmt = self.options['--format='][-1]
             part = int((self.options.get('--part=') or [0])[-1])
             raw = (fmt in ('mbox', 'maildir', 'raw', 'zip'))
-            want_body = raw or (self.options['--body='][-1] != 'false')
+            want_body = raw or (self.options.get('--body=', [0])[-1] != 'false')
             want_html = self.options.get('--include-html')
             shown_types = ('text/plain', 'text/html') if want_html else ('text/plain',)
 
@@ -369,7 +405,11 @@ class CommandSearch(CLICommand):
                                 partstack.append(info['content'])
                                 depth += 1
 
-                    yield (_as_text, {
+                    if fmt in ('html', 'jhtml'):
+                        func = _as_html
+                    else:
+                        func = _as_text
+                    yield (func, {
                         'id': self.sign_id('id:%s' % md.idx)[3:],
                         'match': md.idx in thread['hits'],
                         'excluded': False,
@@ -445,23 +485,39 @@ class CommandSearch(CLICommand):
     async def emit_result_jhtml(self, result, first=False, last=False):
         if result is None:
             return
+        tabular = isinstance(result[0], str)
+        if tabular:
+            pre, post = '<table class=results>', '</table>'
+        else:
+            pre, post = '<div class=results>', '</div>'
         if first:
-            self.print('{"state": %s, "html": "<table class=results>'
-                % json.dumps(self.webui_state), nl='')
-        self.print(
-            self.format_html_tr(result[1], columns=self.HTML_COLUMNS)
-            .replace('"', '\\"'), nl='')
+            self.print('{"state": %s, "html": "%s'
+                % (json.dumps(self.webui_state), pre), nl='')
+        if tabular:
+            self.print(
+                self.format_html_tr(result[1], columns=self.HTML_COLUMNS)
+                .replace('"', '\\"'), nl='')
+        else:
+            self.print(result[0](result[1]).replace('"', '\\"'))
         if last:
-            self.print('</table>"}')
+            self.print('%s"}' % post)
 
     async def emit_result_html(self, result, first=False, last=False):
         if result is None:
             return
+        tabular = isinstance(result[0], str)
+        if tabular:
+            pre, post = '<table class=results>', '</table>'
+        else:
+            pre, post = '<div class=results>', '</div>'
         if first:
-            self.print_html_start('<table class=results>')
-        self.print_html_tr(result[1], columns=self.HTML_COLUMNS)
+            self.print_html_start(pre)
+        if tabular:
+            self.print_html_tr(result[1], columns=self.HTML_COLUMNS)
+        else:
+            self.print(result[0](result[1]))
         if last:
-            self.print_html_end('</table>')
+            self.print_html_end(post)
 
     def _get_exporter(self, cls):
         if self.exporter is None:
@@ -496,10 +552,14 @@ class CommandSearch(CLICommand):
         exporter = self._get_exporter(MaildirExporter)
         return self._export(exporter, result, first, last)
 
-    def get_formatter(self):
+    def get_output(self):
         output = (self.options['--output='] or ['default'])[-1]
         if output == 'default':
             output = self.default_output
+        return output
+
+    def get_formatter(self):
+        output = self.get_output()
         if output == 'summary':
             return self.as_summary
         elif output == 'threads':
@@ -547,7 +607,7 @@ class CommandSearch(CLICommand):
 
     def get_query(self):
         fmt = self.options['--format='][-1]
-        output = self.options['--output='][-1]
+        output = self.get_output()
 
         if self.terms.startswith('mailbox:'):
             valid_outputs = ('default', 'threads', 'summary', 'metadata',
@@ -566,8 +626,6 @@ class CommandSearch(CLICommand):
         else:
             query['skip'] = 0
 
-        if output == 'default':
-            output = self.default_output
         if output == 'summary':
             query['threads'] = True
             query['only_ids'] = False
@@ -576,7 +634,8 @@ class CommandSearch(CLICommand):
             query['threads'] = True
             query['only_ids'] = True
         elif output == 'emails':
-            if (self.options.get('--entire-thread=') or ['false'])[-1] != 'false':
+            entire = (self.options.get('--entire-thread=') or ['false'])[-1]
+            if entire != 'false':
                 query['threads'] = True
         elif output in ('tags', 'tag_info'):
             query['uncooked'] = True
@@ -625,7 +684,7 @@ class CommandSearch(CLICommand):
         if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
 
-        output = self.options['--output='][-1]
+        output = self.get_output()
         if output in ('tags', 'tag_info'):
             return (msg.get('results', {}).get('tags') or {}).items()
         else:
@@ -633,7 +692,7 @@ class CommandSearch(CLICommand):
 
     async def results(self, query, limit, formatter):
         batch = self.batch // 10
-        output = self.options['--output='][-1]
+        output = self.get_output()
         while limit is None or limit > 0:
             results = await self.perform_query(query, batch, limit)
             batch = min(self.batch, int(batch * 1.2))
@@ -685,7 +744,6 @@ class CommandAddress(CommandSearch):
     NAME = 'address'
     ROLES = AccessConfig.GRANT_READ
     WEB_EXPOSE = True
-    HTML_COLUMNS = ['address', 'name', 'count']
     OPTIONS = {
         # These are moggie specific
         '--context=':        ['default'],
@@ -796,7 +854,6 @@ class CommandAddress(CommandSearch):
 class CommandShow(CommandSearch):
     """moggie show [options] <terms>
 
-
     JSON output:
 
       message_dict = { id: match: excluded: filename:[]
@@ -883,14 +940,6 @@ class CommandShow(CommandSearch):
         if emitting is not None:
             self.print_json(emitting)
 
-    async def emit_result_html(self, result, first=False, last=False):
-        if result is None:
-            return
-        emitting = await self._buffered_emit(result, first, last)
-        if emitting is not None:
-            for r in emitting:
-                await super().emit_result_html((None, r), False, False)
-
     async def _buffered_emit(self, result, first, last):
         result = result[1]
         idx, pid, tid = result['_id'], result['_parent_id'], result['_thread_id']
@@ -937,7 +986,7 @@ class CommandShow(CommandSearch):
     async def run(self):
         if self.options.get('--part='):
             self.options['--format='] = ['raw']
-        if self.options['--format='][-1] in ('json', 'jhtml', 'html', 'sexp'):
+        if self.options['--format='][-1] in ('json', 'sexp'):
             self.options['--entire-thread='][:0] = ['true']
         return await super().run()
 

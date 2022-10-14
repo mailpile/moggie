@@ -1,30 +1,81 @@
+/* ****[ Font definitions ]************************************************** */
+@font-face {
+  font-family: 'Mailpile-300';
+  src: url('../webfonts/Mailpile-Normal.eot');
+  src: url('../webfonts/Mailpile-Normal.eot?#iefix') format('embedded-opentype'), url('../webfonts/Mailpile-Normal.woff') format('font-woff'), url('../webfonts/Mailpile-Normal.ttf') format('truetype'), url('../webfonts/Mailpile-Normal.svg#wf') format('svg');
+}
+@font-face {
+  font-family: 'Mailpile-500';
+  src: url('../webfonts/Mailpile-500.eot');
+  src: url('../webfonts/Mailpile-500.eot?#iefix') format('embedded-opentype'), url('../webfonts/Mailpile-500.woff') format('font-woff'), url('../webfonts/Mailpile-500.ttf') format('truetype'), url('../webfonts/Mailpile-500.svg#wf') format('svg');
+}
+@font-face {
+  font-family: 'Mailpile-700';
+  src: url('../webfonts/Mailpile-700.eot');
+  src: url('../webfonts/Mailpile-700.eot?#iefix') format('embedded-opentype'), url('../webfonts/Mailpile-700.woff') format('font-woff'), url('../webfonts/Mailpile-700.ttf') format('truetype'), url('../webfonts/Mailpile-700.svg#wf') format('svg');
+}
+@font-face {
+  font-family: 'Mailpile-Interface';
+  src: url('../webfonts/Mailpile-Interface.eot');
+  src: url('../webfonts/Mailpile-Interface.eot') format('embedded-opentype'), url('../webfonts/Mailpile-Interface.woff') format('woff'), url('../webfonts/Mailpile-Interface.ttf') format('truetype'), url('../webfonts/Mailpile-Interface.svg#Mailpile-Interface') format('svg');
+  font-weight: normal;
+  font-style: normal;
+}
+[class^="icon-"],
+[class*=" icon-"] {
+  font-family: 'Mailpile-Interface';
+  speak: none;
+  font-style: normal;
+  font-weight: normal;
+  font-variant: normal;
+  text-transform: none;
+  line-height: 1;
+  /* FIXME: Better Font Rendering? Is this obsolete? */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+
+/* ****[ Basic CSS ]********************************************************* */
+
+:root {
+    --sidebar-width: min(180px, 25vw);
+    --content-width-hmm: min(100vw - var(--sidebar-width) - 10px, max(55em, 49vw - var(--sidebar-width) / 2));
+    --content-width: min(100vw - var(--sidebar-width) - 10px, 55em);
+}
 body {
     font-family: monospace;    /* @body_font_family */
-    color:          #000;      /* @body_color */ 
-    background:     #000;      /* @body_bg */
+    color:            #000;    /* @body_color */
+    background: url("/static/img/videy-by-michael-clarke-stuff-CCASA2.jpg") no-repeat fixed center;  /* @body_bg */
+    background-size: cover;
+    height: 100%;
+    margin: 0;
+    padding-left: calc(var(--sidebar-width) - 5px);
 }
 div.content {
-    margin: 0;
+    float: left;
+    width: var(--content-width);
+    max-width: var(--content-width);
     padding: 1px;
+    display: inline-block;
     z-index: 0;
     font-family: inherit;      /* @content_font_family */
     background:     #fff;      /* @content_bg */
-    opacity:         1.0;      /* @content_opacity */
-    margin-top:     50px;      /* @headbar_outer_height */
-    margin-left:   200px;      /* @sidebar_outer_width */
+    opacity:        0.80;      /* @content_opacity */
+    margin-top:     55px;      /* @headbar_outer_height */
+    margin-left:     5px;
 }
 div.sidebar {
     position: fixed;
-    top: 0px;
+    top: 50px;                 /* @headbar_outer_height */
     left: 0px;
     z-index: 1;
     padding: 0 5px 0 0;
     height: 100%;
+    width: calc(var(--sidebar-width) - 10px);
     font-family: inherit;      /* @sidebar_font_family */
-    width:         190px;      /* @sidebar_width */
-    padding-top:    50px;      /* @topbar_height */ 
     background:     #eee;      /* @sidebar_bg */
-    opacity:         1.0;      /* @sidebar_opacity */
+    opacity:        0.75;      /* @sidebar_opacity */
 }
 div.headbar {
     position: fixed;
@@ -37,14 +88,30 @@ div.headbar {
     font-family: inherit;      /* @headbar_font_family */
     height:         46px;      /* @headbar_height */
     background:     #eee;      /* @headbar_bg */
-    opacity:         1.0;      /* @headbar_opacity */
+    opacity:         0.9;      /* @headbar_opacity */
 }
 a:active {
-    color:          #007;      /* @a_active_color */ 
+    color:          #007;      /* @a_active_color */
 }
 a:hover {
-    color:          #007;      /* @a_hover_color */ 
+    color:          #007;      /* @a_hover_color */
 }
 a:visited {
-    color:          #007;      /* @a_visited_color */ 
+    color:          #007;      /* @a_visited_color */
 }
+
+div#websocket_status {
+    position: fixed;
+    z-index: 2;
+    right: 5px;
+    bottom: 5px;
+    font-size: 10px;
+    margin: 0;
+    padding: 5px 10px;
+    border: 1px solid #000;
+    color: #000;
+    opacity: 0.5;
+}
+div#websocket_status.ok   { background: #bfb; }
+div#websocket_status.slow { background: #ffb; }
+div#websocket_status.bad  { background: #faa; }

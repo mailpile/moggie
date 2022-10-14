@@ -29,6 +29,8 @@ APPURL     = 'https://github.com/BjarniRunar/moggie'
 
 LOGDIR     = '/tmp/moggie.%d' % os.getuid()
 
+CACHE_VERSION = int(time.time() * 10) % (30 * 24 * 36000)
+
 
 def configure_logging(
         worker_name=APPNAME,
@@ -494,6 +496,10 @@ class AppConfig(ConfigParser):
             self.save()
         self.lock.release()
 
+    def do_not_save(self):
+        if self.suppress_saves:
+            self.suppress_saves[-1] = 0
+
     def access_zero(self):
         with self:
             azero = self.ACCESS_ZERO
@@ -503,12 +509,14 @@ class AppConfig(ConfigParser):
             self[azero].update({
                 'name': 'Local access',
                 'roles': roles})
+            self.do_not_save()
             return AccessConfig(self, azero)
 
     def context_zero(self):
         with self:
             czero = self.CONTEXT_ZERO
             self[czero].update({'name': 'My Mail'})
+            self.do_not_save()
             return ContextConfig(self, czero)
 
     def access_from_token(self, token, _raise=True):
@@ -566,7 +574,10 @@ class AppConfig(ConfigParser):
             self.suppress_saves[-1] += 1
             return
 
-        self._caches = {}  # A save means something changed
+        # A save means something changed
+        global CACHE_VERSION
+        CACHE_VERSION += 1
+        self._caches = {}
 
         sections = list(self.keys())
         sections.sort(key=lambda k: (
@@ -586,6 +597,7 @@ class AppConfig(ConfigParser):
             fd.write(self.PREAMBLE)
             self.write(fd)
         os.chmod(self.filepath, 0o600)
+        logging.debug('Saved config: %s' % self.filepath)
 
     def temp_aes_key(config, temp_key):
         old_key = config.aes_key

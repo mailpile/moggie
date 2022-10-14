@@ -13,6 +13,24 @@ from ...config import AppConfig, AccessConfig
 from .command import Nonsense, CLICommand
 
 
+class CommandWelcome(CLICommand):
+    """moggie welcome
+
+    This command displays either a login page or welcomes the user to
+    the app. It is not useful from the command-line.
+    """
+    NAME = 'welcome'
+    ROLES = None
+    WEBSOCKET = False
+    AUTO_START = False
+    WEB_EXPOSE = True
+
+    async def run(self):
+        self.print_html_start()
+        self.print('<h1>Hello world</h1>')
+        self.print_html_end()
+
+
 class CommandContext(CLICommand):
     """moggie context [<op> [<name> [options]]]
 
@@ -32,7 +50,7 @@ class CommandContext(CLICommand):
     FIXME: What about namespaces?
     """
     NAME = 'context'
-    ROLES = AccessConfig.GRANT_ACCESS
+    ROLES = AccessConfig.GRANT_ACCESS  # FIXME: Allow user to see own contexts?
     WEBSOCKET = False
     AUTO_START = False
     WEB_EXPOSE = True
@@ -491,6 +509,8 @@ class CommandGrant(CLICommand):
                         import io, pyqrcode
                         def _u(u):
                             url = '%s/@%s/' % (u, tok0[1])
+                            if u.startswith('http://127.0.0.'):
+                                return (int(tok0[0]), url, '')
                             qc = pyqrcode.create(url, error='L')
                             if fmt == 'text':
                                 qc = qc.terminal(quiet_zone=2)
@@ -501,7 +521,7 @@ class CommandGrant(CLICommand):
                             return (int(tok0[0]), url, qc)
                     else:
                         def _u(u):
-                            return (int(tok0[0]), '%s/@%s/' % (u, tok0[1]))
+                            return (int(tok0[0]), '%s/@%s/' % (u, tok0[1]), '')
 
                     urls.extend(_u(u) for u in cfg['config']['urls'])
 

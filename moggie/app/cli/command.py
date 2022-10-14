@@ -5,6 +5,7 @@ import logging
 import time
 import sys
 
+from ... import config
 from ...config import AccessConfig
 
 
@@ -27,13 +28,15 @@ class CLICommand:
     HTML_HEADER = """\
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>%(title)s - moggie</title>
- <link rel=stylesheet href="/themed/css/webui.css">
- <link rel=stylesheet href="/themed/css/%(command)s.css">
+ <link rel=stylesheet href="/themed/css/webui.css?v=%(version)s">
+ <link rel=stylesheet href="/themed/css/%(command)s.css?v=%(version)s">
  <script language=javascript>moggie_state = %(state)s;</script>
 </head><body><div class="content">
 """
     HTML_FOOTER = """
-</div><script language=javascript src='/static/js/webui.js'></script></body></html>"""
+</div>
+<script language=javascript src='/static/js/webui.js?v=%(version)s'></script>
+</body></html>"""
 
     @classmethod
     def Command(cls, wd, args):
@@ -151,11 +154,13 @@ class CLICommand:
     def print_html_start(self, html='', title=None, state=None):
         self.write_reply((self.HTML_HEADER % {
             'title': title or self.NAME,
+            'version': config.CACHE_VERSION,
             'command': self.NAME,
             'state': json.dumps(state or self.webui_state)}) + html)
 
     def print_html_end(self, html=''):
-        self.print(html + self.HTML_FOOTER)
+        self.print(html + (self.HTML_FOOTER % {
+            'version': config.CACHE_VERSION}))
 
     def print_html_tr(self, row, columns=None):
         self.write_reply(self.format_html_tr(row, columns))

@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import traceback
 import time
@@ -71,6 +72,18 @@ main app worker. Hints:
 
         """).strip() % (APPNAME_UC, APPVER, sys.version.splitlines()[0])
 
+    EXT_TO_MIME = {
+       'html': 'text/html; charset="utf-8"',
+       'txt': 'text/plain; charset="utf-8"',
+       'js': 'text/javascript; charset="utf-8"',
+       'css': 'text/css',
+       'png': 'image/png',
+       'jpg': 'image/jpeg',
+       'svg': 'image/svg',
+       'eot': 'application/vnd.ms-fontobject',
+       'ttf': 'font/ttf',
+       'woff': 'font/woff'}
+
     def __init__(self, app_worker):
         self.work_dir = os.path.normpath(# FIXME: This seems a bit off
             os.path.join(app_worker.worker_dir, '..'))
@@ -94,6 +107,11 @@ main app worker. Hints:
         self.ticker = None
         self.jmap = {
             'session': self.api_jmap_session}
+
+        # FIXME: Make this customizable somehow
+        self.theme = {'_unused_body_bg': '#fff'}
+        self.asset_path = os.path.normpath(os.path.join(
+            os.path.dirname(__file__), '..', '..', 'assets'))
 
     # Lifecycle
 
@@ -666,6 +684,25 @@ main app worker. Hints:
 
 
     # Internal API
+
+    def apply_theme(self, data):
+        def _replacer(m):
+            key = str(m.group(2), 'utf-8')
+            val = bytes(self.theme.get(key, ''), 'utf-8') or m.group(1)
+            return b': %s;' % (val,)
+        return re.sub(b': +([^\n;]+); +/\* *@(\S+) *\*/', _replacer, data)
+
+    def get_static_asset(self, path, themed=False):
+        filepath = os.path.join(self.asset_path, path)
+        mimetype = self.EXT_TO_MIME.get(path.rsplit('.', 1)[-1])
+        if '..' in path or not mimetype:
+            logging.debug('Rejecting path: %s' % path)
+            raise ValueError('Naughty path')
+        with open(filepath, 'rb') as fd:
+            data = fd.read()
+            if themed:
+                data = self.apply_theme(data)
+            return {'mimetype': mimetype, 'body': data, 'ttl': 24*3600}
 
     async def rpc_notify(self, notification, **kwargs):
         only = None

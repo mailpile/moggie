@@ -1,7 +1,7 @@
 import sys
 
 from .command import CLICommand
-from .admin import CommandGrant, CommandContext
+from .admin import CommandWelcome, CommandGrant, CommandContext
 from .admin import CommandUnlock, CommandEnableEncryption
 from .admin import CommandImport, CommandExport
 from .notmuch import CommandSearch, CommandAddress, CommandShow, CommandCount, CommandTag
@@ -21,19 +21,6 @@ class CommandHelp(CLICommand):
     WEBSOCKET = False
     WEB_EXPOSE = True
     OPTIONS = {'--format=': ['text']}
-
-    HTML_TEMPLATE = """\
-<html><head>
-  <title>%(title)s</title>
-</head><body>
-  <div style="float: right">(
-    <a href="/cli/help">top</a>,
-    <a href="?format=text">plain text</a>
-  )</div>
-  %(body)s
-<hr><a href="https://www.mailpile.is/">moggie is a mailpile project</a>
-</body></html>
-"""
 
     def configure(self, args):
         self.arglist = self.strip_options(args)
@@ -127,9 +114,9 @@ Try `moggie help topics` for a list of what help has been written.
             # FIXME: Linkify moggie commands?
             output['html'] = markdown.markdown(output['text'])
         if fmt == 'html':
-            self.print(self.HTML_TEMPLATE % {
-                'title': output['title'],
-                'body': output['html']})
+            self.print_html_start(title=output['title'])
+            self.print(output['html'])
+            self.print_html_end()
         elif fmt == 'json':
             self.print_json(output)
         elif fmt == 'sexp':
@@ -137,6 +124,7 @@ Try `moggie help topics` for a list of what help has been written.
 
 
 CLI_COMMANDS = {
+    CommandWelcome.NAME: CommandWelcome,
     CommandGrant.NAME: CommandGrant,
     CommandContext.NAME: CommandContext,
     CommandAddress.NAME: CommandAddress,

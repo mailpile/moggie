@@ -1,3 +1,60 @@
+table {
+  max-width: 100%;
+  width: 100%;
+}
+table.results tr {
+  vertical-align: top;
+}
+table.results tr td {
+  white-space: nowrap;
+  overflow: hidden;
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+table.results tr td.thread {
+  max-width: 1em;
+}
+table.results tr td.thread a {
+  font-size: 0;
+  color: #999;      /* @search_color_grip */
+  visibility: hidden;
+  text-decoration: none;
+}
+table.results tr td.thread a:after {
+  content: "::";
+  visibility: visible;
+  font-size: 10px;
+}
+table.results tr td.authors {
+  max-width: 200px;
+}
+table.results tr td.subject {
+  max-width: calc( var(--content-width) - 400px );
+}
 table.results tr td.tags {
+  color: #999;      /* @search_color_tags */
+  max-width: 50px;
+}
+table.results tr td.date_relative {
+  color: #999;      /* @search_color_date_relative */
+  padding-left: 5px;
+  text-align: center;
+}
+
+
+table.results tr:hover {
+  background: #ffd;
+}
+
+div.email div.email-summary {
   display: none;
+}
+div.email div.email-header,
+div.email div.email-body {
+  white-space: pre-line;
+  margin-bottom: 1em;
+}
+div.email div.email-body div.part {
+  border-bottom: 1px dashed #777;
 }
