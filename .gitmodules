@@ -17,3 +17,6 @@
 [submodule "submodules/python-passcrow"]
 	path = submodules/python-passcrow
 	url = https://github.com/mailpile/python-passcrow
+[submodule "submodules/pyqrcode"]
+	path = submodules/pyqrcode
+	url = https://github.com/mnooner256/pyqrcode

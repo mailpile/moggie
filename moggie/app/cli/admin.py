@@ -355,7 +355,9 @@ class CommandGrant(CLICommand):
     and years are always multiples of 365 days.
 
     Requesting `--output=urls` will change the output to list the URLs
-    which are currently live for each user.
+    which are currently live for each user. Requesting `--output=qrcodes`
+    will list the URLs and a QR code for each one (or include an SVG
+    of the QR code if the output format is JSON).
     """
     NAME = 'grant'
     ROLES = AccessConfig.GRANT_ACCESS
@@ -404,9 +406,11 @@ class CommandGrant(CLICommand):
             self.emit_text(result)
 
     def emit_text(self, result):
-
-        want_urls = self.options['--output='][-1] == 'urls'
-        if want_urls:
+        output = self.options['--output='][-1]
+        want_urls = output in ('urls', 'qrcodes')
+        if output == 'qrcodes':
+            fmt = '%(n)-13s %(e)-10s %(u)s\n%(q)s'
+        elif want_urls:
             fmt = '%(k)-13s %(n)-13s %(e)-10s %(u)s'
         else:
             fmt = '%(k)-13s %(n)-13s %(c)15s %(r)10s %(t)s'
@@ -417,6 +421,7 @@ class CommandGrant(CLICommand):
             'r': 'ROLE',
             't': 'TOKEN',
             'e': 'EXPIRES',
+            'q': 'QRCODE',
             'u': 'URLS'}
 
         def _fmt_date(ts):
@@ -439,7 +444,8 @@ class CommandGrant(CLICommand):
                     'r': ai['contexts'][c[i-1]]  if (0 < i <= cl) else '',
                     't': t[0]                    if (t and i == 0) else '',
                     'e': _fmt_date(u[0][0])      if (u and i == 0) else '',
-                    'u': u[i][1]                 if (i < len(u)) else ''})
+                    'u': u[i][1]                 if (i < len(u)) else '',
+                    'q': u[i][2]                 if (i < len(u)) else ''})
 
     def emit_json(self, config):
         self.print(json.dumps(config))
@@ -461,6 +467,8 @@ class CommandGrant(CLICommand):
             or (self.access
                 and self.access.config_key == AppConfig.ACCESS_ZERO))
 
+        fmt = self.options['--format='][-1]
+        output = self.options['--output='][-1]
         for akey, adata in cfg['config'].get('access', {}).items():
             if self.name in (None, adata['name'], akey):
                 if self.name:
@@ -477,10 +485,25 @@ class CommandGrant(CLICommand):
                         for t, e in adata.get('tokens', {}).items()],
                     key=lambda i: -int(i[0]))
                 urls = []
+                tok0 = tokens[0]
                 if with_tokens and tokens:
-                    urls.extend(
-                        (int(tokens[0][0]), '%s/@%s' % (u, tokens[0][1]))
-                        for u in cfg['config']['urls'])
+                    if output == 'qrcodes':
+                        import io, pyqrcode
+                        def _u(u):
+                            url = '%s/@%s/' % (u, tok0[1])
+                            qc = pyqrcode.create(url, error='L')
+                            if fmt == 'text':
+                                qc = qc.terminal(quiet_zone=2)
+                            else:
+                                buf = io.BytesIO()
+                                qc.svg(buf)
+                                qc = str(buf.getvalue(), 'utf-8')
+                            return (int(tok0[0]), url, qc)
+                    else:
+                        def _u(u):
+                            return (int(tok0[0]), '%s/@%s/' % (u, tok0[1]))
+
+                    urls.extend(_u(u) for u in cfg['config']['urls'])
 
                 if ctxs:
                     result.append({
