@@ -513,7 +513,7 @@ class CommandGrant(CLICommand):
                                 return (int(tok0[0]), url, '')
                             qc = pyqrcode.create(url, error='L')
                             if fmt == 'text':
-                                qc = qc.terminal(quiet_zone=2)
+                                qc = qc.terminal(quiet_zone=3)
                             else:
                                 buf = io.BytesIO()
                                 qc.svg(buf)

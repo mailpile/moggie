@@ -49,9 +49,9 @@ moggie_api = (function() {
       else {
         callback = moggie_ws_callbacks[data['req_id']];
         if (callback) {
-          console.log('Call took '+ (Date.now() - callback[0]) +'ms');
+          console.log(callback[1] +' took '+ (Date.now() - callback[0]) +'ms');
           delete moggie_ws_callbacks[data['req_id']];
-          callback[1](data);
+          callback[2](data);
         } else {
           console.log(event.data)
         }
@@ -63,6 +63,8 @@ moggie_api = (function() {
   function ensure_access_token_not_in_url() {
     var path_parts = document.location.pathname.split('/');
     if ((path_parts.length > 0) && (path_parts[1][0] == '@')) {
+      // This is a session cookie.
+      // FIXME: Offer the user to "stay logged in."
       document.cookie = 'moggie_token=' + path_parts[1] + '; SameSite=Strict; path=/';
       path_parts.splice(1, 1)
       document.location.href = path_parts.join('/');
@@ -89,7 +91,7 @@ moggie_api = (function() {
             var c2 = _b('div', 'content2', 'content');
             c2.innerHTML = '<i>loading...</i>';
             moggie_api.cli('search',
-              ['--format=jhtml', '--limit=25', 'bjarni', 'iceland'],
+              ['--format=jhtml', '--limit=50', 'bjarni', 'is:recent'],
               function(d) {
                 c2.innerHTML = JSON.parse(d['data'])['html'];
               }, 'json');
@@ -102,7 +104,7 @@ moggie_api = (function() {
     cli: function(command, args, callback) {
       var now = Date.now();
       var req_id = 'cli-' + now;
-      moggie_ws_callbacks[req_id] = [now, callback];
+      moggie_ws_callbacks[req_id] = [now, 'cli:'+command, callback];
       moggie_ws.send_json({
         prototype: 'cli',
         req_id: req_id,
