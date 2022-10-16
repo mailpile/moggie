@@ -59,7 +59,7 @@ class ResponseMailbox(dict):
 
 
 class ResponseSearch(dict):
-    def __init__(self, request, emails, results=None):
+    def __init__(self, request, emails, results):
         self.update({
             'prototype': 'search',
             'req_id': request['req_id'],
@@ -69,7 +69,7 @@ class ResponseSearch(dict):
             'skip': request['skip']})
         if emails is not None:
             self['emails'] = emails
-        if results:
+        if results is not None:
             self['results'] = results
 
 

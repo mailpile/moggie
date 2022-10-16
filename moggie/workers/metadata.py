@@ -73,11 +73,11 @@ class MetadataWorker(BaseWorker):
         if only_ids or raw or (data_cb is not None):
             return res
         if threads:
-            for grp in res:
+            for grp in res['metadata']:
                 grp['messages'] = [Metadata(*m) for m in grp['messages']]
-            return res
         else:
-            return (Metadata(*m) for m in res)
+            res['metadata'] = (Metadata(*m) for m in res['metadata'])
+        return res
 
     def metadata(self, hits,
             tags=None, threads=False, only_ids=False,
@@ -89,9 +89,9 @@ class MetadataWorker(BaseWorker):
         if threads:
             for grp in res:
                 grp['messages'] = [Metadata(*m) for m in grp['messages']]
-            return res
         else:
-            return (Metadata(*m) for m in res)
+            res['metadata'] = (Metadata(*m) for m in res['metadata'])
+        return res
 
     def info(self):
         return self.call('info')
@@ -162,17 +162,19 @@ class MetadataWorker(BaseWorker):
             hits, tags, threads, only_ids, sort_order, skip, limit,
             **kwargs):
         if not isinstance(hits, (list, IntSet)):
-            hits = list(dumb_decode(hits))
+            hits = dumb_decode(hits)
+        hits = list(hits)
         if not hits:
-            return self.reply_json([])
+            return self.reply_json({'total': 0, 'metadata': []})
 
         if threads:
             result = self._md_threaded(hits, only_ids, sort_order)
         else:
             result = self._md_messages(hits, only_ids, sort_order)
 
+        total = len(result)
         if not limit:
-            limit = len(result) - skip
+            limit = total - skip
         result = [r for r in result[skip:skip+limit]]
 
         if tags:
@@ -214,8 +216,11 @@ class MetadataWorker(BaseWorker):
                 for idx in (_metadata(i) for i in result)
                 if idx is not None)
 
-        # FIXME: Make it possible to stream the results incrementally?
-        self.reply_json(list(result))
+        self.reply_json({
+            'skip': skip,
+            'limit': limit,
+            'total': total,
+            'metadata': list(result)})
 
 
 if __name__ == '__main__':

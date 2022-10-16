@@ -146,7 +146,7 @@ class ImportWorker(BaseWorker):
         for i in range(0, len(email_idxs), self.BATCH_SIZE):
             idx_batch = email_idxs[i:i+self.BATCH_SIZE]
             logging.debug('Processing messages %s' % (idx_batch))
-            for md in self.metadata.metadata(idx_batch):
+            for md in self.metadata.metadata(idx_batch)['metadata']:
                 # 1. Submit a request to the main app to fetch the e-mail's
                 #    text parts and structure (not full attachments). Again,
                 #    we don't know or care where the mail is coming from.

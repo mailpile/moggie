@@ -469,7 +469,7 @@ main app worker. Hints:
                 with_tags=(not jmap_request.get('only_ids', False)))
             if jmap_request.get('uncooked'):
                 return s_result
-            return (s_result, list(
+            s_metadata = (
                 await self.metadata.with_caller(conn_id).async_metadata(
                     loop,
                     s_result['hits'],
@@ -479,7 +479,9 @@ main app worker. Hints:
                     threads=jmap_request.get('threads', False),
                     skip=jmap_request['skip'],
                     limit=jmap_request['limit'],
-                    raw=True)))
+                    raw=True))
+            s_metadata['metadata'] = list(s_metadata['metadata'])
+            return (s_result, s_metadata)
 
         jmap_request['skip'] = jmap_request.get('skip') or 0
         jmap_request['limit'] = jmap_request.get('limit', None)
@@ -488,7 +490,9 @@ main app worker. Hints:
             if jmap_request.get('uncooked'):
                 return ResponseSearch(jmap_request, None, results)
             else:
-                return ResponseSearch(jmap_request, results[1], results[0])
+                only_metadata = results[1]['metadata']
+                results[0]['total'] = results[1]['total']
+                return ResponseSearch(jmap_request, only_metadata, results[0])
         else:
             return ResponsePleaseUnlock(jmap_request)
 

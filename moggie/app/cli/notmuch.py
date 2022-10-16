@@ -123,6 +123,7 @@ class CommandSearch(CLICommand):
         self.displayed = {}
         self.default_output = 'summary'
         self.fake_tid = int(time.time() * 1000)
+        self.raw_results = None
         self.exporter = None
         super().__init__(*args, **kwargs)
 
@@ -683,6 +684,13 @@ class CommandSearch(CLICommand):
         msg = await self.worker.async_jmap(self.access, query)
         if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
+
+        if not self.raw_results:
+            self.raw_results = msg['results']
+            self.webui_state['details'] = {}
+            for k in self.raw_results:
+                if k not in ('hits', 'tags'):
+                    self.webui_state['details'][k] = self.raw_results[k]
 
         output = self.get_output()
         if output in ('tags', 'tag_info'):
