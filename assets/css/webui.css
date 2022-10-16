@@ -46,7 +46,7 @@
 body {
     font-family: monospace;    /* @body_font_family */
     color:            #000;    /* @body_color */
-    background: url("/static/img/videy-by-michael-clarke-stuff-CCASA2.jpg") no-repeat fixed center;  /* @body_bg */
+    background: url("/static/img/bg/sunset.jpg") no-repeat fixed center;  /* @body_bg */
     background-size: cover;
     height: 100%;
     margin: 0;
@@ -56,6 +56,7 @@ div.content {
     float: left;
     width: var(--content-width);
     max-width: var(--content-width);
+    overflow: hidden;
     padding: 1px;
     display: inline-block;
     z-index: 0;
