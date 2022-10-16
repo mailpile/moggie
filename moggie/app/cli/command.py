@@ -72,6 +72,28 @@ class CLICommand:
             logging.exception('Failed %s' % cls.NAME)
             reply('', eof=True)
 
+    @classmethod
+    async def MsgRunnable(cls, app, access, args):
+        reply_buffer = []
+        def reply(msg, eof=False):
+            if msg or eof:
+                if isinstance(msg, (bytes, bytearray)):
+                    reply_buffer.append(bytes(msg))
+                else:
+                    reply_buffer.append(bytes(msg, 'utf-8'))
+        try:
+            cmd_obj = cls(app.profile_dir, args,
+                access=access, appworker=app, connect=False)
+            cmd_obj.write_reply = reply
+            cmd_obj.write_error = reply
+            cmd_obj.stdin = []
+            return reply_buffer, cmd_obj
+        except PermissionError:
+            raise
+        except:
+            logging.exception('Failed %s' % cls.NAME)
+        return None
+
     def __init__(self, wd, args,
             access=None, appworker=None, connect=True, req_env=None):
         from ...workers.app import AppWorker

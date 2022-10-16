@@ -1,6 +1,10 @@
-var moggie_api = (function() {
+var moggie_api;
+moggie_api = (function() {
 
-  function el(tag, idName, className) {
+  var moggie_ws;
+  var moggie_ws_callbacks = {};
+
+  function _b(tag, idName, className) {
     var obj = document.createElement(tag);
     if (idName) {
       obj.setAttribute('id', idName);
@@ -13,21 +17,27 @@ var moggie_api = (function() {
     return obj;
   }
 
-  function setup_websocket() {
-    var ws_status = el('div', 'websocket_status');
+  function setup_websocket(on_connected) {
+    var ws_status = _b('div', 'websocket_status');
     ws_status.innerHTML = 'offline';
 
     var host = document.location.host;
     var wsp = (document.location.protocol == 'http:') ? 'ws' : 'wss';
-    const socket = new WebSocket(wsp + '://' + host + '/ws');
-    socket.onopen = function () {
+    moggie_ws = new WebSocket(wsp + '://' + host + '/ws');
+    moggie_ws.send_json = function(data) {
+      this.send(JSON.stringify(data));
+    };
+    moggie_ws.pinger = function() {
+      moggie_ws.send_json({prototype: "ping", ts: Date.now()});
+    };
+    moggie_ws.onopen = function () {
       ws_status.innerHTML = 'connected';
       ws_status.setAttribute('class', 'slow');
-      setInterval(function() {
-        socket.send('{"prototype": "ping", "ts": '+ Date.now() +'}');
-      }, 7500);
+      setInterval(moggie_ws.pinger, 7500);
+      moggie_ws.pinger();
+      if (on_connected) on_connected();
     };
-    socket.onmessage = function(event) {
+    moggie_ws.onmessage = function(event) {
       var data = JSON.parse(event.data);
       if (data['prototype'] == 'pong' && data['ts']) {
         var now = Date.now();
@@ -37,7 +47,14 @@ var moggie_api = (function() {
           (lag < 500) ? 'ok' : ((lag < 1500) ? 'slow' : 'bad'));
       }
       else {
-        console.log(event.data)
+        callback = moggie_ws_callbacks[data['req_id']];
+        if (callback) {
+          console.log('Call took '+ (Date.now() - callback[0]) +'ms');
+          delete moggie_ws_callbacks[data['req_id']];
+          callback[1](data);
+        } else {
+          console.log(event.data)
+        }
       }
     };
     // FIXME: Do something sensible when the connection goes away.
@@ -64,21 +81,34 @@ var moggie_api = (function() {
   return {
     page_setup: function() {
       if (ensure_access_token_not_in_url()) {
-        el('div', 'headbar').innerHTML = "<p>Welcome to Moggie</p>";
-        el('div', 'sidebar').innerHTML = "<p>Yay a sidebar</p>";
+        _b('div', 'headbar').innerHTML = "<p>Welcome to Moggie</p>";
+        _b('div', 'sidebar').innerHTML = "<p>Yay a sidebar</p>";
 
         with_script('/static/js/jquery3.js', function() {
-          setup_websocket();
-
-          var c2 = el('div', 'content2', 'content');
-          c2.innerHTML = '<i>loading...</i>';
-
-          $.get('/cli/search/--format=jhtml/--limit=25/from:bre/date:2009', function(d) {
-            c2.innerHTML = d['html'];
-          }, 'json');
+          setup_websocket(function() {
+            var c2 = _b('div', 'content2', 'content');
+            c2.innerHTML = '<i>loading...</i>';
+            moggie_api.cli('search',
+              ['--format=jhtml', '--limit=25', 'bjarni', 'iceland'],
+              function(d) {
+                c2.innerHTML = JSON.parse(d['data'])['html'];
+              }, 'json');
+          });
         });
 
       }
+    },
+
+    cli: function(command, args, callback) {
+      var now = Date.now();
+      var req_id = 'cli-' + now;
+      moggie_ws_callbacks[req_id] = [now, callback];
+      moggie_ws.send_json({
+        prototype: 'cli',
+        req_id: req_id,
+        command: command,
+        args: args
+      });
     }
   };
 })();

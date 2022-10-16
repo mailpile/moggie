@@ -160,8 +160,20 @@ class RequestChangePassphrase(RequestBase):
         }, req_id=req_id)
 
 
+class RequestCLI(RequestBase):
+    def __init__(self, command=None, args=None, req_id=None):
+        self.update({
+            'prototype': 'unlock',
+            'command': command,
+            'args': args
+        }, req_id=req_id)
+
+
+
+
 def to_jmap_request(_input):
     cls = {
+         'cli': RequestCLI,
          'tag': RequestTag,
          'ping': RequestPing,
          'email': RequestEmail,

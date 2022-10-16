@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -19,6 +20,7 @@ from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorker
 from ..workers.search import SearchWorker
+from .cli import CLI_COMMANDS
 
 
 async def async_run_in_thread(method, *m_args, **m_kwargs):
@@ -616,6 +618,24 @@ main app worker. Hints:
         else:
             return ResponsePleaseUnlock(jmap_request)
 
+    async def api_jmap_cli(self, conn_id, access, jmap_request):
+        rbuf_cmd = await CLI_COMMANDS[jmap_request['command']].MsgRunnable(
+            self.worker, access, jmap_request['args'])
+        if rbuf_cmd is None:
+            return ResponseCLI(jmap_request, 'text/error', 'No such command')
+
+        rbuf, cmd = rbuf_cmd
+        await cmd.web_run()
+        rbuf = b''.join(rbuf)
+        mimetype = cmd.mimetype.split(';')[0].lower()
+        if mimetype in (
+                'text/plain', 'text/html', 'text/css', 'text/javascript',
+                'application/json'):
+            result = str(rbuf, 'utf-8')
+        else:
+            result = 'base64:' + str(base64.b64encode(rbuf), 'utf-8')
+        return ResponseCLI(jmap_request, mimetype, result)
+
     async def api_jmap(self, conn_id, access, client_request, internal=False):
         # The JMAP API sends multiple requests in a blob, and wants some magic
         # interpolation as well. Where do we implement that? Is there a lib we
@@ -634,7 +654,9 @@ main app worker. Hints:
 
         # FIXME: This is a hack
         result = None
-        if type(jmap_request) == RequestMailbox:
+        if type(jmap_request) == RequestCLI:
+            result = await self.api_jmap_cli(conn_id, access, jmap_request)
+        elif type(jmap_request) == RequestMailbox:
             result = await self.api_jmap_mailbox(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestSearch:
             result = await self.api_jmap_search(conn_id, access, jmap_request)

@@ -127,3 +127,11 @@ class ResponseContexts(dict):
             'req_id': request['req_id'],
             'contexts': contexts})
 
+
+class ResponseCLI(dict):
+    def __init__(self, request, mimetype, data):
+        self.update({
+            'prototype': 'contexts',
+            'req_id': request['req_id'],
+            'mimetype': mimetype,
+            'data': data})
