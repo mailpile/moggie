@@ -503,8 +503,8 @@ class CommandGrant(CLICommand):
                         for t, e in adata.get('tokens', {}).items()],
                     key=lambda i: -int(i[0]))
                 urls = []
-                tok0 = tokens[0]
                 if with_tokens and tokens:
+                    tok0 = tokens[0]
                     if output == 'qrcodes':
                         import io, pyqrcode
                         def _u(u):

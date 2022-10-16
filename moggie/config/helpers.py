@@ -19,11 +19,12 @@ class ListItemProxy(list):
         self._item = item
         self.delim = delim
         self.access_denied = False
+        self.changed = False
         try:
             data = ac.get(section, item, permerror=True).strip()
             if data:
-                items = data.split(self.delim)
-                self.extend(i.strip() for i in items)
+                items = [i.strip() for i in data.split(self.delim)]
+                super().extend(i for i in items if i)
         except PermissionError as e:
             self.access_denied = e
         except (TypeError, AttributeError, KeyError, NoOptionError) as e:
@@ -68,8 +69,10 @@ class ListItemProxy(list):
     def extend(self, val):
         if self.access_denied:
             raise PermissionError(self.access_denied)
-        super().extend(self._validate(v) for v in val)
-        self._write_back()
+        extending = [self._validate(v) for v in val]
+        if extending:
+            super().extend(extending)
+            self._write_back()
         return self
 
     def pop(self, pos):
@@ -101,7 +104,7 @@ class DictItemProxy(dict):
         self.access_denied = False
         try:
             pairs = ac.get(section, item, permerror=True).split(',')
-            self.update(dict(pair.strip().split(':', 1) for pair in pairs))
+            super().update(dict(pair.strip().split(':', 1) for pair in pairs))
         except PermissionError as e:
             self.access_denied = e
         except (TypeError, AttributeError, KeyError, ValueError, NoOptionError):

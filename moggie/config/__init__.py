@@ -9,6 +9,7 @@ import os
 import re
 import time
 import threading
+import traceback
 import struct
 from configparser import ConfigParser, NoOptionError, _UNSET
 from logging.handlers import TimedRotatingFileHandler
@@ -220,14 +221,15 @@ class AccessConfig(ConfigSectionProxy):
         return token
 
     def get_fresh_token(self):
-        tokens = self.tokens.items()
-        if tokens:
-            exp, tok = max((int(a), t) for t, a in tokens)
-            if exp < time.time() + (self.DEFAULT_TOKEN_TTL/2):
+        with self.config:
+            tokens = self.tokens.items()
+            if tokens:
+                exp, tok = max((int(a), t) for t, a in tokens)
+                if exp < time.time() + (self.DEFAULT_TOKEN_TTL/2):
+                    tok = self.new_token()
+            else:
                 tok = self.new_token()
-        else:
-            tok = self.new_token()
-        return tok, int(self.tokens[tok])
+            return tok, int(self.tokens[tok])
 
     def get_default_context(self):
         if self.default_context:
@@ -251,23 +253,25 @@ class AccessConfig(ConfigSectionProxy):
         return False
 
     def grants(self, context, roles):
-        role = self.roles.get(context, None)
-        ctx = self.config.contexts.get(context)
+        with self.config:
+            role = self.roles.get(context, None)
+            ctx = self.config.contexts.get(context)
 
-        if role is None or ctx is None:
-            return None
-        if self.GRANT_ALL not in role:
-            for rc in roles:
-                if rc not in role:
-                    return False
+            if role is None or ctx is None:
+                return None
+            if self.GRANT_ALL not in role:
+                for rc in roles:
+                    if rc not in role:
+                        return False
 
-        scope_search = ' '.join('+in:%s' % t.lower() for t in ctx.tags)[1:]
-        if ctx.scope_search:
-            scope_search += ' ' + ctx.scope_search
-            if scope_search.startswith(' -'):
-                scope_search = 'all:mail' + scope_search
+            scope_search = ' '.join('+in:%s' % t.lower() for t in ctx.tags)[1:]
+            if ctx.scope_search:
+                scope_search += ' ' + ctx.scope_search
+                if scope_search.startswith(' -'):
+                    scope_search = 'all:mail' + scope_search
 
-        return (role, ctx.tag_namespace, scope_search.strip())
+            self.config.do_not_save()
+            return (role, ctx.tag_namespace, scope_search.strip())
 
 
 class AccountConfig(ConfigSectionProxy):
@@ -597,7 +601,9 @@ class AppConfig(ConfigParser):
             fd.write(self.PREAMBLE)
             self.write(fd)
         os.chmod(self.filepath, 0o600)
-        logging.debug('Saved config: %s' % self.filepath)
+        logging.debug('Saved config(%s):\n%s' % (
+            self.filepath,
+            ''.join(traceback.format_stack()[-5:-1])))
 
     def temp_aes_key(config, temp_key):
         old_key = config.aes_key
