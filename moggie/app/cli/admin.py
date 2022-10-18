@@ -52,7 +52,17 @@ class CommandContext(CLICommand):
         moggie context update Yum --forbid="vegetables" --forbid="veggies"
         moggie context remove Yum
 
-    FIXME: What about namespaces?
+    Add `--output=ids` and/or `--output=scope` options to show more details
+    about each context.
+
+    Specify `--format=X` to change the output format. Supported formats are
+    `text` and `json`.
+
+    FIXME: Support --format = `html` and `jhtml`.
+    FIXME: Always allow a user to LIST their own contexts; so tweak ROLES
+           and the access control strategy. Or make context-list a command
+           of its own with no ability to edit thigns?
+    FIXME: Document this all a bit better.
     """
     NAME = 'context'
     ROLES = AccessConfig.GRANT_ACCESS  # FIXME: Allow user to see own contexts?
