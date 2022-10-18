@@ -99,30 +99,38 @@ moggie_api = (function() {
     moggie_api.records[_id] = data;
   }
 
+  var content_div;
   return {
     records: {},
     page_setup: function() {
       if (ensure_access_token_not_in_url()) {
-        var c1 = document.getElementsByClassName('content')[0];
-        _record_data(c1, moggie_state);
+        content_div = document.getElementsByClassName('content')[0];
+        _record_data(content_div, moggie_state);
 
         _b('div', 'headbar').innerHTML = "<p>Welcome to Moggie</p>";
         _b('div', 'sidebar').innerHTML = "<p>Yay a sidebar</p>";
 
         with_script('/static/js/jquery3.js', function() {
           setup_websocket(function() {
+/*
             var c2 = _b('div', 'content2', 'content');
-            c2.innerHTML = '<i>loading...</i>';
             moggie_api.cli('search',
               ['--format=jhtml', '--limit=50', 'in:inbox'],
-              function(d) {
-                response = JSON.parse(d['data']);
-                c2.innerHTML = response['html'];
-                _record_data(c2, response['state']);
-              }, 'json');
+              moggie_api.replace_content);
+*/
           });
         });
 
+      }
+    },
+
+    replace_content: function(ev) {
+      if (ev == 'prep') {
+        content_div.innerHTML = '<i class=loading>Loading...</i>';
+      } else {
+        response = JSON.parse(ev['data']);
+        content_div.innerHTML = response['html'];
+        _record_data(content_div, response['state']);
       }
     },
 
@@ -130,6 +138,7 @@ moggie_api = (function() {
       var now = Date.now();
       var req_id = 'cli-' + now;
       moggie_ws_callbacks[req_id] = [now, 'cli:'+command, callback];
+      callback('prep');
       moggie_ws.send_json({
         prototype: 'cli',
         req_id: req_id,

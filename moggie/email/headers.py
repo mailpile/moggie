@@ -13,6 +13,7 @@ SINGLETONS = (
     'content-disposition',
     'content-length',
     'content-type',
+    'content-id',
     'date',
     'errors-to',
     'from',
@@ -49,10 +50,10 @@ HEADERS_WITH_PARAMS = (
     'content-type',
     'content-disposition')
 
-HWP_CONTENT_TYPE_RE = re.compile(r'^([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+)', flags=re.DOTALL)
+HWP_CONTENT_TYPE_RE = re.compile(r'^([a-zA-Z0-9_-]+\/[a-zA-Z0-9_\.-]+)', flags=re.DOTALL)
 HWP_VALUE_RE = re.compile(r'^([^;]+)', flags=re.DOTALL)
 HWP_TOKEN_RE = re.compile(r'^([a-zA-Z0-9_-]+)', flags=re.DOTALL)
-HWP_PARAM_RE = re.compile(r'(;\s*([a-zA-Z0-9_-]+)=([a-zA-Z0-9_-]+|\"(?:\\.|[^"\\]+)+\"))', flags=re.DOTALL)
+HWP_PARAM_RE = re.compile(r'(;\s*([a-zA-Z0-9_-]+)=([a-zA-Z0-9_\.-]+|\"(?:\\.|[^"\\]+)+\"))', flags=re.DOTALL)
 HWP_COMMENT_RE = re.compile(r'^(;?\s*\(([^\(]*)\))', flags=re.DOTALL)
 
 

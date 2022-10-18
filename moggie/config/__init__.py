@@ -394,6 +394,19 @@ class AppConfig(ConfigParser):
     STANDARD_CONTAINER_TAGS = (
        'Inbox', 'Drafts', 'Outbox', 'Sent', 'Spam', 'Trash')
 
+    # These are settings which have top-level settings/defaults, but
+    # can be overridden on a per-context basis.
+    PREF_YES = 'yes'
+    PREF_NO  = 'no'
+    PREF_ASK = 'ask'
+    PREF_BOOL = (PREF_YES, PREF_NO)
+    PREF_BASK = (PREF_YES, PREF_NO, PREF_ASK)
+    PREFERENCES = [
+        ('display_html',               PREF_YES, PREF_BOOL),
+        ('display_html_target_blank',  PREF_YES, PREF_BOOL),
+        ('display_html_inline_images', PREF_YES, PREF_BASK),
+        ('display_html_remote_images', PREF_ASK, PREF_BASK)]
+
     INITIAL_SETTINGS = [
        (GENERAL, 'config_backups', '10'),
        (GENERAL, 'default_cli_context', 'Context 0'),
@@ -489,6 +502,23 @@ class AppConfig(ConfigParser):
             for p in self if p.startswith(self.CONTEXT_PREFIX)))
 
     passcrow = property(lambda self: PasscrowConfig(self, self.PASSCROW))
+
+    def get_preferences(self, context=None, which=None):
+        source = []
+        preferences = {}
+        for pref, default, valid in self.PREFERENCES:
+            if which and pref not in which:
+                next
+            preferences[pref] = self.get(self.GENERAL, pref, fallback=default)
+            if context:
+                cpref = self.get(context, pref, fallback=None)
+                if cpref is not None:
+                    source.append(context)
+                    preferences[pref] = cpref
+            if preferences[pref] not in valid:
+                preferences[pref] = default
+        preferences['_source'] = ''.join(set(source or ['global']))
+        return preferences
 
     def __enter__(self, *args, **kwargs):
         self.lock.acquire()

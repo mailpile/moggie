@@ -104,7 +104,9 @@ class CLICommand:
         self.messages = []
         self.workdir = wd
         self.context = None
+        self.preferences = None
         self.stdin = sys.stdin
+        self.cfg = (appworker and appworker.app and appworker.app.config)
 
         if access is not True and not access and self.ROLES:
             raise PermissionError('Access denied')
@@ -120,6 +122,8 @@ class CLICommand:
         self.write_reply = _writer
         self.write_error = _writer
 
+        self.filename = None
+        self.disposition = None
         self.mimetype = 'text/plain; charset=utf-8'
         self.webui_state = {'command': self.NAME}
         if req_env is not None:
@@ -245,8 +249,10 @@ class CLICommand:
         self.messages.append(message)
 
     def get_context(self, ctx=None):
-        from ...config import AppConfig
-        cfg = AppConfig(self.workdir)
+        cfg = self.cfg
+        if cfg is None:
+            from ...config import AppConfig
+            cfg = self.cfg = AppConfig(self.workdir)
 
         all_contexts = cfg.contexts
         ctx = ctx or (self.options.get('--context=') or ['default'])[-1]

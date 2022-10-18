@@ -266,6 +266,7 @@ main app worker. Hints:
 
     def shutdown_tasks(self):
         self.stop_workers()
+        self.config.save()
 
     def keep_result(self, rid, rv):
         self._results[rid] = (time.time(), rv)
@@ -748,7 +749,7 @@ main app worker. Hints:
                     return {'mimetype': mimetype, 'body': data, 'ttl': 24*3600}
             except:
                 pass
-        raise
+        raise OSError('File not found or access denied')
 
     async def rpc_notify(self, notification, **kwargs):
         only = None

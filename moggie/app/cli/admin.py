@@ -8,6 +8,7 @@ import logging
 import os
 import sys
 import time
+import traceback
 
 from ...config import AppConfig, AccessConfig
 from .command import Nonsense, CLICommand
@@ -27,7 +28,11 @@ class CommandWelcome(CLICommand):
 
     async def run(self):
         self.print_html_start()
-        self.print('<h1>Hello world</h1>')
+        try:
+            asset = self.worker.app.get_static_asset('html/welcome.html')
+            self.print(str(asset['body'], 'utf-8'))
+        except Exception as e:
+            self.print('<pre>Failed: %s</pre>' % traceback.format_exc())
         self.print_html_end()
 
 

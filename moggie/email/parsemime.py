@@ -154,6 +154,13 @@ class MessagePart(dict):
             # FIXME: Obey self.fix_mbox_from!
             pass
 
+        elif self.get('content-id'):
+            cid = self['content-id'].strip()
+            if cid[:1] == '<':
+                cid = cid[1:-1]
+            if cid:
+                parts[-1]['content-id'] = cid
+
         return self
 
     def _raw(self, part, header=False):

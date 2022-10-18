@@ -4,6 +4,7 @@ import time
 
 import email.utils
 
+from ..security.html import HTMLCleaner
 from .headerprint import HeaderPrints
 from .dates import ts_to_keywords
 
@@ -105,16 +106,38 @@ class KeywordExtractor:
 
         return (url_domains | words) - self.stoplist
 
+    def _parse_html(self, text):
+        words = []
+        def _collect(tag, attrs, data):
+            if tag not in ('script', 'style'):
+                words.append(data.strip())
+
+        # FIXME: Wait, we should also be extracting URLs in a more
+        #        structured way. DUH.
+
+        hc = HTMLCleaner(text, callbacks={'DATA': _collect})
+        hc.close()
+        return ' '.join(words), hc.keywords
+
     def body_text_keywords(self, parsed_email):
         status, keywords = set(), set()
         text_chars = 0
         url_count = 0
         for part in parsed_email.get('_PARTS') or []:
-            if '_TEXT' in part and part['_TEXT']:
-                ud = self.url_domains(part['_TEXT'])
-                keywords |= self.words(part['_TEXT'], url_domains=ud)
-                text_chars += len(part['_TEXT'])
+            text = part.get('_TEXT')
+            if text:
+                if part.get('content-type', [None])[0] == 'text/html':
+                    text, html_kw = self._parse_html(text)
+                    keywords.add('has:html')
+                    keywords |= html_kw
+                else:
+                    keywords.add('has:text')
+                ud = self.url_domains(text)
+                keywords |= self.words(text, url_domains=ud)
+                text_chars += len(text)
                 url_count += len(ud)
+            elif 'attachment' in part.get('content-disposition', []):
+                keywords.add('has:attachment')
 
         if url_count:
             keywords.add('has:urls')
@@ -230,9 +253,12 @@ if __name__ == '__main__':
         msg = bytes("""\
 From: bre@example.org
 To: bre3@example.org, <bre4@example.org> Bjarnzor
-Content-Type: text/plain; charset=utf-8
 Subject: PCR =?utf-8?B?TWFnaWNhbA==?= subject line
 Date: Tue, 29 Mar 2022 14:17:00 +0000
+Content-Type: multipart/mixed; boundary=1234
+
+--1234
+Content-Type: text/plain; charset=utf-8
 
 Halló heimur, þetta er íslenskur texti því stundum þarf að flækja
 málin aðeins og athuga hvernig gengur.
@@ -242,6 +268,13 @@ Hexadecimal 0x1234 gets ignored yo: 0e1abc 0x123456789
 Ég er <bre@example.org> og mailto:bre2@example.org og svo er auðvitað
 líka https://www.example.org/foo/bar/baz?bonk vefsíða.
 
+--1234
+Content-Type: text/html; charset=utf-8
+
+<script>function() {}</script>
+<html>Hello hypertext world</html>
+
+--1234--
 """, 'utf-8')
 
     parsed = parse_message(msg).with_structure().with_text()
@@ -250,6 +283,10 @@ líka https://www.example.org/foo/bar/baz?bonk vefsíða.
     more, keywords = kwe.extract_email_keywords(None, parsed)
     if unittest:
         try:
+            assert('html' not in keywords)
+            assert('html:spooky' in keywords)
+            assert('hypertext' in keywords)
+            assert('function' not in keywords)
             assert('year:2022' in keywords)
             assert('month:3' in keywords)
             assert('day:29' in keywords)
@@ -275,7 +312,6 @@ líka https://www.example.org/foo/bar/baz?bonk vefsíða.
             assert('has:urls' in keywords)
             assert('has:many_urls' not in keywords)
             assert('is:long' not in keywords)
-            assert('is:short' in keywords)
             assert('bre@example.org' in keywords)
             assert('bre2@example.org' in keywords)
             assert('www.example.org' in keywords)

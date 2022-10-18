@@ -69,6 +69,7 @@ async def web_cli(req_env):
         allow_anonymous=(hasattr(command, 'ROLES') and not command.ROLES),
         secure_transport=True)
 
+    headers = {}
     post_vars = req_env.post_vars
     if 'argz' in post_vars:
         argz = post_vars.get('argz')
@@ -103,7 +104,13 @@ async def web_cli(req_env):
         return {'code': 403, 'msg': str(e), 'body': str(e)}
 
     asyncio.get_event_loop().create_task(cmd.web_run())
-    return {'mimetype': cmd.mimetype, 'eof': False}
+    if cmd.disposition or cmd.filename:
+        disp = cmd.disposition or 'attachment'
+        if cmd.filename:
+            disp += '; filename="%s"' % cmd.filename
+        headers['Content-Disposition'] = disp
+
+    return {'mimetype': cmd.mimetype, 'eof': False, 'hdrs': headers}
 
 
 def websocket_auth_check(req_env):

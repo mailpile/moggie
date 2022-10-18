@@ -50,11 +50,42 @@ table.results tr:hover {
 div.email div.email-summary {
   display: none;
 }
-div.email div.email-header,
-div.email div.email-body {
+div.email table.email-header,
+div.email div.email-body div.part[data-mimetype="text/plain"] {
   white-space: pre-line;
   margin-bottom: 1em;
 }
+div.email table.email-header tr {
+  text-align: left;
+}
+div.email table.email-header th {
+  width: 10%;
+  font-weight: bold;
+  color: #555;
+}
+div.email table.email-header tr.email-subject td {
+  font-weight: bold;
+}
+div.email div.email-body .mDownload {
+  float: right;
+}
+div.email div.email-body div.mHide {
+  display: none;
+}
+div.email div.email-body div.mPartAttachment {
+  padding-left: 1em;
+  color: #777;
+}
+div.email div.email-body a.mDownload {
+  opacity: 0;
+}
+div.email div.email-body a.mDownload:hover,
+div.email div.email-body div.mPartAttachment a.mDownload {
+  opacity: 0.75;
+}
+
+div.email table.email-header,
 div.email div.email-body div.part {
   border-bottom: 1px dashed #777;
+  margin-bottom: 1.5em;
 }

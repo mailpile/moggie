@@ -41,6 +41,7 @@ from .command import Nonsense, CLICommand, AccessConfig
 from ...config import AppConfig
 from ...email.metadata import Metadata
 from ...jmap.requests import RequestSearch, RequestMailbox, RequestEmail
+from ...security.html import HTMLCleaner
 from ...storage.exporters.mbox import MboxExporter
 from ...storage.exporters.maildir import MaildirExporter, EmlExporter
 from ...util.dumbcode import dumb_decode
@@ -154,6 +155,7 @@ class CommandSearch(CLICommand):
         if self.options['--format='][-1] in ('maildir', 'zip', 'mbox'):
             self.default_output = 'emails'
 
+        self.preferences = self.cfg.get_preferences(context=self.context)
         return []
 
     async def as_metadata(self, md):
@@ -257,20 +259,151 @@ class CommandSearch(CLICommand):
                     fn_str = str(fn, 'latin-1')
                 yield (fn, fn_str)
 
+    FIX_MIMETYPES = {
+        'image/jpg': 'image/jpeg',
+        'multipart/alternative': 'text/plain',
+        'multipart/related': 'text/plain',
+        'multipart/mixed': 'text/plain'}
+    EVIL_EXTENSIONS = set(['exe', 'dll', 'scr', 'com'])  # FIXME
+    RISKY_MT_CHARS = re.compile(r'[^a-z0-9_\./-]')
+    RISKY_FN_CHARS = re.compile(r'[^a-zA-Z0-9_\.-]')
+
+    def _filename(self, part):
+        filename = ''
+        disp = part.get('content-disposition')
+        ctype = part.get('content-type')
+        for which, attr in ((disp, 'filename'), (ctype, 'name')):
+            if which and attr in which[1]:
+                filename = self.RISKY_FN_CHARS.sub('_', which[1][attr])
+                if filename:
+                    return filename
+        return None
+
+    def _magic_part_id(self, idx, part):
+        mimetype = part.get('content-type', ['application/octet-stream'])[0]
+        mimetype = self.RISKY_MT_CHARS.sub('_', mimetype.lower())
+        mimetype = self.FIX_MIMETYPES.get(mimetype, mimetype)
+
+        filename = self._filename(part) or ''
+        if filename:
+            ext = filename.split('.')[-1]
+            # FIXME: Fix mime-type based on extension? Check for mismatch?
+            if ('..' in filename) or (ext in self.EVIL_EXTENSIONS):
+                return None
+
+        return 'part-%d-%s%s%s' % (
+            idx, mimetype.replace('/', '-'), '/' if filename else '', filename)
+
+    def _fix_html(self, metadata, msg, part):
+        show_html_ii = (self.preferences['display_html_inline_images'] == 'yes')
+        show_html_ri = (self.preferences['display_html_remote_images'] == 'yes')
+        target_blank = (self.preferences['display_html_target_blank'] == 'yes')
+
+        email = msg['email']
+        if metadata.idx:
+            signed_id = self.sign_id('id:%s' % metadata.idx)
+            url_prefix = '/cli/show/%s?part=' % signed_id
+        else:
+            url_prefix = 'cid:'
+
+        def _find_by_cid(cid):
+            for i, p in enumerate(email['_PARTS']):
+                if p.get('content-id') == cid:
+                    return (i+1), p
+            return None, None
+
+        def a_fixup(cleaner, tag, attrs, data):
+            if target_blank:
+                # FIXME: Exempt links that are anchors within this document?
+                # FIXME: Forbid relative links!
+                return tag, cleaner._aa(attrs, 'target', '_blank'), data
+            else:
+                return tag, attrs, data
+
+        def img_fixup(cleaner, tag, attrs, data):
+            dropping = []
+            for i, (a, v) in enumerate(attrs):
+                if v and (a == 'data-m-src'):
+                    if v.startswith('cid:'):
+                        idx, part = _find_by_cid(v[4:].strip())
+                        part_id = None
+                        if idx and part:
+                            part_id = self._magic_part_id(idx, part)
+                            if not part_id:
+                                cleaner.saw_danger += 1
+                        if part_id:
+                            an = 'src' if show_html_ii else 'data-m-src'
+                            attrs[i] = (an, url_prefix + part_id)
+                        else:
+                            dropping.append(i)
+                    elif show_html_ri and v.startswith('http'):
+                        pass  # FIXME: Update URL to use our proxy
+            for idx in reversed(dropping):
+                cleaner.dropped_attrs.append((tag, attrs[idx][0], attrs[idx][1]))
+                attrs.pop(idx)
+            return tag, attrs, data
+
+            # FIXME; Do we also want to fixup other URLs?
+            #        3rd party image loading is blocked by our CSP,
+            #        ... so we need a proxy if they are to work at all.
+            #        Attempt to block tracking images?
+            #        Load content over Tor?
+            #        Redirect clicks through some sort of security checker?
+
+        return HTMLCleaner(part['_TEXT'], callbacks={
+                'img': img_fixup,
+                'a': a_fixup
+            }).clean()
+
     async def as_emails(self, thread):
-        def _textify(r, esc, part_fmt, msg_fmt):
-            headers = '\n'.join('%s: %s' % (h,v) for h, v in r['headers'].items())
-            def _parts(p):
-                p['_ct'] = esc(p.get('content-type', 'text/plain'))
-                if 'content' in p:
-                    if isinstance(p['content'], list):
-                        p['content'] = '\n'.join(_parts(sp) for sp in p['content'])
-                else:
-                    p['content'] = ('Non-text part: ' + p['_ct'])
+        def _textify(r, prefer, esc, part_fmt, msg_fmt, hdr_fmt='%(h)s: %(v)s'):
+            headers = '\n'.join(
+                hdr_fmt % {'hc': h.lower(), 'h': h, 'v': esc(r['headers'][h])}
+                for h in ('Date', 'To', 'Cc', 'From', 'Reply-To', 'Subject')
+                if h in r['headers'])
+
+            def _classify(parent_ct, parts):
+                types = []
+                for i, p in enumerate(parts):
+                    ct = p.get('content-type', '')
+                    p['_pref'] = ''
+                    if ('text/' in ct) and p.get('content'):
+                        types.append(ct)
+                        p['class'] = 'part mPartInline'
+                    elif 'multipart/' in ct:
+                        types.append(None)
+                        p['class'] = 'part mPartStructure'
+                    else:
+                        types.append(None)
+                        p['class'] = 'part mPartAttachment'
+                if (parent_ct == 'multipart/alternative') and (len(parts) > 1):
+                    try:
+                        preferred = types.index(prefer)
+                    except ValueError:
+                        preferred = [(1 if t else 0) for t in types].index(1)
+                    for i, p in enumerate(parts):
+                        if i == preferred:
+                            p['class'] += ' mShow'
+                            p['_pref'] = ' (preferred)'
+                        else:
+                            p['class'] += ' mHide'
+                return parts
+
+            url_prefix = '/cli/show/id:%s' % r['id']
+            def _part(p):
+                p['_ct'] = ct = esc(p.get('content-type', 'text/plain'))
                 p['_fn'] = ''
+                p['_url'] = '%s?part=%s' % (url_prefix, p['magic-id'])
                 if 'filename' in p:
                     p['_fn'] = esc('Filename: %s, ' % p['filename'])
+                if 'content' in p:
+                    if isinstance(p['content'], list):
+                        p['content'] = '\n'.join(
+                            _part(sp) for sp in _classify(ct, p['content']))
+                else:
+                    p['content'] = (p['_fn'] or 'Non-text part: ') + p['_ct']
                 return (part_fmt % p)
+
             return (msg_fmt % {
                 'd': r['_depth'],
                 'i': r['id'],
@@ -280,13 +413,13 @@ class CommandSearch(CLICommand):
                 'a': esc(r['headers'].get('From', '(unknown)')),
                 'r': r['date_relative'],
                 't': ' '.join(r['tags']),
-                'h': esc(headers),
-                'b': '\n'.join(_parts(sp) for sp in r['body'])})
+                'h': headers,
+                'b': '\n'.join(_part(sp) for sp in _classify('', r['body']))})
 
         def _as_text(r):
-            return _textify(r, lambda t: t,
+            return _textify(r, 'text/plain', lambda t: t,
                 """\
-\x0cpart{ ID: %(id)s, %(_fn)sContent-type: %(_ct)s
+\x0cpart{ ID: %(id)s, %(_fn)sContent-type: %(_ct)s%(_pref)s
 %(content)s
 \x0cpart}""",
                 """\
@@ -305,9 +438,10 @@ class CommandSearch(CLICommand):
                     .replace('&', '&amp;')
                     .replace('<', '&lt;')
                     .replace('>', '&gt;'))
-            return _textify(r, _html_quote,
+            return _textify(r, 'text/html', _html_quote,
                 """
-    <div class=part data-part-id="%(id)s" data-mimetype="%(_ct)s">
+    <div class="%(class)s" data-part-id="%(id)s" data-mimetype="%(_ct)s">
+      <a class="mDownload" href="%(_url)s">Download</a>
       %(content)s
     </div>
 """,
@@ -319,12 +453,15 @@ class CommandSearch(CLICommand):
     <span class="">(%(r)s)</span>
     <span class="">(%(t)s)</span>
   </div>
-  <div class="email-header">
+  <table class="email-header">
 %(h)s
-  </div>
+  </table>
   <div class="email-body">%(b)s
   </div>
-</div>""")
+</div>
+""",
+                """\
+    <tr class="email-%(hc)s"><th>%(h)s:</th><td>%(v)s</td></tr>""")
 
         if thread is not None:
             fmt = self.options['--format='][-1]
@@ -355,7 +492,9 @@ class CommandSearch(CLICommand):
                 elif part:
                     _part = msg['email']['_PARTS'][part-1]
                     yield (_part.get('_TEXT'),
-                        {'_metadata': md, '_data': _part.get('_DATA')})
+                        {'_metadata': md,
+                         '_mimetype': _part['content-type'][0],
+                         '_data': _part.get('_DATA')})
 
                 elif raw and msg['email'].get('_RAW'):
                     yield ('',
@@ -384,23 +523,34 @@ class CommandSearch(CLICommand):
                             info = {
                                 'id': i+1,
                                 'content-type': _part.get('content-type', ['text/plain'])[0]}
+                            part_id = self._magic_part_id(i+1, _part)
+                            if part_id:
+                                info['magic-id'] = part_id
+
+                            filename = self._filename(_part)
+                            if filename:
+                                info['filename'] = filename
 
                             disp = _part.get('content-disposition')
                             if isinstance(disp, list):
                                 info['content-disposition'] = disp[0]
-                                if 'filename' in disp[1]:
-                                    info['filename'] = disp[1]['filename']
                                 cte = _part.get('content-transfer-encoding')
                                 if cte:
                                     info['content-transfer-encoding'] = cte
                                 info['content-length'] = (_part['_BYTES'][2] - _part['_BYTES'][1])
+                            if 'content-id' in _part:
+                                info['content-id'] = _part['content-id']
                             while _part['_DEPTH'] < depth:
                                 partstack.pop(-1)
                                 depth -= 1
                             if info['content-type'] != 'text/x-mime-postamble':
                                 partstack[-1].append(info)
                             if '_TEXT' in _part and info['content-type'] in shown_types:
-                                info['content'] = _part['_TEXT']
+                                if 'html' in info['content-type']:
+                                    info['content'] = self._fix_html(
+                                        md, msg, _part)
+                                else:
+                                    info['content'] = _part['_TEXT']
                             elif info['content-type'].startswith('multipart/'):
                                 info['content'] = []
                                 partstack.append(info['content'])
@@ -499,7 +649,7 @@ class CommandSearch(CLICommand):
                 self.format_html_tr(result[1], columns=self.HTML_COLUMNS)
                 .replace('"', '\\"'), nl='')
         else:
-            self.print(result[0](result[1]).replace('"', '\\"'))
+            self.print(json.dumps(result[0](result[1]))[1:-1], nl='')
         if last:
             self.print('%s"}' % post)
 
@@ -688,6 +838,7 @@ class CommandSearch(CLICommand):
         if not self.raw_results:
             self.raw_results = msg['results']
             self.webui_state['details'] = {}
+            self.webui_state['preferences'] = self.preferences
             for k in self.raw_results:
                 if k not in ('hits', 'tags'):
                     self.webui_state['details'][k] = self.raw_results[k]
@@ -987,6 +1138,26 @@ class CommandShow(CommandSearch):
     def configure(self, *args, **kwargs):
         args = super().configure(*args, **kwargs)
         self.options['--output='] = ['emails']
+
+        if self.options.get('--part='):
+            # This is a hack which lets us set the mime-type and filename of
+            # our response based on the cid: string generated in _fix_html()
+            filename = None
+            details = self.options['--part='][-1].split('/')
+            if len(details) == 2:
+                details, self.filename = details
+            else:
+                details = details[0]
+
+            details = details.split('-', 3)
+            if (len(details) == 4) and (details[0] == 'part'):
+                self.mimetype = '%s/%s' % (details[2], details[3])
+                if (details[2] == 'text') or (details[3] == 'json'):
+                    self.mimetype += '; charset="utf-8"'
+                self.options['--part='] = [details[1]]
+            else:
+                self.mimetype = 'application/octet-stream'
+
         if not self.terms:
             raise Nonsense('Show what?')
         return args
@@ -996,6 +1167,9 @@ class CommandShow(CommandSearch):
             self.options['--format='] = ['raw']
         if self.options['--format='][-1] in ('json', 'sexp'):
             self.options['--entire-thread='][:0] = ['true']
+        if self.options['--format='][-1] in ('html', 'jhtml'):
+            if self.preferences['display_html'] == 'yes':
+                self.options['--include-html'] = ['true']
         return await super().run()
 
 
