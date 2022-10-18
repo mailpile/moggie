@@ -3,6 +3,8 @@ moggie_api = (function() {
 
   var moggie_ws;
   var moggie_ws_callbacks = {};
+  var cache_ver = '?ts=' + Date.now();
+  var next_id = Date.now() % 100000;
 
   function _b(tag, idName, className) {
     var obj = document.createElement(tag);
@@ -15,6 +17,17 @@ moggie_api = (function() {
     }
     document.getElementsByTagName('body')[0].appendChild(obj);
     return obj;
+  }
+  var _added_css = {};
+  function _add_command_css(command) {
+    var url = '/themed/css/'+ command +'.css'+ cache_ver;
+    if (!_added_css[url]) {
+      var obj = document.createElement('link');
+      obj.setAttribute('rel', 'stylesheet');
+      obj.setAttribute('href', url);
+      document.head.appendChild(obj);
+      _added_css[url] = true;
+    }
   }
 
   function setup_websocket(on_connected) {
@@ -80,9 +93,19 @@ moggie_api = (function() {
     document.head.appendChild(sobj);
   }
 
+  function _record_data(elem, data) {
+    _id = next_id++;
+    elem.dataset['moggie'] = _id;
+    moggie_api.records[_id] = data;
+  }
+
   return {
+    records: {},
     page_setup: function() {
       if (ensure_access_token_not_in_url()) {
+        var c1 = document.getElementsByClassName('content')[0];
+        _record_data(c1, moggie_state);
+
         _b('div', 'headbar').innerHTML = "<p>Welcome to Moggie</p>";
         _b('div', 'sidebar').innerHTML = "<p>Yay a sidebar</p>";
 
@@ -91,9 +114,11 @@ moggie_api = (function() {
             var c2 = _b('div', 'content2', 'content');
             c2.innerHTML = '<i>loading...</i>';
             moggie_api.cli('search',
-              ['--format=jhtml', '--limit=50', 'bjarni', 'is:recent'],
+              ['--format=jhtml', '--limit=50', 'in:inbox'],
               function(d) {
-                c2.innerHTML = JSON.parse(d['data'])['html'];
+                response = JSON.parse(d['data']);
+                c2.innerHTML = response['html'];
+                _record_data(c2, response['state']);
               }, 'json');
           });
         });
@@ -111,6 +136,7 @@ moggie_api = (function() {
         command: command,
         args: args
       });
+      _add_command_css(command);
     }
   };
 })();

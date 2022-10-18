@@ -3,6 +3,7 @@ import base64
 import json
 import logging
 import os
+import random
 import re
 import threading
 import traceback
@@ -112,8 +113,10 @@ main app worker. Hints:
 
         # FIXME: Make this customizable somehow
         self.theme = {'_unused_body_bg': '#fff'}
-        self.asset_path = os.path.normpath(os.path.join(
-            os.path.dirname(__file__), '..', '..', 'assets'))
+        self.asset_paths = [
+            os.path.join(self.work_dir, 'assets'),
+            os.path.normpath(os.path.join(
+                os.path.dirname(__file__), '..', '..', 'assets'))]
 
     # Lifecycle
 
@@ -711,7 +714,19 @@ main app worker. Hints:
 
     # Internal API
 
+    def choose_user_background(self):
+        user_bg_path = os.path.join(self.asset_paths[0], 'backgrounds')
+        if os.path.exists(user_bg_path):
+            backgrounds = [
+                fn for fn in os.listdir(user_bg_path)
+                if fn.rsplit('.', 1)[-1] in ('jpg', 'jpeg', 'png')]
+            if backgrounds:
+                bg = random.choice(backgrounds)
+                bg = 'url("/static/backgrounds/%s")' % bg
+                self.theme['body_bg'] = bg + ' no-repeat fixed center'
+
     def apply_theme(self, data):
+        self.choose_user_background()
         def _replacer(m):
             key = str(m.group(2), 'utf-8')
             val = bytes(self.theme.get(key, ''), 'utf-8') or m.group(1)
@@ -719,16 +734,21 @@ main app worker. Hints:
         return re.sub(b': +([^\n;]+); +/\* *@(\S+) *\*/', _replacer, data)
 
     def get_static_asset(self, path, themed=False):
-        filepath = os.path.join(self.asset_path, path)
         mimetype = self.EXT_TO_MIME.get(path.rsplit('.', 1)[-1])
         if '..' in path or not mimetype:
             logging.debug('Rejecting path: %s' % path)
             raise ValueError('Naughty path')
-        with open(filepath, 'rb') as fd:
-            data = fd.read()
-            if themed:
-                data = self.apply_theme(data)
-            return {'mimetype': mimetype, 'body': data, 'ttl': 24*3600}
+        for prefix in self.asset_paths:
+            filepath = os.path.join(prefix, path)
+            try:
+                with open(filepath, 'rb') as fd:
+                    data = fd.read()
+                    if themed:
+                        data = self.apply_theme(data)
+                    return {'mimetype': mimetype, 'body': data, 'ttl': 24*3600}
+            except:
+                pass
+        raise
 
     async def rpc_notify(self, notification, **kwargs):
         only = None

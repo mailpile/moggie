@@ -307,13 +307,13 @@ class CommandSearch(CLICommand):
                     .replace('>', '&gt;'))
             return _textify(r, _html_quote,
                 """
-    <div class=part m-part-id="%(id)s" m-mimetype="%(_ct)s">
+    <div class=part data-part-id="%(id)s" data-mimetype="%(_ct)s">
       %(content)s
     </div>
 """,
                 """\
 <a name="id_%(i)s"></a>
-<div class=email m-id="%(i)s" m-match="%(m)d" m-depth="%(d)d" excluded="%(e)s">
+<div class=email data-id="%(i)s" data-match="%(m)d" data-depth="%(d)d" data-excluded="%(e)s">
   <div class="email-summary">
     <span class="">%(a)s</span>
     <span class="">(%(r)s)</span>
