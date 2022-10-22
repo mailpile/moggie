@@ -176,7 +176,12 @@ class HTMLCleaner(HTMLParser):
         for i, (a, v) in enumerate(attrs):
             if (a == 'href') and v:
                 self.a_hrefs.append(v)
-                if m:
+                if not (v.startswith('http://')
+                        or v.startswith('https://')
+                        or v.startswith('mailto:')
+                        or v.startswith('cid:')):
+                    danger.append(i)
+                elif m:
                     ok, parts = False, v.split('/')
                     for p in parts:
                         if p.endswith(page_domain):
@@ -384,6 +389,7 @@ if __name__ == '__main__':
   <a href="http://google.com.spamsite/">https://www.google.com/</a>
   <a href="https://www.google.com/">google.com</a>
   <a href="https://www.google.com/">www.google.com</a>
+  <a href="javascript:alert('evil')">hooray</a>
   <ul onclick="evil javascript;">
     <li>One
     <li>Two
@@ -413,6 +419,7 @@ if __name__ == '__main__':
         assert('<p></h1' not in cleaned)
         assert('</hr>'   not in cleaned)
         assert('onclick' not in cleaned)
+        assert('javascr' not in cleaned)
 
         assert('<h1>Hello'        in cleaned)
         assert('world &lt; hello' in cleaned)
