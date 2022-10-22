@@ -31,12 +31,12 @@ class CLICommand:
  <link rel=stylesheet href="/themed/css/webui.css?v=%(version)s">
  <link rel=stylesheet href="/themed/css/%(command)s.css?v=%(version)s">
  <script language=javascript>moggie_state = %(state)s;</script>
+ <script language=javascript src='/static/js/moggie_api.js?v=%(version)s' defer></script>
+ <script language=javascript src='/static/js/webui.js?v=%(version)s' defer></script>
 </head><body><div class="content">
 """
     HTML_FOOTER = """
-</div>
-<script language=javascript src='/static/js/webui.js?v=%(version)s'></script>
-</body></html>"""
+</div></body><!-- version=%(version)s --></html>"""
 
     @classmethod
     def Command(cls, wd, args):
