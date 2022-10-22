@@ -1,3 +1,4 @@
+import copy
 import re
 import hashlib
 
@@ -75,16 +76,21 @@ class HTMLCleaner(HTMLParser):
         'div', 'span',
         'b', 'i', 'tt', 'center', 'strong', 'em', 'small', 'smaller', 'big'])
 
-    def __init__(self, data=None, callbacks=None):
+    def __init__(self, data=None, callbacks=None, css_cleaner=None):
         super().__init__()
         self.cleaned = ''
         self.keywords = set([])
         self.tag_stack = []
         self.tags_seen = []
         self.dropped_tags = []
-        self.dropped_attrs = []
+        self.dropped_attrs = set()
         self.a_hrefs = []
         self.img_srcs = []
+        self.attribute_checks = copy.copy(self.ALLOWED_ATTRIBUTES)
+
+        self.css_cleaner = css_cleaner
+        if css_cleaner:
+            self.attribute_checks['style'] = lambda v: True
 
         self.builtins = {
             'body': lambda s,t,a,b: ('div', s._aa(a, 'class', 'mHtmlBody'), b),
@@ -180,7 +186,7 @@ class HTMLCleaner(HTMLParser):
         if danger:
             for i in reversed(danger):
                 a, v, = attrs.pop(i)
-                self.dropped_attrs.append((t, a, v))
+                self.dropped_attrs.add((t, a, v))
             self.saw_danger += 1
         return t, attrs, b
 
@@ -201,14 +207,25 @@ class HTMLCleaner(HTMLParser):
             return t, attrs, b
 
     def _clean_attributes(self, tag, attrs):
+        saw_style = False
+        css_cleaner = self.css_cleaner
         for a, v in attrs:
             if a.startswith('on'):
                 self.saw_danger += 1
-            validator = self.ALLOWED_ATTRIBUTES.get(a)
+            validator = self.attribute_checks.get(a)
             if validator and validator(v):
-                yield a, v
+                if css_cleaner and (a == 'style'):
+                    c = css_cleaner.copy().parse_styles(v)
+                    v = c.apply_styles(self.tag_stack)
+                    saw_style = True
+                if v:
+                    yield a, v
             else:
-                self.dropped_attrs.append((tag, a, v))
+                self.dropped_attrs.add((tag, a, v))
+        if css_cleaner and not saw_style:
+            style = css_cleaner.apply_styles(self.tag_stack)
+            if style:
+                yield ('style', style)
 
     def _render_attrs(self, attrs):
         return ''.join(' %s=%s' % (a, self._quote_attr(v))
@@ -226,24 +243,38 @@ class HTMLCleaner(HTMLParser):
                     self.handle_endtag(self.tag_stack[-1][0])
 
         if tag == self.tag_stack[-1][0]:
-            t, a, b = self.tag_stack.pop(-1)
+            t, a, b = self.tag_stack[-1]
             for cbset in (self.builtins, self.callbacks):
                 cb = cbset.get(t)
                 if (cb is not None) and (t not in self.SUPPRESSED_TAGS):
                     t, a, b = cb(self, t, a, b)
 
+            if (t == 'style') and self.css_cleaner:
+                self.css_cleaner.parse(b)
+
             if t and t in self.SUPPRESSED_TAGS:
                 self.dropped_tags.append(tag)
-            elif t:
-                a = self._render_attrs(self._clean_attributes(t, a))
-                if t in self.SINGLETON_TAGS:
-                    regenerated = '<%s%s>' % (t, a)
-                else:
-                    regenerated = '<%s%s>%s</%s>' % (t, a, b, t)
-                if self.tag_stack:
-                    self.tag_stack[-1][-1] += regenerated
-                else:
-                    self.cleaned += regenerated
+                self.tag_stack.pop(-1)
+                return
+
+            if not t:
+                self.tag_stack.pop(-1)
+                return
+
+            # Note: this depends on self.tag_stack being intact for
+            #       correct application of global styles.
+            a = self._render_attrs(self._clean_attributes(t, a))
+
+            if t in self.SINGLETON_TAGS:
+                regenerated = '<%s%s>' % (t, a)
+            else:
+                regenerated = '<%s%s>%s</%s>' % (t, a, b, t)
+
+            self.tag_stack.pop(-1)
+            if self.tag_stack:
+                self.tag_stack[-1][-1] += regenerated
+            else:
+                self.cleaned += regenerated
 
     def handle_data(self, data):
         """
@@ -288,7 +319,7 @@ class HTMLCleaner(HTMLParser):
   * Encountered tags: %s
   * Dropped tags: %s
   * Dropped attributes: %s
-
+%s
 -->"""  %  (self.saw_danger, self.force_closed,
             ', '.join(self.keywords),
             len(set(self.a_hrefs)),
@@ -297,7 +328,9 @@ class HTMLCleaner(HTMLParser):
             ', '.join(self._quote(t) for t in self.dropped_tags),
             ''.join('\n    * (%s) %s=%s'
                 % (da[0], self._quote(da[1] or ''), self._quote(da[2] or ''))
-                for da in self.dropped_attrs))
+                for da in self.dropped_attrs),
+            self._quote(self.css_cleaner.render_report())
+                if self.css_cleaner else '')
 
     def _make_html_keywords(self):
         def _h16(stuff):

@@ -42,6 +42,7 @@ from ...config import AppConfig
 from ...email.metadata import Metadata
 from ...jmap.requests import RequestSearch, RequestMailbox, RequestEmail
 from ...security.html import HTMLCleaner
+from ...security.css import CSSCleaner
 from ...storage.exporters.mbox import MboxExporter
 from ...storage.exporters.maildir import MaildirExporter, EmlExporter
 from ...util.dumbcode import dumb_decode
@@ -350,10 +351,12 @@ class CommandSearch(CLICommand):
             #        Load content over Tor?
             #        Redirect clicks through some sort of security checker?
 
-        return HTMLCleaner(part['_TEXT'], callbacks={
+        return HTMLCleaner(part['_TEXT'],
+            callbacks={
                 'img': img_fixup,
                 'a': a_fixup
-            }).clean()
+            },
+            css_cleaner=CSSCleaner()).clean()
 
     async def as_emails(self, thread):
         def _textify(r, prefer, esc, part_fmt, msg_fmt, hdr_fmt='%(h)s: %(v)s'):
