@@ -1,6 +1,13 @@
 var moggie_webui;
 moggie_webui = (function() {
 
+  var dompurify_config = {
+      FORBID_TAGS: ['style', 'script'],
+      ALLOW_DATA_ATTR: true,
+      ALLOW_UNKNOWN_PROTOCOLS: false,
+      WHOLE_DOCUMENT: false
+  };
+
   function _b(tag, idName, className) {
     var obj = document.createElement(tag);
     if (idName) {
@@ -28,7 +35,8 @@ moggie_webui = (function() {
         content_div.innerHTML = '<i class=loading>Loading...</i>';
       } else {
         response = JSON.parse(ev['data']);
-        content_div.innerHTML = response['html'];
+        content_div.innerHTML = DOMPurify.sanitize(
+          response['html'], dompurify_config);
         moggie_api.record_data(content_div, response['state']);
       }
     },
@@ -43,25 +51,27 @@ moggie_webui = (function() {
 
         with_script('/static/js/jquery3.js', function() {
           moggie_api.setup_websocket(function() {
-            $('a').click(function(ev) {
-              var target = $(this).attr('href');
-              if (target.startsWith('/cli')) {
-                console.log('clicked: ' + this);
-                ev.preventDefault();
-                var args = target.substring(5).split('/')
-                var cmd = args.shift();
-                args.push('--format=jhtml');
-                moggie_api.cli(cmd, args, moggie_webui.replace_content); 
-                return false;
-              }
-              return true;
-            });
+            with_script('/static/js/purify.min.js', function() {
+              $('a').click(function(ev) {
+                var target = $(this).attr('href');
+                if (target.startsWith('/cli')) {
+                  console.log('clicked: ' + this);
+                  ev.preventDefault();
+                  var args = target.substring(5).split('/')
+                  var cmd = args.shift();
+                  args.push('--format=jhtml');
+                  moggie_api.cli(cmd, args, moggie_webui.replace_content);
+                  return false;
+                }
+                return true;
+              });
 /*
             var c2 = _b('div', 'content2', 'content');
             moggie_api.cli('search',
               ['--format=jhtml', '--limit=50', 'in:inbox'],
               moggie_webui.replace_content);
  */
+            });
           });
         });
       }
