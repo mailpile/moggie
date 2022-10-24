@@ -20,14 +20,21 @@ moggie_api = (function() {
     return obj;
   }
 
-  function add_command_css(command) {
+  function with_css(url, next_steps) {
+    var obj = document.createElement('link');
+    obj.setAttribute('rel', 'stylesheet');
+    obj.setAttribute('href', url);
+    obj.onload = next_steps;
+    document.head.appendChild(obj);
+  }
+
+  function add_command_css(command, next_steps) {
     var url = '/themed/css/'+ command +'.css'+ cache_ver;
-    if (!added_css[url]) {
-      var obj = document.createElement('link');
-      obj.setAttribute('rel', 'stylesheet');
-      obj.setAttribute('href', url);
-      document.head.appendChild(obj);
+    if (added_css[url]) {
+      next_steps();
+    } else {
       added_css[url] = true;
+      with_css(url, next_steps);
     }
   }
 
@@ -100,14 +107,15 @@ moggie_api = (function() {
       var now = Date.now();
       var req_id = 'cli-' + now;
       moggie_ws_callbacks[req_id] = [now, 'cli:'+command, callback];
-      callback('prep');
-      moggie_ws.send_json({
-        prototype: 'cli',
-        req_id: req_id,
-        command: command,
-        args: args
+      add_command_css(command, function() {
+        callback('prep');
+        moggie_ws.send_json({
+          prototype: 'cli',
+          req_id: req_id,
+          command: command,
+          args: args
+        });
       });
-      add_command_css(command);
     }
   };
 })();

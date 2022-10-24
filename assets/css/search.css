@@ -66,6 +66,9 @@ div.email table.email-header th {
 div.email table.email-header tr.email-subject td {
   font-weight: bold;
 }
+div.email div.email-body div.mPartInline {
+  padding: 0 5px;
+}
 div.email div.email-body .mDownload {
   float: right;
 }

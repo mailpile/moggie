@@ -175,6 +175,9 @@ class HTMLCleaner(HTMLParser):
         danger = []
         for i, (a, v) in enumerate(attrs):
             if (a == 'href') and v:
+                # FIXME: Should we just rewrite all href= links into something
+                #        which requires Javascript to undo? This IS how users
+                #        get phished, so extra steps here are justified.
                 self.a_hrefs.append(v)
                 if not (v.startswith('http://')
                         or v.startswith('https://')
@@ -190,7 +193,7 @@ class HTMLCleaner(HTMLParser):
                         danger.append(i)
         if danger:
             for i in reversed(danger):
-                a, v, = attrs.pop(i)
+                a, v = attrs.pop(i)
                 self.dropped_attrs.add((t, a, v))
             self.saw_danger += 1
         return t, attrs, b
