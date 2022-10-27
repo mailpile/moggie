@@ -17,8 +17,10 @@ class MessagePart(dict):
     of the source message content around until it is explicity asked to
     provide data (raw or decoded).
     """
+    ESCAPED_FROM = re.compile(r'(^|\n)\>(\>*From)')
+
     def __init__(self, msg_bin, fix_mbox_from=False):
-        self.msg_bin = msg_bin
+        self.msg_bin = [msg_bin]
         self.fix_mbox_from = fix_mbox_from
         self.hend = len(msg_bin)
         self.eol = b'\n'
@@ -35,26 +37,27 @@ class MessagePart(dict):
 
         self.update(parse_header(msg_bin[:self.hend]))
 
-    def _find_parts_re(self, boundary):
+    def _find_parts_re(self, boundary, buf_idx=0):
         boundary = self.eol + b'--' + bytes(boundary, 'latin-1')
+        msg_bin = self.msg_bin[buf_idx]
         body_beg = self.hend + 2*len(self.eol)
-        body_end = len(self.msg_bin)
-        bounds = list(re.finditer(boundary + b'(--)?[ \t]*\r?\n?', self.msg_bin))
+        body_end = len(msg_bin)
+        bounds = list(re.finditer(boundary + b'(--)?[ \t]*\r?\n?', msg_bin))
         begs = [body_beg] + [m.span()[1] for m in bounds]
         ends = [m.span()[0] for m in bounds] + [body_end]
         return begs, ends
 
-    def _find_parts(self, boundary):
+    def _find_parts(self, boundary, buf_idx=0):
         """
         This does roughly the same thing as _find_parts_re, but avoids the
         regexp engine, because of the risk that boundary strings contain
         regexp syntax. It's also even faster for large messages.
         """
+        buf = self.msg_bin[buf_idx]
         boundary = self.eol + b'--' + bytes(boundary, 'latin-1')
         body_beg = self.hend + 2*len(self.eol)
-        body_end = len(self.msg_bin)
+        body_end = len(buf)
 
-        buf = self.msg_bin
         last_b = 0
         bounds = []
         stop = False
@@ -84,7 +87,7 @@ class MessagePart(dict):
         ends = [b for b,e in bounds] + [body_end]
         return begs, ends
 
-    def with_structure(self, recurse=True):
+    def with_structure(self, recurse=True, buf_idx=0):
         """
         Add _PARTS to the parse tree: a list of dicts, each of which
         represents a part of the message. The 0th element of the list is
@@ -100,10 +103,11 @@ class MessagePart(dict):
 
         ct, ctp = (self.get('content-type') or ('text/plain', {}))
         body_beg = self.hend + 2*len(self.eol)
-        body_end = len(self.msg_bin)
+        body_end = len(self.msg_bin[buf_idx])
         parts.append({
             'content-transfer-encoding': self.get('content-transfer-encoding', '8bit'),
             'content-type': [ct, ctp],
+            '_BUF': buf_idx,
             '_BYTES': [0, body_beg, body_end],
             '_DEPTH': 0})
 
@@ -115,6 +119,7 @@ class MessagePart(dict):
                     continue
                 parts[0]['_PARTS'] += 1
                 part = {
+                    '_BUF': buf_idx,
                     '_BYTES': [beg, beg, end],
                     '_DEPTH': 1,
                     'content-transfer-encoding': '8bit'}
@@ -128,10 +133,11 @@ class MessagePart(dict):
                         self._raw(part), self.fix_mbox_from
                         ).with_structure(recurse)
                     for p in sub['_PARTS']:
+                        p['_BUF'] = part['_BUF']
                         p['_BYTES'][0] += part['_BYTES'][0]
                         p['_BYTES'][1] += part['_BYTES'][0]
                         p['_BYTES'][2] += part['_BYTES'][0]
-                        p['_DEPTH'] += 1
+                        p['_DEPTH'] += part['_DEPTH']
                     part.update(sub)
                     part.update(sub['_PARTS'][0])
                     del part['_PARTS']
@@ -144,14 +150,13 @@ class MessagePart(dict):
             #   - Quoted content
             #   - Forwarded messages
             #   - Inline PGP encrypted/signed blobs
-            # FIXME: Obey self.fix_mbox_from!
             pass
 
         elif ct == 'message/rfc822':
             # FIXME:
             #   - Is this a delivery failure report?
             #   - Is recursively parsing this anything but a recipe for bugs?
-            # FIXME: Obey self.fix_mbox_from!
+            # FIXME: Obey self.fix_mbox_from ?
             pass
 
         elif self.get('content-id'):
@@ -164,7 +169,7 @@ class MessagePart(dict):
         return self
 
     def _raw(self, part, header=False):
-        return self.msg_bin[
+        return self.msg_bin[part['_BUF']][
             part['_BYTES'][0 if header else 1]:part['_BYTES'][2]]
 
     def _bytes(self, part):
@@ -195,7 +200,10 @@ class MessagePart(dict):
         charsets = [ctp.get('charset', 'latin-1'), 'utf-8', 'latin-1']
         for cs in charsets:
             try:
-                return str(self._bytes(part), cs)
+                text = str(self._bytes(part), cs)
+                if self.fix_mbox_from:
+                    text = self.ESCAPED_FROM.sub(r'\1\2', text)
+                return text
             except (UnicodeDecodeError, LookupError, binascii.Error) as e:
                 pass
         return None
@@ -258,7 +266,7 @@ class MessagePart(dict):
         """
         Add a _RAW elements for the complete, unparsed message.
         """
-        self['_RAW'] = str(base64.b64encode(self.msg_bin), 'latin-1')
+        self['_RAW'] = str(base64.b64encode(self.msg_bin[0]), 'latin-1')
         return self
 
     def with_raw(self, multipart=False, recurse=True):
@@ -275,37 +283,101 @@ class MessagePart(dict):
                     base64.b64encode(self._raw(part, header=True)), 'latin-1')
         return self
 
-    def decrypt(self, decryptors):
-        # FIXME: Decrypt the content?
-        #
-        #   .. this can work pretty seamlessly by extending our msg_bin
-        #      object with the unencrypted content, and generating parts
-        #      with byte-ranges that now go beyond the end of the original
-        #      messages.
-        #
+    @classmethod
+    def iter_parts(cls, ptree, full=False):
+        idx = 0
+        parts = ptree.get('_PARTS', [])
+        if full:
+            yield from iter(parts)
+            return
+        while idx < len(parts):
+            while '_REPLACE' in parts[idx]:
+                idx = parts[idx]['_REPLACE']
+            yield parts[idx]
+            while '_REPLACED' in parts[idx]:
+                idx = parts[idx]['_REPLACED']
+            if parts[idx].get('_LAST'):
+                return
+            idx += 1
+
+    def decrypt(self, decryptors, skip=None, max_passes=2):
+        """
+        This will decrypt any encrypted parts, appending decrypted blobs
+        to the self.msg_bin list and updating the _PARTS list to reference
+        their contents. Decrypted parts are appended to the end of the
+        _PARTS list, but _REPLACE and _REPLACED markers are added to suggest
+        the logical order of the results after decrypting.
+
+        Each pass of this function looks at each part exactly once; since
+        people can nest signed and encrypted parts inside each other, it
+        makes sense to allow multiple passes. The default is two.
+        """
         self.with_structure()
         new_parts = []
+        non_mime = 0   # Note: Resets to zero on each pass. This is sane-ish,
+                       #       Because the second pass can only contain output
+                       # from decryption during the first, so the entire Nth
+                       # pass can be considered part of pass 1. But this is
+                       # still kinda wrong. FIXME?
+        changed = 0
         for i, part in enumerate(self['_PARTS']):
+            if skip and (i <= skip):
+                continue
             ct, ctp = part.get('content-type', ['', {}])
-            for decryptor in decryptors.get(ct, []):
-                cleartext = decryptor(self._bytes(part), part, self)
-                if cleartext:
-                    # - Append the cleartext to our binary buffer
-                    # - Create a new MessagePart with the contents
-                    # break: we don't decrypt the same part twice.
+            first = ':first' if (non_mime < 1) else ''
+            if not (ct.startswith('multipart/') or ct == 'text/x-mime-preamble'):
+                non_mime += 1
+            for decryptor in decryptors.get(ct+first, decryptors.get(ct, [])):
+                try:
+                    decrypted = decryptor(self._bytes(part), i, part, self)
+                except:
+                    import traceback
+                    traceback.print_exc()
+                    decrypted = None
+                if decrypted is not None:
+                    replace, info, cleartext = decrypted
+                    self.msg_bin.append(cleartext)
+                    info['_BUF'] = len(self.msg_bin) - 1
+                    info['_BYTES'] = [0, 0, len(cleartext)]
+                    info['_DEPTH'] = part['_DEPTH']
+                    info['content-transfer-encoding'] = '8bit'
+                    new_parts.append((replace, info))
+                    changed += 1
                     break
-        for i, part in new_parts:
-            pass  # FIXME: Insert new parts into main stream.
+        if not skip:
+            part['_LAST'] = True
+        processed = i
 
-        return self
+        for b_e, part in new_parts:
+            if b_e and part:
+                b, e = b_e
+                parts = [part]
+                if part.get('content-type', [''])[0].startswith('multipart/'):
+                    sub = MessagePart(self._raw(part)).with_structure(True)
+                    for p in sub['_PARTS']:
+                        p['_BUF'] = part['_BUF']
+                        p['_BYTES'][0] += part['_BYTES'][0]
+                        p['_BYTES'][1] += part['_BYTES'][0]
+                        p['_BYTES'][2] += part['_BYTES'][0]
+                        p['_DEPTH'] += part['_DEPTH']
+                    part.update(sub)
+                    part.update(sub['_PARTS'][0])
+                    del part['_PARTS']
+                    parts.extend(sub['_PARTS'][1:])
 
-    def check_signatures(self):
-        self.with_structure()
-        for part in self['_PARTS']:
-            ct, ctp = part.get('content-type', ['', {}])
-            if ct == 'multipart/signed':
-                pass
-        return self
+                self['_PARTS'][b]['_REPLACE'] = len(self['_PARTS'])
+                self['_PARTS'].extend(parts)
+                self['_PARTS'][-1]['_REPLACED'] = e-1
+
+                changed += 1
+
+        self['_DECRYPTED'] = self.get('_DECRYPTED', 0) + changed
+        if changed and (max_passes > 1):
+            return self.decrypt(decryptors,
+                skip=processed,
+                max_passes=(max_passes - 1))
+        else:
+            return self
 
 
 def parse_message(msg_bin, fix_mbox_from=False):
@@ -313,8 +385,10 @@ def parse_message(msg_bin, fix_mbox_from=False):
 
 
 if __name__ == '__main__':
-    import json
+    import copy, json, sys
+    from ..util.dumbcode import *
     msg = b"""\
+From bre  blah blah blah
 From: Bjarni <bre@example.org>
 To: Wilfred <wilfred@example.org>
 Nothing: Yet
@@ -340,7 +414,8 @@ Content-Type: text/html; charset=wonky
 Content-Transfer-Encoding: quoted-printable
 
 <p>There are _many_ e-mails out=20there, but=20this one is mine. =
-It is not very simple.</p>
+It is not very simple.<br>
+>From here to the moon!</p>
 
 --ohai
 Content-Type: application/octet-stream
@@ -349,20 +424,78 @@ Content-Transfer-Encoding: base64
 AAAA==
 
 --ohai--
+--helloworld
+Content-Type: multipart/encrypted; boundary="encwhee"; protocol="fake"
+
+--encwhee
+Content-Type: application/fake-encrypted
+
+Version: 1
+
+--encwhee
+Content-Type: application/octet-stream
+
+EE:Content-Type: multipart/mixed; boundary=eeee
+EE:
+EE:--eeee
+EE:Content-Type: text/plain; charset="utf-8"
+EE:
+EE:These are the secret words. It's encrypted, I promise!
+EE:
+EE:--eeee--
+--encwhee--
 --helloworld--
 
 Trailing garbage!
 """
-    p = parse_message(msg).with_structure()
+    def decrypt_substitution(part_bin, p_idx, part, parent):
+        new_data = part_bin.replace(b' are ', b' were ')
+        if new_data == part_bin:
+            return None
+        new_part = {
+            'content-decrypted': ['substitution'] + part['content-type'],
+            'content-type': ['text/plain', {'charset': 'utf-8'}]}
+        return (p_idx, p_idx+1), new_part, new_data
 
+    def decrypt_multipart_encrypted(part_bin, p_idx, part, parent):
+        if part['content-type'][1].get('protocol') != 'fake':
+            print('Not fake, boo')
+            return None
+
+        mpart = parent['_PARTS'][p_idx + 1]
+        ppart = parent['_PARTS'][p_idx + 2]
+        mpart_content = str(parent._bytes(mpart), 'latin-1').strip()
+        if (mpart_content.lower().split() != ['version:', '1']
+                or ppart['content-type'][0] != 'application/octet-stream'):
+            return None
+
+        data = parent._bytes(ppart).replace(b'EE:', b'')
+        new_part = {
+            'content-decrypted': ['multipart-enc'] + part['content-type'],
+            'content-type': ['multipart/mixed', {}]}
+
+        return (p_idx, p_idx+3), new_part, data
+
+    p = parse_message(msg, fix_mbox_from=True).with_structure()
+    assert(list(p.iter_parts(p)) == list(p.iter_parts(p, full=True)))
+    assert(len(list(p.iter_parts(p))) == 10)
+
+    p.decrypt({
+        'multipart/encrypted': [decrypt_multipart_encrypted],
+        'text/plain:first': [decrypt_substitution]})
+    assert(len(list(p.iter_parts(p))) == 9)  # Version: 1 disappears
+
+    assert(p.get('_DECRYPTED') == 4)
     assert(p.part_text(0) is None)
     assert(p.part_text(0, mime_types=('multipart/mixed',)) is not None)
     assert(p.part_text(1) is not None)  # Preamble is text
     assert(p.part_text(2) is None)
     assert(p.part_text(3).startswith('There are many e-mails out there,'))
     assert(p.part_text(4).startswith('<p>There are _many_ e-mails out there'))
-    assert(p.part_text(5) is None)
-    assert(p.part_text(6) is not None)
+    assert('\nFrom here to the moon' in p.part_text(4))  # fix_mbox_from
+    assert(p.part_text(6) is None)
+    assert(p.part_text(7) is None)
+    assert(p.part_text(8) is None)
 
     assert('_TEXT' not in p['_PARTS'][3])
     assert('_DATA' not in p['_PARTS'][3])
@@ -370,15 +503,23 @@ Trailing garbage!
 
     assert('_DATA' not in p['_PARTS'][3])
     assert(p['_PARTS'][3]['_TEXT'].startswith('There are many'))
+    assert(p['_PARTS'][10]['_TEXT'].startswith('There were many'))
     assert(p['_PARTS'][4]['_TEXT'].startswith('<p>There are _many_'))
+    assert(p['_PARTS'][12]['_TEXT'].startswith('These are the secret'))
+    # We asserted :first on the are->were decryptor, so no 13th part.
+    #assert(p['_PARTS'][13]['_TEXT'].startswith('These were the secret'))
+    assert(len(p['_PARTS']) == 13)
 
-    assert('_TEXT' not in p['_PARTS'][6])
-    assert('_DATA' in p['_PARTS'][6])
-    assert('Trailing garbage!' in p.part_text(6))
+    assert('_TEXT' not in p['_PARTS'][9])
+    assert('_DATA' in p['_PARTS'][9])
+    assert('Trailing garbage!' in p.part_text(9))
     print('Tests OK')
 
     from email.parser import BytesParser, BytesFeedParser
     import time
+
+    #print('%s' % json.dumps(p, indent=2))
+    #sys.exit(0)
 
     for size in (1, 100, 1000, 10000):
         msg2 = msg.replace(b'AAAA==',
@@ -395,4 +536,3 @@ Trailing garbage!
         print('Perf: %.2fs/1k %d-byte e-mail (vs. %.2fs/1k)'
             % (t2-t1, len(msg2), t1-t0))
 
-    #print('%s' % json.dumps(p, indent=2))
