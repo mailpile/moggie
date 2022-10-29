@@ -1,6 +1,8 @@
 import copy
 import datetime
+import io
 import os
+import tarfile
 import time
 import zipfile
 
@@ -12,9 +14,12 @@ SEQ = 0
 
 class ZipWriter:
     def __init__(self, fd, d_acl=0o040750, f_acl=0o000640):
-        self.zf = zipfile.ZipFile(fd, mode='w')
+        self.zf = self._create(fd)
         self.d_acl = d_acl
         self.f_acl = f_acl
+
+    def _create(self, fd):
+        return zipfile.ZipFile(fd, mode='w')
 
     def _tt(self, ts):
         return datetime.datetime.fromtimestamp(ts).timetuple()
@@ -38,7 +43,29 @@ class ZipWriter:
 
 
 class TarWriter(ZipWriter):
-    pass
+    def _create(self, fd):
+        return tarfile.open(fileobj=fd, mode='w:gz')
+
+    def mkdir(self, dn, ts):
+        dn = dn if (dn[-1:] == '/') else (dn + '/')
+        dirent = tarfile.TarInfo(name=dn)
+        dirent.type = tarfile.DIRTYPE
+        dirent.size = 0
+        dirent.mtime = ts
+        dirent.mode = self.d_acl
+        dirent.uname = 'mailpile'
+        dirent.gname = 'mailpile'
+        self.zf.addfile(dirent)
+
+    def add_file(self, fn, ts, data):
+        fi = tarfile.TarInfo(name=fn)
+        fi.type = tarfile.REGTYPE
+        fi.size = len(data)
+        fi.mtime = ts
+        fi.mode = self.f_acl
+        fi.uname = 'mailpile'
+        fi.gname = 'mailpile'
+        self.zf.addfile(fi, io.BytesIO(data))
 
 
 class MaildirExporter(BaseExporter):
@@ -49,6 +76,7 @@ class MaildirExporter(BaseExporter):
     """
     AS_ZIP = 0
     AS_TAR = 1
+    AS_DEFAULT = AS_TAR
     SUBDIRS = ('cur', 'new', 'tmp')
     PREFIX = 'cur/'
     SUFFIX = ''
@@ -62,7 +90,9 @@ class MaildirExporter(BaseExporter):
         'flagged':   'F',
         'trash':     'T'}
 
-    def __init__(self, real_fd, output=AS_ZIP):
+    def __init__(self, real_fd, dirname=None, output=None):
+        if output is None:
+            output = self.AS_DEFAULT
         if output == self.AS_TAR:
             ocls = TarWriter
             self.sep = ':'
@@ -73,10 +103,21 @@ class MaildirExporter(BaseExporter):
         now = int(time.time())
         self.real_fd = real_fd
         self.writer = ocls(real_fd)
+
+        if dirname is None:
+            dirname = self.default_basedir()
+        self.basedir = dirname
+
+        if self.basedir:
+            self.writer.mkdir(self.basedir, now)
+            self.basedir += '/'
         for sub in self.SUBDIRS:
-            self.writer.mkdir(sub, now)
+            self.writer.mkdir(self.basedir + sub, now)
 
         super().__init__(self.writer)
+
+    def default_basedir(self):
+        return 'maildir.%x' % int(time.time())
 
     def flags(self, tags):
         flags = set()
@@ -95,8 +136,9 @@ class MaildirExporter(BaseExporter):
         tags = copy.copy(metadata.more.get('tags', []))
         taglist = ','.join(tags)
 
-        filename = ('%s%d.%d.moggie=%s%s%s'
-            % (self.PREFIX, ts, SEQ, taglist, self.flags(tags), self.SUFFIX))
+        filename = '%s%s%d.%d.moggie=%s%s%s' % (
+            self.basedir, self.PREFIX,
+            ts, SEQ, taglist, self.flags(tags), self.SUFFIX)
 
         return (filename, ts, message)
 
@@ -109,7 +151,12 @@ class EmlExporter(MaildirExporter):
     PREFIX = ''
     SUFFIX = '.eml'
 
+    AS_DEFAULT = MaildirExporter.AS_ZIP
+
     def flags(self, tags):
+        return ''
+
+    def default_basedir(self):
         return ''
 
     def transform(self, metadata, message):
