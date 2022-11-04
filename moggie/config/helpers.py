@@ -1,4 +1,7 @@
+import re
 from configparser import ConfigParser, NoOptionError, _UNSET
+
+from ..util.dumbcode import *
 
 
 def cfg_bool(val):
@@ -23,7 +26,7 @@ class ListItemProxy(list):
         try:
             data = ac.get(section, item, permerror=True).strip()
             if data:
-                items = [i.strip() for i in data.split(self.delim)]
+                items = [self._decode(i) for i in data.split(self.delim)]
                 super().extend(i for i in items if i)
         except PermissionError as e:
             self.access_denied = e
@@ -32,6 +35,9 @@ class ListItemProxy(list):
 
     config = property(lambda s: s._config)
     config_key = property(lambda s: s._key)
+
+    def _decode(self, val):
+        return val.strip()
 
     def __repr__(self):
         data = '(encrypted)' if self.access_denied else super().__repr__()
@@ -93,6 +99,29 @@ class ListItemProxy(list):
             raise PermissionError(self.access_denied)
         super().clear()
         self._write_back()
+
+
+class EncodingListItemProxy(ListItemProxy):
+    CLEAR_OK = re.compile(r'^[a-zA-Z0-9 @\\/\.,:;_\-]*$')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.esc_delim = ''.join('%%%2.2X' % ord(c) for c in self.delim)
+
+    def _decode(self, val):
+        if val[:1] == '=':
+            return dumb_decode(val[1:])
+        return val.strip()
+
+    def _validate(self, val):
+        if isinstance(val, bytes):
+            try:
+                val = str(val, 'utf-8')
+            except:
+                return '=' + dumb_encode_asc(val)
+        if not self.CLEAR_OK.match(val):
+            val = '=' + dumb_encode_asc(val).replace(self.delim, self.esc_delim)
+        return val
 
 
 class DictItemProxy(dict):

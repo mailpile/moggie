@@ -20,7 +20,8 @@ from passcrow.client import PasscrowClientPolicy, PasscrowClient
 from ..crypto.aes_utils import make_aes_key
 from ..crypto.passphrases import stretch_with_scrypt, generate_passcode
 from ..util.dumbcode import dumb_decode, dumb_encode_asc
-from .helpers import cfg_bool, ListItemProxy, DictItemProxy, ConfigSectionProxy
+from .helpers import cfg_bool, ListItemProxy, EncodingListItemProxy
+from .helpers import DictItemProxy, ConfigSectionProxy
 
 
 APPNAME    = 'moggie'  #'mailpile'
@@ -299,6 +300,17 @@ class AccountConfig(ConfigSectionProxy):
         'sendmail_username': str,  # unset=no auth, special: ==mailbox_username
         'sendmail_password': str,  # unset=no pass, special: ==mailbox_password
         'description': str}
+    _EXTRA_KEYS = ['addresses', 'watched', 'archives']
+
+    def __init__(self, *args, **kwarg):
+        super().__init__(*args, **kwarg)
+        self._watched = EncodingListItemProxy(self.config, self.config_key, 'watched')
+        self._archives = EncodingListItemProxy(self.config, self.config_key, 'archives')
+        self._addresses = EncodingListItemProxy(self.config, self.config_key, 'addresses')
+
+    watched = property(lambda self: self._watched)
+    archives = property(lambda self: self._archives)
+    addresses = property(lambda self: self._addresses)
 
     def get_tags(self):
         tags = []
@@ -322,8 +334,8 @@ class ContextConfig(ConfigSectionProxy):
     def __init__(self, *args, **kwarg):
         super().__init__(*args, **kwarg)
         self._ids_list = ListItemProxy(self.config, self.config_key, 'identities')
-        self._tags_list = ListItemProxy(self.config, self.config_key, 'tags')
-        self._etags_list = ListItemProxy(self.config, self.config_key, 'extra_tags')
+        self._tags_list = EncodingListItemProxy(self.config, self.config_key, 'tags')
+        self._etags_list = EncodingListItemProxy(self.config, self.config_key, 'extra_tags')
         self._flags_list = ListItemProxy(self.config, self.config_key, 'flags')
         self._accts_list = ListItemProxy(self.config, self.config_key, 'accounts')
 
@@ -552,6 +564,17 @@ class AppConfig(ConfigParser):
             self[czero].update({'name': 'My Mail'})
             self.do_not_save()
             return ContextConfig(self, czero)
+
+    def get_account(self, which):
+        if which.startswith(self.ACCOUNT_PREFIX):
+            if which in self:
+                return AccountConfig(self, which)
+        for p in self:
+            if p.startswith(self.ACCOUNT_PREFIX):
+                acct = AccountConfig(self, p)
+                if which == acct.name or which in acct.addresses:
+                    return acct
+        return None
 
     def access_from_token(self, token, _raise=True):
         with self:
@@ -824,12 +847,11 @@ if __name__ == '__main__':
         'signature': 'Multiline\nsignature'})
 
     ac[ac.CONTEXT_PREFIX + '1'].update({
-        'username': 'Bjarni',
-        'context.1.foo': 'bar',
-        'context.2.foo': 'bar',
-        'context.1.account.1.password': 'hello world',
-        'context.1.account.2.password': 'hello world',
-        'context.2.account.2.password': 'hello world'})
+        'username': 'Bjarni'})
+
+    ac[ac.ACCOUNT_PREFIX + '1'].update({
+        'name': 'Bjarni',
+        'addresses': 'bre@example.org'})
 
     ac.set_private(ac.CONTEXT_PREFIX + '1', 'password', 'very secret password')
     ac.set(ac.CONTEXT_PREFIX + '1', 'password', 'another very secret password')
@@ -864,6 +886,13 @@ if __name__ == '__main__':
     assert(len(old_keys) == 2)
     assert(len(old_keys[0]) > 20)
     assert(len(old_keys[1]) > 20)
+
+    acct = ac.get_account('bre@example.org')
+    acct.addresses.append(b'bre2@example.org')
+    assert(acct.addresses[0] == 'bre@example.org')
+    assert(acct.addresses[1] == 'bre2@example.org')
+    assert('bre@example.org' in ac.get_account('Bjarni').addresses)
+    assert('bre@example.org' in ac.get_account('Account 1').addresses)
 
     ac.write(sys.stderr)
     os.remove('/tmp/config.rc')
