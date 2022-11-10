@@ -20,3 +20,6 @@
 [submodule "submodules/pyqrcode"]
 	path = submodules/pyqrcode
 	url = https://github.com/mnooner256/pyqrcode
+[submodule "submodules/pyzipper"]
+	path = submodules/pyzipper
+	url = https://github.com/BjarniRunar/pyzipper

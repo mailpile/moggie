@@ -56,6 +56,10 @@ class ImportWorker(BaseWorker):
         self.functions.update({
             b'import_search': (True, self.api_import_search)})
 
+        self.filters = FilterEngine().load(
+            os.path.normpath(os.path.join(status_dir, '..', 'filters')),
+            quick=False, create=True)
+
         self.fs = fs_worker
         self.app = app_worker
         self.search = search_worker
@@ -68,6 +72,19 @@ class ImportWorker(BaseWorker):
 
         assert(self.app and self.search)
 
+    def _ns_scope(self, tag_namespace, tags, _all=True):
+        if not tag_namespace:
+            return tags
+        nt = ['@%s' % tag_namespace] if (_all and tag_namespace) else []
+        if tags:
+            if tag_namespace:
+                nt.extend(
+                    t if ('@' in t) else ('%s@%s' % (t, tag_namespace))
+                    for t in tags)
+            else:
+                nt.extend(tags)
+        return nt
+
     def on_tick(self):
         if not self.idle_running and self.progress is None:
             self.progress = self._no_progress(None)
@@ -78,7 +95,8 @@ class ImportWorker(BaseWorker):
             logging.info('Launching full import in background.')
             def _full_index():
                 try:
-                    self._index_full_messages(None, self.progress)
+                    for tag_ns in [None]:  # FIXME
+                        self._index_full_messages(None, tag_ns, self.progress)
                 except Exception as e:
                     logging.exception('Indexing failed: %s' % e)
                 finally:
@@ -86,17 +104,19 @@ class ImportWorker(BaseWorker):
                     self.idle_running = False
             self.add_background_job(_full_index, which='full')
 
-    def import_search(self, request_obj, initial_tags, force=False, full=False):
+    def import_search(self,
+            request_obj, initial_tags,
+            tag_namespace=None, force=False, full=False):
         return self.call('import_search',
-            request_obj, initial_tags, bool(force), full)
+            request_obj, initial_tags, tag_namespace, bool(force), full)
 
     def api_import_search(self,
-            request, initial_tags, force, full, **kwargs):
+            request, initial_tags, tag_namespace, force, full, **kwargs):
         request_obj = to_jmap_request(request)
         caller = self._caller
         def background_import_search():
             rv = self._import_search(
-                request_obj, initial_tags, force, full,
+                request_obj, initial_tags, tag_namespace, force, full,
                 caller=caller)
         self.add_background_job(background_import_search)
         self.reply_json({'running': True})
@@ -127,11 +147,13 @@ class ImportWorker(BaseWorker):
                 % (add, upd, old, ' Done!' if done else '..'))
         self.notify(msg, data=progress, caller=progress['caller'])
 
-    def _index_full_messages(self, email_idxs, progress):
+    def _index_full_messages(self, email_idxs, tag_namespace, progress):
+        incoming = self._ns_scope(tag_namespace, ['in:incoming'], _all=False)
+        incoming = incoming[0]
         if email_idxs:
-            email_idxs = list(self.search.intersect('in:incoming', email_idxs))
+            email_idxs = list(self.search.intersect(incoming, email_idxs))
         else:
-            all_incoming = self.search.search('in:incoming')['hits']
+            all_incoming = self.search.search(incoming)['hits']
             email_idxs = list(dumb_decode(all_incoming))
         if not email_idxs:
             logging.debug('No messages need processing, aborting.')
@@ -140,7 +162,6 @@ class ImportWorker(BaseWorker):
         progress['emails_new'] = len(email_idxs)
         email_idxs = email_idxs[:self.BATCH_SIZE_FULL]
         progress['pending'] += 1
-        filters = None
         keywords = {}
         ntime, bc, ec = int(time.time()), 0, 0
         for i in range(0, len(email_idxs), self.BATCH_SIZE):
@@ -159,9 +180,9 @@ class ImportWorker(BaseWorker):
                 # FIXME: Check status: want more data? e.g. full attachments?
 
                 # 3. Run the filtering logic to mutate keywords/tags
-                if 0 == (self.imported % 1000) or not filters:
-                    filters = FilterEngine().validate()
-                filters.filter(kws, md, email)
+                if 0 == (self.imported % 1000):
+                    self.filters.load()
+                self.filters.filter(tag_namespace, kws, md, email)
                 for kw in kws:
                     if kw in keywords:
                         keywords[kw].append(md.idx)
@@ -209,7 +230,7 @@ class ImportWorker(BaseWorker):
             progress['pct'] = ''
 
         # 5. Remove messages from Incoming
-        self.search.del_results([[list(added), 'in:incoming']], wait=False)
+        self.search.del_results([[list(added), incoming]], wait=False)
 
         # 6. Report progress
         progress['pending'] -= 1
@@ -225,7 +246,8 @@ class ImportWorker(BaseWorker):
             'pending': 0}
 
     def _import_search(self,
-            request_obj, initial_tags, force, full, caller=None):
+            request_obj, initial_tags, tag_namespace, force, full,
+            caller=None):
 
         if self.progress:
             progress = self.progress
@@ -235,12 +257,13 @@ class ImportWorker(BaseWorker):
 
         def _full_indexer(email_idxs):
             def _full_index():
-                self._index_full_messages(email_idxs, progress)
+                self._index_full_messages(email_idxs, tag_namespace, progress)
             return _full_index
 
-        tags = ['in:incoming'] + initial_tags
+        tags = self._ns_scope(tag_namespace, ['in:incoming'] + initial_tags)
         done = False
         email_c = 0
+        self.filters.load()
         while self.keep_running and not done:
             # 1. Submit a limited request_obj to the main app worker
             #    (The app is responsible for selecting the right backend
