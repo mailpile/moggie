@@ -2,10 +2,9 @@ import sys
 
 from .command import CLICommand
 from .admin import CommandWelcome, CommandGrant, CommandContext
-from .admin import CommandUnlock, CommandEnableEncryption
-from .admin import CommandImport, CommandExport
-from .notmuch import CommandSearch, CommandAddress, CommandShow, CommandCount, CommandTag
-from .notmuch import CommandConfig
+from .admin import CommandUnlock, CommandEnableEncryption, CommandImport
+from .notmuch import CommandSearch, CommandAddress, CommandShow, CommandCount
+from .notmuch import CommandConfig, CommandTag
 from .help import TOPICS
 
 
@@ -132,7 +131,6 @@ CLI_COMMANDS = {
     CommandShow.NAME: CommandShow,
     CommandCount.NAME: CommandCount,
     CommandTag.NAME: CommandTag,
-    CommandExport.NAME: CommandExport,
     'import': CommandImport,
     'encrypt': CommandEnableEncryption,
     'unlock': CommandUnlock,

@@ -11,7 +11,7 @@ import time
 import sys
 
 from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
-from ..config.helpers import DictItemProxy, ListItemProxy
+from ..config.helpers import DictItemProxy, EncodingListItemProxy
 from ..jmap.core import JMAPSessionResource
 from ..jmap.requests import *
 from ..jmap.responses import *
@@ -274,6 +274,17 @@ main app worker. Hints:
     def _is_locked(self):
         return (self.config.has_crypto_enabled and not self.config.aes_key)
 
+    def _config_new_section(self, create):
+        while True:
+            section = '%s%x' % ({
+                    'access': self.config.ACCESS_PREFIX,
+                    'account': self.config.ACCOUNT_PREFIX,
+                    'context': self.config.CONTEXT_PREFIX
+                }[create], self.counter % 0x10000)
+            self.counter += 1
+            if section not in self.config:
+                break
+        return section
 
     # Public API
 
@@ -325,15 +336,7 @@ main app worker. Hints:
         errors = []
 
         if create:
-            while True:
-                section = '%s%x' % ({
-                        'access': self.config.ACCESS_PREFIX,
-                        'account': self.config.ACCOUNT_PREFIX,
-                        'context': self.config.CONTEXT_PREFIX
-                    }[create], self.counter % 0x10000)
-                self.counter += 1
-                if section not in self.config:
-                    break
+            section = self._config_new_section(create)
 
         # FIXME: The access object should give us some more details, e.g.
         #        IP address if the user is remote - this is our audit log!
@@ -358,7 +361,7 @@ main app worker. Hints:
                 elif op == 'dict_del':
                     del dp[update['dict_key']]
             elif op in ('list_add_unique', 'list_add', 'list_set', 'list_del'):
-                lp = ListItemProxy(self.config, section, var)
+                lp = EncodingListItemProxy(self.config, section, var)
 
                 val = update.get('list_val')
                 cs = update.get('case_sensitive', True)
@@ -613,18 +616,46 @@ main app worker. Hints:
         return None
 
     async def api_jmap_add_to_index(self, conn_id, access, jmap_request):
-        # FIXME: Access questions, context settings...
+        if not (self.metadata and self.search):
+            return ResponsePleaseUnlock(jmap_request)
+
+        with self.config:
+            ctx = jmap_request.get('context') or self.config.CONTEXT_ZERO
+            watch = jmap_request.get('watch')
+            acct_id = jmap_request.get('account')
+            context = self.config.get_context(ctx)
+            account = None
+
+            # Will raise ValueError or NameError if access denied
+            roles, tag_ns, scope_s = access.grants(ctx,
+                AccessConfig.GRANT_FS +
+                AccessConfig.GRANT_COMPOSE +
+                AccessConfig.GRANT_TAG_RW )
+
+            if acct_id:
+                account = self.config.get_account(acct_id)
+
+            if watch:
+                if not account:
+                    section = self._config_new_section('account')
+                    self.config[section].update({'name': 'Local mail'})
+                    account = self.config.get_account(section)
+                    if acct_id and '@' in acct_id:
+                        account.addresses.append(acct_id)
+                mailbox = jmap_request['search']['mailbox']
+                if mailbox not in account.watched:
+                    account.watched.append(mailbox)
+
         def import_search():
             return self.importer.with_caller(conn_id).import_search(
                 jmap_request['search'],
                 jmap_request.get('initial_tags', []),
+                tag_namespace=context.tag_namespace,
                 force=jmap_request.get('force', False),
                 full=jmap_request.get('full', False))
-        if self.metadata and self.search:
-            result = await async_run_in_thread(import_search)
-            return ResponsePing(jmap_request)  # FIXME
-        else:
-            return ResponsePleaseUnlock(jmap_request)
+
+        result = await async_run_in_thread(import_search)
+        return ResponsePing(jmap_request)  # FIXME
 
     async def api_jmap_cli(self, conn_id, access, jmap_request):
         rbuf_cmd = await CLI_COMMANDS[jmap_request['command']].MsgRunnable(

@@ -688,7 +688,7 @@ class CommandUnlock(CLICommand):
     async def run(self):
         app_crypto_status = self.worker.call('rpc/crypto_status')
         if not app_crypto_status.get('locked'):
-            print('App already unlocked, nothing to do.')
+            self.print('App already unlocked, nothing to do.')
             return True
 
         from ...jmap.requests import RequestUnlock
@@ -696,10 +696,10 @@ class CommandUnlock(CLICommand):
         while True:
             msg = await self.await_messages('unlocked', 'notification')
             if msg and msg.get('message'):
-                print(msg['message'])
+                self.print(msg['message'])
                 return (msg['prototype'] == 'unlocked')
             else:
-                print('Unknown error (%s) or timed out.' % msg)
+                self.print('Unknown error (%s) or timed out.' % msg)
                 return False
 
 
@@ -710,13 +710,20 @@ class CommandImport(CLICommand):
     search engine. Re-importing a mailbox will check for updates/changes to
     the contents.
 
+    Importing messages without linking them to any particular account is
+    possible, but not recommended since Moggie will be unable to ascertain
+    whether the message was "to me" or not.
+
     Options:
-      --context=ctx  Specify the context for the imported messages
-      --ifnewer=ts   Ignore folders and files unchanged since the timestamp
-      --recurse      Search the named paths recursively for mailboxes
-      --compact      Compact the search engine after importing
-      --watch        Add these to our list of locations to watch for mail
-      --old          Treat messages as "old": do not add to inbox etc.
+      --context=ctx    Specify the context for the imported messages
+      --account=email  Specify the e-mail or account ID this mail belongs to
+      --ifnewer=ts     Ignore folders and files unchanged since the timestamp
+      --recurse        Search the named paths recursively for mailboxes
+      --compact        Compact the search engine after importing
+      --watch          Add these to our list of locations to check for new
+                       mail; note this will create a new local mail account
+                       if there is none associated with the context already.
+      --old            Treat messages as "old": do not add to inbox etc.
 
     """
     NAME = 'import'
@@ -727,11 +734,12 @@ class CommandImport(CLICommand):
     SEARCH = ('in:incoming',)
     OPTIONS = {
         '--context=':  ['default'],
+        '--account=':  [None],
         '--ifnewer=':  [],
         '--ignore=':   ['.', '..', 'cur', 'new', 'tmp', '.notmuch'],
         '--recurse':   [],
         '--compact':   [],
-        '--watch':     [],
+        '--watch':     [False],
         '--dryrun':    [],
         '--old':       []}
 
@@ -802,6 +810,8 @@ class CommandImport(CLICommand):
             requests.append((path, RequestAddToIndex(
                 context=AppConfig.CONTEXT_ZERO,
                 search=request_obj,
+                account=self.options['--account='][-1],
+                watch=self.options['--watch'][-1],
                 force=(path in self.SEARCH))))
 
         if not requests:
@@ -846,44 +856,6 @@ class CommandImport(CLICommand):
                 logging.exception('Woops')
                 raise
         return True
-
-
-class CommandExport(CLICommand):
-    """moggie export [opts] <format>:<dest> <terms|/paths/to/mailboxes ...>
-
-    This command can be used to export search results, or convert from one
-    mailbox format to another.
-
-    Options:
-        --add            Add to an existing mailbox
-        --clean          Clean export; does not add Moggie-specific headers
-        --context=<ctx>  Context for tags/search
-
-    Examples:
-        moggie export mbox:/tmp/test.mbx from:twitter to:bre
-        moggie export maildir:/tmp/test/
-
-    """
-    NAME = 'export'
-    AUTO_START = True
-    OPTIONS = {
-        '--context=':  ['default'],
-        '--add':       [],
-        '--clean':     []}
-
-    def configure(self, args):
-        args = self.strip_options(args)
-        try:
-            self.fmt, self.dest = args.pop(0).split(':', 1)
-        except ValueError:
-            raise Nonsense('Please provide a format:/path/to/destination')
-        self.src = args
-        return []
-
-    async def run(self):
-        # This should most def be an API call, so the UI can do things
-        # that are exports under the hood.
-        raise Nonsense('FIXME')
 
 
 def CommandEnableEncryption(wd, args):
