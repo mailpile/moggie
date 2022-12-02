@@ -24,8 +24,12 @@ class ClosableBytesIO(BytesIO):
 
 
 class BaseExporter:
-    def __init__(self, outfile):
+    def __init__(self, outfile, password=None):
         self.fd = outfile
+        self.password = password
+
+    def can_encrypt(self):
+        return False
 
     def __enter__(self):
         return self

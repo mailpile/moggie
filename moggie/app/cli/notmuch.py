@@ -116,6 +116,7 @@ class CommandSearch(CLICommand):
         '--limit=':          [''],
         '--entire-thread=':  [],
         # These are notmuch options which we currently ignore
+        '--password=':       [None],
         '--sort=':           ['newest-first'],
         '--format-version=': [''],
         '--exclude=':        ['true'],
@@ -155,6 +156,10 @@ class CommandSearch(CLICommand):
 
         if self.options['--format='][-1] in ('maildir', 'zip', 'mbox'):
             self.default_output = 'emails'
+
+        if (self.options['--password='][-1] and
+               self.options['--format='][-1] not in ('zip',)):
+            raise Nonsense('Encryption is only supported with --format=zip')
 
         self.preferences = self.cfg.get_preferences(context=self.context)
         return []
@@ -675,6 +680,7 @@ class CommandSearch(CLICommand):
 
     def _get_exporter(self, cls):
         if self.exporter is None:
+            password = self.options['--password='][-1]
             class _wwrap:
                 def write(ws, data):
                     self.write_reply(data)
@@ -683,7 +689,12 @@ class CommandSearch(CLICommand):
                     pass
                 def close(ws):
                     pass
-            self.exporter = cls(_wwrap())
+            if password:
+                self.exporter = cls(_wwrap(), password=bytes(password, 'utf-8'))
+                if not self.exporter.can_encrypt():
+                    raise Nonsense('Encryption is unavailable')
+            else:
+                self.exporter = cls(_wwrap())
         return self.exporter
 
     def _export(self, exporter, result, first, last):

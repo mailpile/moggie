@@ -4,22 +4,49 @@ import io
 import os
 import tarfile
 import time
-import zipfile
+
+try:
+    import pyzipper as zipfile
+    HAVE_ZIP_AES = True
+except ImportError:
+    import zipfile
+    HAVE_ZIP_AES = False
 
 from .base import *
 from .mbox import MboxExporter
 
 SEQ = 0
 
+ENCRYPTED_README = """\
+This archive was generated using moggie, an Open Source tool for searching and
+managing e-mail. The contents are encrypted using WinZip-compatible 128-bit AES
+encryption. You will need a password!
+
+Please use WinZip, 7-Zip or the Mac Archive Utility to access the contents.
+"""
+
 
 class ZipWriter:
-    def __init__(self, fd, d_acl=0o040750, f_acl=0o000640):
-        self.zf = self._create(fd)
+    CAN_ENCRYPT = HAVE_ZIP_AES
+
+    def __init__(self, fd, d_acl=0o040750, f_acl=0o000640, password=None):
+        self.zf = self._create(fd, password)
         self.d_acl = d_acl
         self.f_acl = f_acl
+        if password:
+            self.add_file('README.txt', time.time(), ENCRYPTED_README,
+                encrypt=False)
 
-    def _create(self, fd):
-        return zipfile.ZipFile(fd, mode='w')
+    def _create(self, fd, password):
+        if password:
+            zf = zipfile.AESZipFile(fd,
+                 compression=zipfile.ZIP_DEFLATED,
+                 mode='w')
+            zf.setpassword(password)
+            zf.setencryption(zipfile.WZ_AES, nbits=256)
+            return zf
+        else:
+            return zipfile.ZipFile(fd, mode='w')
 
     def _tt(self, ts):
         return datetime.datetime.fromtimestamp(ts).timetuple()
@@ -32,18 +59,25 @@ class ZipWriter:
         dirent.external_attr |= 0x10             # MS-DOS directory flag
         self.zf.writestr(dirent, b'')
 
-    def add_file(self, fn, ts, data):
+    def add_file(self, fn, ts, data, encrypt=True):
         fi = zipfile.ZipInfo(filename=fn, date_time=self._tt(ts))
         fi.external_attr = self.f_acl << 16
         fi.compress_type = zipfile.ZIP_DEFLATED
-        self.zf.writestr(fi, data)
+        if encrypt:
+            self.zf.writestr(fi, data)
+        else:
+            self.zf.writestr(fi, data, encrypt=False)
 
     def close(self):
         self.zf.close()
 
 
 class TarWriter(ZipWriter):
-    def _create(self, fd):
+    CAN_ENCRYPT = False
+
+    def _create(self, fd, password):
+        if password:
+            raise OSError('Encrypted Tar files are not implemented')
         return tarfile.open(fileobj=fd, mode='w:gz')
 
     def mkdir(self, dn, ts):
@@ -90,7 +124,7 @@ class MaildirExporter(BaseExporter):
         'flagged':   'F',
         'trash':     'T'}
 
-    def __init__(self, real_fd, dirname=None, output=None):
+    def __init__(self, real_fd, dirname=None, output=None, password=None):
         if output is None:
             output = self.AS_DEFAULT
         if output == self.AS_TAR:
@@ -102,7 +136,7 @@ class MaildirExporter(BaseExporter):
 
         now = int(time.time())
         self.real_fd = real_fd
-        self.writer = ocls(real_fd)
+        self.writer = ocls(real_fd, password=password)
 
         if dirname is None:
             dirname = self.default_basedir()
@@ -115,6 +149,9 @@ class MaildirExporter(BaseExporter):
             self.writer.mkdir(self.basedir + sub, now)
 
         super().__init__(self.writer)
+
+    def can_encrypt(self):
+        return self.writer.CAN_ENCRYPT
 
     def default_basedir(self):
         return 'maildir.%x' % int(time.time())
@@ -175,7 +212,7 @@ if __name__ == '__main__':
     md.more['tags'] = ['inbox', 'unread']
 
     bio = ClosableBytesIO()
-    with EmlExporter(bio) as exp:
+    with EmlExporter(bio, password=b'testing') as exp:
         for i in range(0, 4):
             exp.export(md, b"""\
 From: bre@example.org
