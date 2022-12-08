@@ -32,8 +32,8 @@ def _assert_file_exists(path):
 
 def DetectBinaries(
         which=None, use_cache=True, preferred={}, skip=None, _raise=None):
-    import mailpile.util
-    import mailpile.safe_popen
+    #import moggie.util.mailpile
+    import moggie.util.safe_popen
     import traceback
 
     global BINARIES
@@ -52,12 +52,12 @@ def DetectBinaries(
             .split())
 
     def _run_bintest(bt):
-        p = mailpile.safe_popen.Popen(bt,
-                                      stdout=subprocess.PIPE,
-                                      stderr=subprocess.PIPE)
+        p = moggie.util.safe_popen.Popen(bt,
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.PIPE)
         return p.communicate()
 
-    for binary, (bin_test, reqd) in BINARIES_WANTED.iteritems():
+    for binary, (bin_test, reqd) in BINARIES_WANTED.items():
         if binary in skip:
             continue
         if (which is None) or (binary == which):
@@ -70,7 +70,8 @@ def DetectBinaries(
                     BINARIES[binary] = env_bin
                     continue
             try:
-                mailpile.util.RunTimed(5.0, _run_bintest, bin_test)
+                _run_bintest(bin_test)
+                #moggie.util.mailpile.RunTimed(5.0, _run_bintest, bin_test)
                 BINARIES[binary] = bin_test[0]
                 if (not os.path.dirname(BINARIES[binary])
                         and not sys.platform.startswith('win')):
@@ -81,7 +82,7 @@ def DetectBinaries(
                             BINARIES[binary] = path.strip()
                     except (OSError, subprocess.CalledProcessError):
                         pass
-            except (OSError, subprocess.CalledProcessError, mailpile.util.TimedOut):
+            except (OSError, subprocess.CalledProcessError): #, moggie.util.mailpile.TimedOut):
                 if binary in BINARIES:
                     del BINARIES[binary]
 
@@ -92,7 +93,7 @@ def DetectBinaries(
         return BINARIES.get(which)
 
     elif _raise not in (None, False):
-        for binary, (bin_test, reqd) in BINARIES_WANTED.iteritems():
+        for binary, (bin_test, reqd) in BINARIES_WANTED.items():
             if binary in skip or not reqd:
                 continue
             if not BINARIES.get(binary):

@@ -27,7 +27,7 @@ import subprocess
 import sys
 import threading
 
-import mailpile.platforms
+import moggie.platforms
 
 
 Unsafe_Popen = subprocess.Popen
@@ -62,8 +62,8 @@ class Safe_Pipe(object):
     """
     def __init__(self):
         p = os.pipe()
-        self.read_end = os.fdopen(p[0], 'r')
-        self.write_end = os.fdopen(p[1], 'w')
+        self.read_end = os.fdopen(p[0], 'rb')
+        self.write_end = os.fdopen(p[1], 'wb')
 
     def write(self, *args, **kwargs):
         return self.write_end.write(*args, **kwargs)
@@ -108,15 +108,15 @@ class Safe_Popen(Unsafe_Popen):
         # See: https://bugs.python.org/issue3905
         #
         if stdin is None:
-            stdin = open(os.devnull, 'r')
+            stdin = open(os.devnull, 'rb')
             self._internal_fds.append(stdin)
 
         if stdout is None:
-            stdout = open(os.devnull, 'w')
+            stdout = open(os.devnull, 'wb')
             self._internal_fds.append(stdout)
 
         if stderr is None:
-            stderr = open(os.devnull, 'w')
+            stderr = open(os.devnull, 'wb')
             self._internal_fds.append(stderr)
 
         # This lets us inject Popen args into libraries
@@ -151,7 +151,7 @@ class Safe_Popen(Unsafe_Popen):
         #    1. Prevent file descriptor leaks from causing deadlocks
         #    2. Prevent signals from propagating
         #
-        if mailpile.platforms.WindowsPopenSemantics():
+        if moggie.platforms.WindowsPopenSemantics():
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             creationflags = subprocess.CREATE_NEW_PROCESS_GROUP  # 2.
