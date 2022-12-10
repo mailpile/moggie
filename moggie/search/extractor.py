@@ -4,6 +4,7 @@ import time
 
 import email.utils
 
+from ..util.mailpile import msg_id_hash
 from ..security.html import HTMLCleaner
 from .headerprint import HeaderPrints
 from .dates import ts_to_keywords
@@ -161,6 +162,9 @@ class KeywordExtractor:
             if ts > 0:
                 keywords |= set(ts_to_keywords(ts))
 
+        # Record the same message-ID-hashes as Mailpile v1 did
+        keywords.add('msgid:' + msg_id_hash(parsed_email.get('message-id')))
+
         subject = parsed_email.get('subject')
         if subject:
             ud = self.url_domains(subject)
@@ -256,6 +260,7 @@ To: bre3@example.org, <bre4@example.org> Bjarnzor
 Subject: PCR =?utf-8?B?TWFnaWNhbA==?= subject line
 Date: Tue, 29 Mar 2022 14:17:00 +0000
 Content-Type: multipart/mixed; boundary=1234
+Message-Id: <bjarni@mailpile>
 
 --1234
 Content-Type: text/plain; charset=utf-8
@@ -283,6 +288,7 @@ Content-Type: text/html; charset=utf-8
     more, keywords = kwe.extract_email_keywords(None, parsed)
     if unittest:
         try:
+            assert('msgid:dO8TGE1dMM9XPPoacd35EJIGbXQ' in keywords)
             assert('html' not in keywords)
             assert('html:spooky' in keywords)
             assert('hypertext' in keywords)

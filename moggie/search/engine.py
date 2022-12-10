@@ -42,6 +42,7 @@ import time
 
 from ..util.dumbcode import dumb_decode, dumb_encode_bin, dumb_encode_asc
 from ..util.intset import IntSet
+from ..util.mailpile import msg_id_hash
 from ..util.wordblob import wordblob_search, create_wordblob, update_wordblob
 from ..storage.records import RecordFile, RecordStore
 
@@ -256,6 +257,8 @@ class SearchEngine:
 
         from .dates import date_term_magic
         self.magic_term_map = {
+            'message-id': self.msgid_hash_magic,
+            'msgid': self.msgid_hash_magic,
             'date': date_term_magic,
             'dates': date_term_magic}
 
@@ -770,6 +773,11 @@ class SearchEngine:
             if iset:
                 results[tag] = (bcom, iset)
         return results
+
+    def msgid_hash_magic(self, term):
+        if ('@' in term) or ('<' in term):
+            return 'msgid:%s' % msg_id_hash(term.split(':', 1)[-1])
+        return term
 
     def magic_terms(self, term):
         term = self.magic_term_remap.get(term, term)
