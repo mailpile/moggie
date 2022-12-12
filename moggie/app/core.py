@@ -536,15 +536,10 @@ main app worker. Hints:
                 jmap_request.get('tag_ops', []),
                 tag_namespace=tag_ns,
                 more_terms=scope_s,
-                #tag_undo_id=jmap_request.get('tag_undo_id'),
-                #tag_redo_id=jmap_request.get('tag_redo_id'),
+                tag_undo_id=jmap_request.get('tag_undo_id'),
+                tag_redo_id=jmap_request.get('tag_redo_id'),
                 record_history=jmap_request.get('undoable', 'Tagging'),
                 mask_deleted=jmap_request.get('mask_deleted', True))
-
-            # FIXME: The return value will tell us what?
-            #        At least the undo ID needs communicating, but do we
-            #        also report counts of how many messages were touched
-            #        per op? Or maybe just which ones? Caller can count?
 
             return ResponseTag(jmap_request, results)
         else:

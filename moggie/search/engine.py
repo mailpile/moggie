@@ -33,6 +33,7 @@
 #
 import copy
 import logging
+import json
 import os
 import struct
 import random
@@ -541,6 +542,49 @@ class SearchEngine:
             plb = PostingListBucket(self.records.get(idx) or b'')
         return plb.get(tag, with_comment=True)
 
+    def historic_mutations(self, hist_id, undo=False, redo=False):
+        if (undo and redo) or not (undo or redo):
+            raise ValueError('Please undo or redo, not both')
+
+        slot = int(hist_id.split('-')[0], 16)
+        history = self.records[slot]
+        if history['id'] != hist_id:
+            raise KeyError('Not found: %s' % hist_id)
+
+        changes = history['changes']
+        if undo:
+            changes = reversed(changes)
+
+        mutations = []
+        for kw, idx, enc_iset, enc_oset in changes:
+            iset = dumb_decode(enc_iset)
+            oset = dumb_decode(enc_oset)
+            if undo:
+                iset, oset = oset, iset
+
+            # Figure out which bits to set, generate a mutation
+            add_bits = IntSet()
+            add_bits |= oset
+            add_bits -= iset
+
+            # Figure out which bits to unset, generate a mutation
+            sub_bits = IntSet()
+            sub_bits |= iset
+            sub_bits -= oset
+
+            # One of these should be a noop we can skip?
+            if add_bits:
+                mutations.append([add_bits, [['+', kw]]])
+            if sub_bits:
+                mutations.append([sub_bits, [['-', kw]]])
+
+        logging.debug('%s(%s) => %s' % (
+            'undo' if undo else 'redo',
+            hist_id,
+            mutations))
+
+        return mutations
+
     def mutate(self, mlist, record_history=None, tag_namespace=''):
         def _op(o):
             o = {'+': IntSet.Or,
@@ -554,6 +598,7 @@ class SearchEngine:
         def _op_kwi(op, kw):
             op = _op(op)
             if (kw == '*'):
+                # FIXME: What are we doing here?
                 return (op, kw, None)
             else:
                 kw = self._ns(kw, tag_namespace)
@@ -569,28 +614,42 @@ class SearchEngine:
 
                 for op, kw, idx in op_idx_kw_list:
                     plb = PostingListBucket(self.records.get(idx) or b'')
-                    iset = plb.get(kw)
-                    if iset is None:
-                        iset = IntSet()
+                    comment, iset = plb.get(kw, with_comment=True)
 
-                    oset = op(iset, mset)
-
-                    if iset != oset:
-                        plb.set(kw, oset)
+                    if isinstance(mset, dict):
+                        cdata = json.loads(comment or '{}')
+                        if op in (IntSet.Or, '+'):
+                            cdata.update(mset)
+                        else:
+                            for k, v in mset.items():
+                                if k in cdata:
+                                    del cdata[k]
+                        plb.set_comment(kw, json.dumps(cdata))
                         self.records[idx] = plb.blob
-                        mutations += 1
 
-                        # Only keep history and report results regarding the
-                        # mutation itself, to save space (zeros compress well)
-                        # and avoid leaking data from outside our tag namespace.
-                        # We assume the mset has already been scoped.
-                        cset = IntSet()
-                        cset |= iset
-                        cset ^= oset  # XOR tells us which bits changed
-                        cset &= mset  # Scope
-                        iset &= mset  # Scope
-                        changes.append((kw, idx, iset, cset))
-                        cset_all |= cset
+                    else:
+                        if iset is None:
+                            iset = IntSet()
+                        oset = op(iset, mset)
+
+                        if iset != oset:
+                            plb.set(kw, oset)
+                            self.records[idx] = plb.blob
+                            mutations += 1
+
+                            # Only keep history and report results regarding the
+                            # mutation itself, to save space (zeros compress well)
+                            # and avoid leaking data from outside our tag namespace.
+                            # We assume the mset has already been scoped.
+                            cset = IntSet()
+                            cset |= iset
+                            cset ^= oset  # XOR tells us which bits changed
+                            cset &= mset  # Scope
+                            iset &= mset  # Scope
+                            changes.append((kw, idx,
+                                dumb_encode_asc(iset, compress=256),
+                                dumb_encode_asc(cset, compress=256)))
+                            cset_all |= cset
 
             if record_history:
                 # Allocate slot while still locked, then release.
@@ -600,9 +659,7 @@ class SearchEngine:
             changes = {
                 'id': '%.3x-%x' % (slot, random.randint(0, 0xffffffffff)),
                 'comment': record_history,
-                'changes': [
-                    [kw, idx, dumb_encode_asc(iset), dumb_encode_asc(oset)]
-                    for kw, idx, iset, oset in changes]}
+                'changes': changes}
             self.records[slot] = changes
 
         return {
@@ -775,8 +832,9 @@ class SearchEngine:
         return results
 
     def msgid_hash_magic(self, term):
-        if ('@' in term) or ('<' in term):
-            return 'msgid:%s' % msg_id_hash(term.split(':', 1)[-1])
+        msgid = term.split(':', 1)[-1]
+        if ('@' in msgid) or ('<' in msgid) or (len(msgid) == 27):
+            return 'msgid:%s' % msg_id_hash(msgid)
         return term
 
     def magic_terms(self, term):

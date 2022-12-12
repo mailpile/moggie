@@ -152,26 +152,35 @@ class SearchWorker(BaseWorker):
 
     async def async_tag(self, loop, tag_op_sets, record_history=None,
             tag_namespace=None,
+            tag_redo_id=None, tag_undo_id=None,
             mask_deleted=True, mask_tags=None, more_terms=None):
         tag_op_sets = list(tag_op_sets)
+        no_hits = dumb_encode_asc(IntSet([]), compress=256)
         for i, (tag_ops, m) in enumerate(tag_op_sets):
-            if isinstance(m, str):
-                m = await self.async_call(loop, 'search', m,
+            if isinstance(m, dict):
+                tag_op_sets[i] = (tag_ops, m)
+            elif isinstance(m, str):
+                r = await self.async_call(loop, 'search', m,
                               mask_deleted, mask_tags, more_terms,
                               tag_namespace, False)
-                tag_op_sets[i] = (tag_ops, m['hits'])
+                if r['hits'] != no_hits:
+                    tag_op_sets[i] = (tag_ops, r['hits'])
             else:
                 tag_op_sets[i] = (tag_ops, dumb_encode_asc(IntSet(m)))
         return await self.async_call(loop, 'tag',
             tag_op_sets, record_history, tag_namespace,
+            tag_redo_id, tag_undo_id,
             mask_deleted, mask_tags, more_terms)
 
     def tag(self, tag_op_sets, record_history=None,
             tag_namespace=None,
+            tag_redo_id=None, tag_undo_id=None,
             mask_deleted=True, mask_tags=None, more_terms=None):
         tag_op_sets = list(tag_op_sets)
         for i, (tag_ops, m) in enumerate(tag_op_sets):
-            if isinstance(m, str):
+            if isinstance(m, dict):
+                tag_op_sets[i] = (tag_ops, m)
+            elif isinstance(m, str):
                 m = self.call('search', m,
                               mask_deleted, mask_tags, more_terms,
                               tag_namespace, False)
@@ -180,20 +189,29 @@ class SearchWorker(BaseWorker):
                 tag_op_sets[i] = (tag_ops, dumb_encode_asc(IntSet(m)))
         return self.call('tag',
             tag_op_sets, record_history, tag_namespace,
+            tag_redo_id, tag_undo_id,
             mask_deleted, mask_tags, more_terms)
 
     def api_tag(self,
             tag_op_sets, rec_hist, tag_namespace,
+            tag_redo_id, tag_undo_id,
             mask_deleted, mask_tags, more_terms, **kwa):
-        mutations = []
         if tag_namespace:
             tag_namespace = tag_namespace.lower()
+
+        if tag_redo_id:
+            mutations = self._engine.historic_mutations(tag_redo_id, redo=True)
+        elif tag_undo_id:
+            mutations = self._engine.historic_mutations(tag_undo_id, undo=True)
+        else:
+            mutations = []
+
         for (tag_ops, m) in tag_op_sets:
             mutation = [m, []]
             if isinstance(m, str):
                 m = dumb_decode(m)
                 mutation[0] = m
-            if not isinstance(m, (IntSet, list)):
+            if not isinstance(m, (IntSet, list, dict)):
                 m = self.call('search', m,
                               mask_deleted, mask_tags, more_terms,
                               tag_namespace, False)
@@ -225,7 +243,7 @@ class SearchWorker(BaseWorker):
                 mutations,
                 record_history=rec_hist,
                 tag_namespace=tag_namespace)
-            result['changed'] = dumb_encode_asc(result['changed'])
+            result['changed'] = dumb_encode_asc(result['changed'], compress=256)
             self.reply_json(result)
 
     def api_compact(self, full, callback_chain, **kwargs):
@@ -300,8 +318,15 @@ class SearchWorker(BaseWorker):
         if with_tags:
             tag_info = self._engine.search_tags(
                 hits, tag_namespace=tag_namespace)
+            def _dec_comment(comment):
+                try:
+                    comment = str(comment, 'utf-8')
+                    comment = json.loads(comment or "{}")
+                except (ValueError, TypeError):
+                    pass
+                return comment
             result['tags'] = dict(
-                (tag, (str(com, 'utf-8'), dumb_encode_asc(iset, compress=128)))
+                (tag, (_dec_comment(com), dumb_encode_asc(iset, compress=128)))
                 for tag, (com, iset) in tag_info.items())
 
         self.reply_json(result)

@@ -1256,27 +1256,45 @@ class CommandCount(CLICommand):
 class CommandTag(CLICommand):
     """# moggie tag [options] +<tag>|-<tag> [...] -- <search terms ...>
 
-        # FIXME: We are going to treat multiple batch ops as a single tag
-        #        op, which effects messages all at once and can be undone
-        #        all at once as well.
-        #
-        #        This means a batch like so:
-        #           +inbox -unread -incoming -- in:incoming
-        #           +potato -- in:incoming
-        #
-        #        Will tag all the messages as 'in:potato', even though
-        #        the first line would otherwise untag them and the second
-        #        would be a no-op if they were done one after another.
+    Tag or untag e-mails matching a particular search query. Examples:
 
-        # In addition to --remove-all, we should allow a -* tag op which
-        # removes all tags from matching messages. This will let us use
-        # remove-all behavior selectively within a batch.
-        #
-        # Is this notmuch compatible? Do I care? Should I ask? Test?
+        moggie tag +family -- to:bjarni from:dad
+        moggie tag --context=Personal -play +school -- homework
 
+    Alternately, instead of a search query a JSON object can be used to
+    add or remove metadata on the tags themselves:
+
+        moggie tag +family -- META='{"name": "My Family"}'
+        moggie tag +family +school -- META='{"parent": "personal"}'
+
+    Options:
+
+        --context=<C>      Set the context for the operation
+        --batch            Read stdin for tag commands, one per line
+        --input=<filename> Read batch commands from a file
+        --comment=<C>      Add a comment to the tag-history for this op
+        --undo=<ID>        Undo a recent tag operation
+        --redo=<ID>        Redo a recent tag operation
+
+    For the purposes of recording history and facilitating undo, we treat
+    all operations within a single batch as one; all searches are performed
+    before any tagging takes place and which means the entire batch op can
+    be undone in one step as well.
+
+    This means a batch like this:
+
+        +inbox -unread -incoming -- in:incoming
+        +potato -- in:incoming
+
+    Will tag all the messages as 'in:potato', even though the first line
+    strips the 'in:incoming' tag and the second would be a no-op if they
+    were done one after another.
+
+    Note that tag metadata changes cannot be undone.
     """
     NAME = 'tag'
     ROLES = AccessConfig.GRANT_READ + AccessConfig.GRANT_TAG_RW
+    MAX_TAGOPS = 10000
     WEB_EXPOSE = True
     OPTIONS = {
         # These are moggie specific
@@ -1284,10 +1302,14 @@ class CommandTag(CLICommand):
         '--format=':         [None],
         '--comment=':        [None],
         '--stdin=':          [],          # Allow lots to send us stdin
+        '--undo=':           [None],
+        '--redo=':           [None],
         # These are notmuch options which we implement
-        '--remove-all':      [],
         '--batch':           [],
-        '--input=':          []}
+        '--input=':          [],
+        # FIXME: These are unimplemented still, making this work sanely
+        #        within batches by adding a -* tag op?
+        '--remove-all':      []}
 
     def _validate_and_normalize_tagops(self, tagops):
         for idx, tagop in enumerate(tagops):
@@ -1311,7 +1333,10 @@ class CommandTag(CLICommand):
                 tagops, terms = line.split('--')
                 tagops = tagops.strip().split()
                 self._validate_and_normalize_tagops(tagops)
-                yield (tagops, terms.strip())
+                if terms.startwith('META={'):
+                    yield (tagops, json.loads(terms[5:]))
+                else:
+                    yield (tagops, terms.strip())
 
     def configure(self, args):
         self.tagops = []
@@ -1337,7 +1362,12 @@ class CommandTag(CLICommand):
                 with open(fn, 'r') as fd:
                     self.tagops.extend(self._batch_configure(fd))
 
-        if not self.options['--input=']:
+        if len(self.tagops) > self.MAX_TAGOPS:
+            raise Nonsense('Too many operations (max=%d)' % self.MAX_TAGOPS)
+
+        if not (self.options['--input=']
+                or self.options['--redo='][-1]
+                or self.options['--undo='][-1]):
             while tags and tags[-1][:1] not in ('+', '-'):
                 terms[:0] = [tags.pop(-1)]
             self._validate_and_normalize_tagops(tags)
@@ -1345,9 +1375,24 @@ class CommandTag(CLICommand):
             if not tags or not terms:
                 raise Nonsense('Nothing to do?')
 
-            self.tagops = [(tags, ' '.join(terms))]
+            terms = ' '.join(terms)
+            if terms.startswith('META={'):
+                terms = json.loads(terms[5:])
+            self.tagops = [(tags, terms)]
+
+        elif (self.options['--redo='][-1]
+                 and not self.options['--undo='][-1]
+                 and not (self.tagops or tags or terms)):
+            pass
+
+        elif (self.options['--undo='][-1]
+                 and not self.options['--redo='][-1]
+                 and not (self.tagops or tags or terms)):
+            pass
+
         elif tags or terms:
-            raise Nonsense('Use batches or the command line, not both')
+            raise Nonsense(
+                'Use batches, undo/redo, or the command line, not both')
 
         return []
 
@@ -1356,7 +1401,11 @@ class CommandTag(CLICommand):
 
         query = RequestTag(
             context=self.context,
-            undoable=self.desc,
+            undoable=(not self.options['--redo='][-1]
+                and not self.options['--undo='][-1]
+                and self.desc),
+            tag_undo_id=self.options['--undo='][-1],
+            tag_redo_id=self.options['--redo='][-1],
             tag_ops=self.tagops)
         msg = await self.worker.async_jmap(self.access, query)
 
@@ -1369,10 +1418,12 @@ class CommandTag(CLICommand):
             self.print_html(msg['results'])
         elif fmt == 'sexp':
             self.print_sexp(msg['results'])
-        else:
+        elif 'history' in msg['results']:
             self.print(
                 'Tagged:\t\t%(comment)s\nChange ID:\t%(id)s'
                 % msg['results']['history'])
+        else:
+            self.print('%s' % msg['results'])
 
 
 def CommandConfig(wd, args):
