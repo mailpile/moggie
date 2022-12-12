@@ -105,7 +105,7 @@ def getrandbits(count):
     bits = os.urandom(count // 8)
     rint = 0
     while bits:
-        rint = (rint << 8) | struct.unpack("B", bits[0])[0]
+        rint = (rint << 8) | bits[0]
         bits = bits[1:]
     return rint
 
