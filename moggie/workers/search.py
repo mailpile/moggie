@@ -22,6 +22,8 @@ class SearchWorker(BaseWorker):
 
     MASK_TAGS = ('in:trash', 'in:spam')
 
+    EXACT_SEARCHES = ('msgid', 'message-id', 'id', 'mid')
+
     SORT_NONE = 0
     SORT_DATE_ASC = 1
     SORT_DATE_DEC = 2
@@ -300,7 +302,14 @@ class SearchWorker(BaseWorker):
             _internal=False, **kwa):
         if tag_namespace:
             tag_namespace = tag_namespace.lower()
-        mask_tags = self.MASK_TAGS if (mask_tags is None) else mask_tags
+
+        if mask_tags is None:
+            exact = [
+                term for term in terms.replace('+', '').split(' ')
+                if term.split(':', 1)[0] in self.EXACT_SEARCHES]
+            if not exact:
+                mask_tags = self.MASK_TAGS
+
         tns, ops, hits = self._engine.search(terms,
             tag_namespace=tag_namespace,
             mask_deleted=mask_deleted,
