@@ -153,20 +153,13 @@ class SearchWorker(BaseWorker):
     async def async_tag(self, loop, tag_op_sets, record_history=None,
             tag_namespace=None,
             tag_redo_id=None, tag_undo_id=None,
-            mask_deleted=True, mask_tags=None, more_terms=None):
+            mask_deleted=True, mask_tags=False, more_terms=None):
         tag_op_sets = list(tag_op_sets)
-        no_hits = dumb_encode_asc(IntSet([]), compress=256)
         for i, (tag_ops, m) in enumerate(tag_op_sets):
-            if isinstance(m, dict):
-                tag_op_sets[i] = (tag_ops, m)
-            elif isinstance(m, str):
-                r = await self.async_call(loop, 'search', m,
-                              mask_deleted, mask_tags, more_terms,
-                              tag_namespace, False)
-                if r['hits'] != no_hits:
-                    tag_op_sets[i] = (tag_ops, r['hits'])
-            else:
-                tag_op_sets[i] = (tag_ops, dumb_encode_asc(IntSet(m)))
+            if isinstance(m, (IntSet, list)):
+                tag_op_sets[i] = (
+                    tag_ops,
+                    dumb_encode_asc(IntSet(m), compress=256))
         return await self.async_call(loop, 'tag',
             tag_op_sets, record_history, tag_namespace,
             tag_redo_id, tag_undo_id,
@@ -175,18 +168,22 @@ class SearchWorker(BaseWorker):
     def tag(self, tag_op_sets, record_history=None,
             tag_namespace=None,
             tag_redo_id=None, tag_undo_id=None,
-            mask_deleted=True, mask_tags=None, more_terms=None):
+            mask_deleted=True, mask_tags=False, more_terms=None):
         tag_op_sets = list(tag_op_sets)
         for i, (tag_ops, m) in enumerate(tag_op_sets):
-            if isinstance(m, dict):
-                tag_op_sets[i] = (tag_ops, m)
-            elif isinstance(m, str):
-                m = self.call('search', m,
-                              mask_deleted, mask_tags, more_terms,
-                              tag_namespace, False)
-                tag_op_sets[i] = (tag_ops, m['hits'])
-            else:
-                tag_op_sets[i] = (tag_ops, dumb_encode_asc(IntSet(m)))
+            if isinstance(m, (IntSet, list)):
+                tag_op_sets[i] = (
+                    tag_ops,
+                    dumb_encode_asc(IntSet(m), compress=256))
+#            if isinstance(m, dict):
+#                tag_op_sets[i] = (tag_ops, m)
+#            elif isinstance(m, str):
+#                r = self.call('search', m,
+#                              mask_deleted, mask_tags, more_terms,
+#                              tag_namespace, False)
+#                tag_op_sets[i] = (tag_ops, r['hits'])
+#            else:
+#                tag_op_sets[i] = (tag_ops, dumb_encode_asc(IntSet(m)))
         return self.call('tag',
             tag_op_sets, record_history, tag_namespace,
             tag_redo_id, tag_undo_id,
@@ -206,16 +203,19 @@ class SearchWorker(BaseWorker):
         else:
             mutations = []
 
+        no_hits = dumb_encode_asc(IntSet([]), compress=256)
         for (tag_ops, m) in tag_op_sets:
             mutation = [m, []]
             if isinstance(m, str):
                 m = dumb_decode(m)
                 mutation[0] = m
+
             if not isinstance(m, (IntSet, list, dict)):
-                m = self.call('search', m,
-                              mask_deleted, mask_tags, more_terms,
-                              tag_namespace, False)
-                mutation[0] = m['hits']
+                m = self.api_search(m,
+                        mask_deleted, mask_tags, more_terms,
+                        tag_namespace, False,
+                        _internal=True)
+                mutation[0] = m['hits'] if (m and m['hits']) else None
 
             for tag_op in tag_ops:
                 tag = tag_op[1:]
@@ -224,14 +224,16 @@ class SearchWorker(BaseWorker):
                 else:
                     tag = 'in:' + tag
                 if tag_op[:1] == '+':
-                    mutation[1].append([IntSet.Or, tag.lower()])
+                    mutation[1].append(
+                        [IntSet.Or, self._engine.tag_quote_magic(tag)])
                     if tag_namespace:
                         mutation[1].append([IntSet.Or, 'in:'])
                     elif '@' in tag:
                         ns = tag.split('@', 1)[1]
                         mutation[1].append([IntSet.Or, 'in:@'+ns])
                 elif tag_op[:1] == '-':
-                    mutation[1].append([IntSet.Sub, tag.lower()])
+                    mutation[1].append(
+                        [IntSet.Sub, self._engine.tag_quote_magic(tag)])
                 else:
                     raise ValueError('Invalid tag op: %s' % tag_op)
 
@@ -294,7 +296,8 @@ class SearchWorker(BaseWorker):
 
     def api_search(self,
             terms, mask_deleted, mask_tags, more_terms,
-            tag_namespace, with_tags, **kwa):
+            tag_namespace, with_tags,
+            _internal=False, **kwa):
         if tag_namespace:
             tag_namespace = tag_namespace.lower()
         mask_tags = self.MASK_TAGS if (mask_tags is None) else mask_tags
@@ -313,7 +316,10 @@ class SearchWorker(BaseWorker):
             'query': self._explain_ops(ops)}
 
         logging.debug('Searched: %s' % result)
-        result['hits'] = dumb_encode_asc(hits, compress=256)
+        if _internal:
+            result['hits'] = hits
+        else:
+            result['hits'] = dumb_encode_asc(hits, compress=256)
 
         if with_tags:
             tag_info = self._engine.search_tags(
@@ -329,7 +335,10 @@ class SearchWorker(BaseWorker):
                 (tag, (_dec_comment(com), dumb_encode_asc(iset, compress=128)))
                 for tag, (com, iset) in tag_info.items())
 
-        self.reply_json(result)
+        if _internal:
+            return result
+        else:
+            self.reply_json(result)
 
 
 if __name__ == '__main__':

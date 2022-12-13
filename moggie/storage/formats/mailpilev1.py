@@ -15,6 +15,7 @@ from ...crypto.passphrases import SecurePassphraseStorage
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.util import quick_msgparse, make_ts_and_Metadata
+from ...util.mailpile import tag_quote, tag_unquote
 
 from .maildir import FormatMaildir
 from . import tag_path

@@ -43,7 +43,7 @@ import time
 
 from ..util.dumbcode import dumb_decode, dumb_encode_bin, dumb_encode_asc
 from ..util.intset import IntSet
-from ..util.mailpile import msg_id_hash
+from ..util.mailpile import msg_id_hash, tag_quote, tag_unquote
 from ..util.wordblob import wordblob_search, create_wordblob, update_wordblob
 from ..storage.records import RecordFile, RecordStore
 
@@ -260,6 +260,8 @@ class SearchEngine:
         self.magic_term_map = {
             'message-id': self.msgid_hash_magic,
             'msgid': self.msgid_hash_magic,
+            'in': self.tag_quote_magic,
+            'tag': self.tag_quote_magic,
             'date': date_term_magic,
             'dates': date_term_magic}
 
@@ -290,6 +292,7 @@ class SearchEngine:
     def iter_tags(self, tag_namespace=''):
         if tag_namespace:
             tag_namespace = '@' + tag_namespace
+        no_hits = IntSet()
         for idx in range(self.l1_begin, self.l2_begin):
             with self.lock:
                 if idx not in self.records:
@@ -299,14 +302,14 @@ class SearchEngine:
                     for kw, comment, iset in plb.items(decode=False):
                         kw = str(kw, 'utf-8')
                         if (kw[:3] == 'in:') and (kw[3] != '@'):
-                            yield (kw, (comment, dumb_decode(iset)))
+                            yield (kw, (comment, dumb_decode(iset) or no_hits))
                 else:
                     for kw, comment, iset in plb.items(decode=False):
                         kw = str(kw, 'utf-8')
                         if ((kw[:3] == 'in:') and (kw[3] != '@')
                                and kw.endswith(tag_namespace)):
                             kw = kw.split('@')[0]
-                            yield (kw, (comment, dumb_decode(iset)))
+                            yield (kw, (comment, dumb_decode(iset) or no_hits))
 
     def iter_byte_keywords(self, min_hits=1, ignore_re=None):
         for i in range(self.l2_begin, len(self.records)):
@@ -492,8 +495,11 @@ class SearchEngine:
                     if kw[:4] == 'tag:':
                         kw = 'in:' + kw[4:]
 
-                    if tag_ns and (kw[:3] == 'in:'):
-                        kw = '%s@%s' % (kw, tag_ns)
+                    if kw[:3] == 'in:':
+                        if tag_ns:
+                            kw = '%s@%s' % (kw, tag_ns)
+                        kw = self.tag_quote_magic(kw)
+
                     keywords[kw] = keywords.get(kw, []) + [r_id]
                 if kw_list:
                     hits.append(r_id)
@@ -646,9 +652,9 @@ class SearchEngine:
                             cset ^= oset  # XOR tells us which bits changed
                             cset &= mset  # Scope
                             iset &= mset  # Scope
-                            changes.append((kw, idx,
+                            changes.append([kw, idx,
                                 dumb_encode_asc(iset, compress=256),
-                                dumb_encode_asc(cset, compress=256)))
+                                dumb_encode_asc(cset, compress=256)])
                             cset_all |= cset
 
             if record_history:
@@ -828,8 +834,17 @@ class SearchEngine:
         for tag, (bcom, iset) in self.iter_tags(tag_namespace=tag_namespace):
             iset &= search_set
             if iset:
-                results[tag] = (bcom, iset)
+                results[tag_unquote(tag)] = (bcom, iset)
         return results
+
+    def tag_quote_magic(self, term):
+        try:
+            if '%' in term:
+                # Make sure things are normalized OUR way...
+                return tag_quote(tag_unquote(term))
+        except ValueError:
+            pass
+        return tag_quote(term)
 
     def msgid_hash_magic(self, term):
         msgid = term.split(':', 1)[-1]
@@ -866,19 +881,26 @@ class SearchEngine:
 
 
 if __name__ == '__main__':
+  def _assert(val, want=True, msg='assert'):
+      if isinstance(want, bool):
+          if (not val) == (not want):
+              want = val
+      if val != want:
+          raise AssertionError('%s(%s==%s)' % (msg, val, want))
+
   try:
     pl = PostingListBucket(b'', compress=128)
     pl.add('hello', [1, 2, 3, 4])
-    assert(isinstance(pl.get('hello'), IntSet))
-    assert(pl.get('floop') is None)
-    assert(1 in pl.get('hello'))
-    assert(5 not in pl.get('hello'))
+    _assert(isinstance(pl.get('hello'), IntSet))
+    _assert(pl.get('floop') is None)
+    _assert(1 in pl.get('hello'))
+    _assert(5 not in pl.get('hello'))
     pl.add('hello', [5])
-    assert(1 in pl.get('hello'))
-    assert(5 in pl.get('hello'))
+    _assert(1 in pl.get('hello'))
+    _assert(5 in pl.get('hello'))
     pl.remove('hello')
-    assert(pl.get('hello') is None)
-    assert(len(pl.blob) == 0)
+    _assert(pl.get('hello') is None)
+    _assert(len(pl.blob), 0)
 
     # Create a mini search engine...
     def mk_se():
@@ -901,73 +923,73 @@ if __name__ == '__main__':
         tag_namespace='work')
 
     se.deleted |= 0
-    assert(list(se.search(IntSet.All)) == [1, 2, 3, 4, 5])
+    _assert(list(se.search(IntSet.All)), [1, 2, 3, 4, 5])
 
-    assert(3 in se.search('please'))
-    assert(5 in se.search('please'))
-    assert(5 in se.search('please', tag_namespace='work'))
-    assert(3 not in se.search('please', tag_namespace='work'))
+    _assert(3 in se.search('please'))
+    _assert(5 in se.search('please'))
+    _assert(5 in se.search('please', tag_namespace='work'))
+    _assert(3 not in se.search('please', tag_namespace='work'))
 
     # Make sure tags go to l1, others to l2.
-    assert(se.keyword_index('in:bjarni') < se.l2_begin)
-    assert(se.keyword_index('in:inbox') < se.l2_begin)
-    assert(se.keyword_index('please') >= se.l2_begin)
+    _assert(se.keyword_index('in:bjarni') < se.l2_begin)
+    _assert(se.keyword_index('in:inbox') < se.l2_begin)
+    _assert(se.keyword_index('please') >= se.l2_begin)
 
     # We can enumerate our tags and set metadata on them!
     se.set_tag_comment('in:bjarni', 'Hello world')
-    assert(se.get_tag('in:bjarni')[0] == b'Hello world')
-    assert('in:bjarni'         in dict(se.iter_tags()))
-    assert('in:inbox@work'     in dict(se.iter_tags()))
-    assert('in:bjarni'     not in dict(se.iter_tags(tag_namespace='work')))
-    assert('in:inbox'          in dict(se.iter_tags(tag_namespace='work')))
-    assert('in:inbox@work' not in dict(se.iter_tags(tag_namespace='work')))
-    assert(not se.search_tags([55]))
-    assert('in:inbox' in se.search_tags([4, 55]))
-    assert('in:inbox' not in se.search_tags('please'))
-    assert('in:inbox' in se.search_tags('please', tag_namespace='work'))
+    _assert(se.get_tag('in:bjarni')[0], b'Hello world')
+    _assert('in:bjarni'         in dict(se.iter_tags()))
+    _assert('in:inbox@work'     in dict(se.iter_tags()))
+    _assert('in:bjarni'     not in dict(se.iter_tags(tag_namespace='work')))
+    _assert('in:inbox'          in dict(se.iter_tags(tag_namespace='work')))
+    _assert('in:inbox@work' not in dict(se.iter_tags(tag_namespace='work')))
+    _assert(not se.search_tags([55]))
+    _assert('in:inbox' in se.search_tags([4, 55]))
+    _assert('in:inbox' not in se.search_tags('please'))
+    _assert('in:inbox' in se.search_tags('please', tag_namespace='work'))
 
-    assert(3 in se.search('remove'))
+    _assert(3 in se.search('remove'))
     se.del_results([(3, ['please'])])
-    assert(3 not in se.search('please'))
-    assert(3 in se.search('remove'))
+    _assert(3 not in se.search('please'))
+    _assert(3 in se.search('remove'))
 
-    assert(5 in se.search('in:inbox', tag_namespace='work'))
-    assert(5 in se.search('all:mail', tag_namespace='work'))
-    assert(4 not in se.search('all:mail', tag_namespace='work'))
-    assert(3 not in se.search('in:inbox'))
-    assert(4 in se.search('in:testing'))
+    _assert(5 in se.search('in:inbox', tag_namespace='work'))
+    _assert(5 in se.search('all:mail', tag_namespace='work'))
+    _assert(4 not in se.search('all:mail', tag_namespace='work'))
+    _assert(3 not in se.search('in:inbox'))
+    _assert(4 in se.search('in:testing'))
 
     mr = se.mutate([
         (IntSet([4, 3]), [('-', 'in:testing'), (IntSet.Or, 'in:inbox')]),
         ], record_history='Testing')
 
-    assert(5 not in se.search('in:imaginary'))
+    _assert(5 not in se.search('in:imaginary'))
     mr2 = se.mutate([
         (IntSet([5, 6]), [('+', 'in:imaginary')])
         ], record_history='Test2')
-    assert(5 in se.search('in:imaginary'))
+    _assert(5 in se.search('in:imaginary'))
 
     slot = int(mr['history']['id'].split('-')[0], 16)
-    assert(slot == se.IDX_HISTORY_START)
+    _assert(slot, se.IDX_HISTORY_START)
     lh = se.records.get(slot, decode=True)
-    assert(lh['comment'] == 'Testing')
-    assert(lh == mr['history'])
+    _assert(lh['comment'], 'Testing')
+    _assert(lh, mr['history'])
 
-    assert(mr['mutations'] == 2)
-    assert('in:testing' == mr['history']['changes'][0][0])
-    assert(4 not in se.search('in:testing'))
-    assert(3 in se.search('in:inbox'))
-    assert(4 in se.search('in:inbox'))
-    assert(4 not in se.search('in:inbox', tag_namespace='work'))
+    _assert(mr['mutations'] == 2)
+    _assert('in:testing' == mr['history']['changes'][0][0])
+    _assert(4 not in se.search('in:testing'))
+    _assert(3 in se.search('in:inbox'))
+    _assert(4 in se.search('in:inbox'))
+    _assert(4 not in se.search('in:inbox', tag_namespace='work'))
     se.rename_tag('in:inbox', 'in:outbox')
-    assert(4 in se.search('in:outbox'))
-    assert(4 not in se.search('in:inbox'))
+    _assert(4 in se.search('in:outbox'))
+    _assert(4 not in se.search('in:inbox'))
 
     # Test reducing a set to empty and then adding back to it
     se.del_results([(4, ['in:testempty'])])
-    assert(4 not in se.search('in:testempty'))
+    _assert(4 not in se.search('in:testempty'))
     se.add_results([(4, ['in:testempty'])])
-    assert(4 in se.search('in:testempty'))
+    _assert(4 in se.search('in:testempty'))
 
     print('Tests pass OK (1/3)')
 
@@ -976,45 +998,49 @@ if __name__ == '__main__':
         se = mk_se()
 
         # Basic search correctnesss
-        assert(1 in se.search('hello world'))
-        assert(2 not in se.search('hello world'))
-        assert([] == list(se.search('notfound')))
+        _assert(1 in se.search('hello world'))
+        _assert(2 not in se.search('hello world'))
+        _assert([] == list(se.search('notfound')))
 
-        assert(4 in se.search('in:outbox'))
-        assert(4 not in se.search('in:inbox'))
+        _assert(4 in se.search('in:outbox'))
+        _assert(4 in se.search('in:OUTBOX'))
+        _assert(4 not in se.search('in:inbox'))
 
         # Enable and test partial word searches
         se.create_part_space(min_hits=1)
-        assert(b'*' not in se.part_spaces[0])
-        assert(b'evil' in se.part_spaces[0])  # Verify that * gets stripped
+        _assert(b'*' not in se.part_spaces[0])
+        _assert(b'evil' in se.part_spaces[0])  # Verify that * gets stripped
         #print('%s' % se.part_space)
         #print('%s' % se.candidates('*ell*', 10))
-        assert(len(se.candidates('***', 10)) == 0)
-        assert(len(se.candidates('ell*', 10)) == 1)   # ell
-        assert(len(se.candidates('*ell', 10)) == 2)   # ell, hell
+        _assert(len(se.candidates('***', 10)), 0)
+        _assert(len(se.candidates('ell*', 10)), 1)   # ell
+        _assert(len(se.candidates('*ell', 10)), 2)   # ell, hell
         #print(se.candidates('*ell*', 10))
-        assert(len(se.candidates('*ell*', 10)) == 4)  # ell, hell, hello, hellyeah
-        assert(len(se.candidates('he*ah', 10)) == 2)  # hepe, hellyeah
-        assert(1 in se.search('hell* w*ld'))
+        _assert(len(se.candidates('*ell*', 10)), 4)  # ell, hell, hello, hellyeah
+        _assert(len(se.candidates('he*ah', 10)), 2)  # hepe, hellyeah
+        _assert(1 in se.search('hell* w*ld'))
 
         # Test our and/or functionality
-        assert(list(se.search('hello')) == list(se.search((IntSet.Or, 'world', 'iceland'))))
+        _assert(
+            list(se.search('hello')),
+            list(se.search((IntSet.Or, 'world', 'iceland'))))
 
         # Test the explainer and parse_terms with candidate magic
-        assert(explain_ops(se.parse_terms('* - is:deleted he*o WORLD +Iceland', se.magic_map))
-            == '(((ALL NOT is:deleted) AND (heo OR hello) AND world) OR iceland)')
+        _assert(
+            explain_ops(se.parse_terms('* - is:deleted he*o WORLD +Iceland', se.magic_map)),
+            '(((ALL NOT is:deleted) AND (heo OR hello) AND world) OR iceland)')
 
         # Test the explainer and parse_terms with date range magic
-        assert(se.explain('dates:2012..2013 OR date:2015')
+        _assert(se.explain('dates:2012..2013 OR date:2015')
             == '((year:2012 OR year:2013) OR year:2015)')
 
         # Test static and dictionary term expansions
-        assert(se.candidates('orang*', 10) == ['orang'])
+        _assert(se.candidates('orang*', 10), ['orang'])
         se.add_static_terms(['red', 'green', 'blue', 'orange'])
-        assert(se.candidates('orang*', 10) == ['orang', 'orange'])
-        assert(se.candidates('the orang*', 10) == ['the orang', 'the orange'])
+        _assert(se.candidates('orang*', 10), ['orang', 'orange'])
+        _assert(se.candidates('the orang*', 10), ['the orang', 'the orange'])
         se.add_dictionary_terms('/usr/share/dict/words')
-        assert('additional' in se.candidates('addit*', 20))
+        _assert('additional' in se.candidates('addit*', 20))
 
         se.records.compact()
         print('Tests pass OK (%d/3)' % (round+2,))

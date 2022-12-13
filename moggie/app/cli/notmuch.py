@@ -45,6 +45,7 @@ from ...security.html import HTMLCleaner
 from ...security.css import CSSCleaner
 from ...storage.exporters.mbox import MboxExporter
 from ...storage.exporters.maildir import MaildirExporter, EmlExporter
+from ...util.mailpile import tag_unquote
 from ...util.dumbcode import dumb_decode
 
 
@@ -1264,8 +1265,8 @@ class CommandTag(CLICommand):
     Alternately, instead of a search query a JSON object can be used to
     add or remove metadata on the tags themselves:
 
-        moggie tag +family -- META='{"name": "My Family"}'
-        moggie tag +family +school -- META='{"parent": "personal"}'
+        moggie tag +family -- 'META={"name": "My Family"}'
+        moggie tag +family +school -- 'META={"parent": "personal"}'
 
     Options:
 
@@ -1290,11 +1291,14 @@ class CommandTag(CLICommand):
     strips the 'in:incoming' tag and the second would be a no-op if they
     were done one after another.
 
+    Batches can have in-line trailing comments using a '#' sign, but it
+    must be both preceded and followed by a space: # like this.
+
     Note that tag metadata changes cannot be undone.
     """
     NAME = 'tag'
     ROLES = AccessConfig.GRANT_READ + AccessConfig.GRANT_TAG_RW
-    MAX_TAGOPS = 10000
+    MAX_TAGOPS = 5000
     WEB_EXPOSE = True
     OPTIONS = {
         # These are moggie specific
@@ -1304,6 +1308,7 @@ class CommandTag(CLICommand):
         '--stdin=':          [],          # Allow lots to send us stdin
         '--undo=':           [None],
         '--redo=':           [None],
+        '--big':             [],         # Big batch?
         # These are notmuch options which we implement
         '--batch':           [],
         '--input=':          [],
@@ -1313,7 +1318,6 @@ class CommandTag(CLICommand):
 
     def _validate_and_normalize_tagops(self, tagops):
         for idx, tagop in enumerate(tagops):
-            # FIXME: Undo the %-encoding of the tag name
             otagop = tagop
             if tagop[:1] not in ('+', '-'):
                 raise Nonsense(
@@ -1324,19 +1328,20 @@ class CommandTag(CLICommand):
                 tagop = tagops[idx] = tagop[:1] + tagop[5:]
             if not tagop[1:]:
                 raise Nonsense('Missing tag: %s' % otagop)
-            tagops[idx] = tagop.lower()
+            tagops[idx] = tag_unquote(tagop).lower()
 
     def _batch_configure(self, ifd):
         for line in ifd:
             line = line.strip()
             if line and not line.startswith('#'):
                 tagops, terms = line.split('--')
+                terms = terms.strip()
                 tagops = tagops.strip().split()
                 self._validate_and_normalize_tagops(tagops)
-                if terms.startwith('META={'):
+                if terms.startswith('META={'):
                     yield (tagops, json.loads(terms[5:]))
                 else:
-                    yield (tagops, terms.strip())
+                    yield (tagops, terms.split(' # ')[0].strip())
 
     def configure(self, args):
         self.tagops = []
@@ -1362,8 +1367,9 @@ class CommandTag(CLICommand):
                 with open(fn, 'r') as fd:
                     self.tagops.extend(self._batch_configure(fd))
 
-        if len(self.tagops) > self.MAX_TAGOPS:
-            raise Nonsense('Too many operations (max=%d)' % self.MAX_TAGOPS)
+        if (len(self.tagops) > self.MAX_TAGOPS) and not self.options['--big']:
+            raise Nonsense(
+                'Too many operations (max=%d), use --big' % self.MAX_TAGOPS)
 
         if not (self.options['--input=']
                 or self.options['--redo='][-1]
@@ -1397,6 +1403,20 @@ class CommandTag(CLICommand):
         return []
 
     async def run(self):
+        if self.options['--big'] and len(self.tagops) > self.MAX_TAGOPS:
+            count = 0
+            total = len(self.tagops)
+            while self.tagops:
+                batch = self.tagops[:self.MAX_TAGOPS]
+                self.tagops[:len(batch)] = []
+                self.print('# Batch %d..%d of %d'
+                    % (count, count + len(batch) - 1, total))
+                await self.run_batch(batch)
+                count += len(batch)
+        else:
+            await self.run_batch(self.tagops)
+
+    async def run_batch(self, tagops):
         from ...jmap.requests import RequestTag
 
         query = RequestTag(
@@ -1406,7 +1426,7 @@ class CommandTag(CLICommand):
                 and self.desc),
             tag_undo_id=self.options['--undo='][-1],
             tag_redo_id=self.options['--redo='][-1],
-            tag_ops=self.tagops)
+            tag_ops=tagops)
         msg = await self.worker.async_jmap(self.access, query)
 
         fmt = self.options['--format='][-1]

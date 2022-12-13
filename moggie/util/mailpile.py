@@ -1,5 +1,14 @@
 import hashlib
+import base64
 import binascii
+from urllib.parse import quote
+from urllib.parse import unquote as tag_unquote
+
+
+def tag_quote(txt):
+    return (quote(txt.lower(), safe='@:').lower()
+        .replace('-', '%2d')
+        .replace('.', '%2e'))
 
 
 def b64c(b):
@@ -20,6 +29,19 @@ def b64c(b):
              .replace('=', '')
              .replace('\r', '')
              .replace('\n', ''))
+
+
+def c64b(b):
+    """
+    Reverse the mangling done by b64c
+
+    >>> c64b("a_bc_")
+    'a/bc/==='
+    """
+    b = b if isinstance(b, str) else str(b, 'latin-1')
+    if len(b) % 4:
+        b += '=' * (4 - len(b) % 4)
+    return b.replace('_', '/')
 
 
 def _hash(cls, data):
@@ -75,16 +97,25 @@ def msg_id_hash(msg_id):
     the hashes used internally in Mailpile v1.
 
     >>> msg_id_hash(b'bjarni@mailpile')
-    'dO8TGE1dMM9XPPoacd35EJIGbXQ'
+    '74ef13184d5d30cf573cfa1a71ddf91092066d74'
 
     >>> msg_id_hash('<bjarni@mailpile>')
-    'dO8TGE1dMM9XPPoacd35EJIGbXQ'
+    '74ef13184d5d30cf573cfa1a71ddf91092066d74'
+
+    >>> msg_id_hash('dO8TGE1dMM9XPPoacd35EJIGbXQ')
+    '74ef13184d5d30cf573cfa1a71ddf91092066d74'
     """
     msg_id = msg_id if isinstance(msg_id, str) else str(msg_id, 'utf-8')
+    # i5+Q3pEFTNwjo7RfOVZ5DHVaABE
+    # dO8TGE1dMM9XPPoacd35EJIGbXQ
+    if len(msg_id) == 27 and ('@' not in msg_id):
+        msg_id = base64.b64decode(c64b(msg_id))
+        return str(binascii.hexlify(msg_id), 'utf-8')
+
     new_msg_id = '<%s>' % msg_id.split('<', 1)[-1].split('>')[0]
     if len(new_msg_id) > 2:
         msg_id = new_msg_id
-    return b64c(sha1b64(msg_id.strip()))
+    return hashlib.sha1(bytes(msg_id, 'utf-8')).hexdigest()
 
 
 # If 'python util.py' is executed, start the doctest unittest

@@ -42,6 +42,9 @@ def greedy_parse_terms(terms, magic_map={}):
              .replace(' -', ' - ').replace('- ', ' - ').strip()
         ).split()
 
+    # FIXME: A smarter split function would be nice here, supporting
+    #        quotes would be quite grown-up of us.
+
     def _flat(search):
         if len(search) == 2:
             return search[1]
@@ -132,26 +135,36 @@ if __name__ == '__main__':
     if sys.argv[1:]:
         print('Parsed: %s' % (greedy_parse_terms(' '.join(sys.argv[1:])),))
 
-    assert(greedy_parse_terms('yes hello world')
-        == (IntSet.And, 'yes hello', 'world'))
+    def _assert(val, want=True, msg='assert'):
+        if isinstance(want, bool):
+            if (not val) == (not want):
+                want = val
+        if val != want:
+            raise AssertionError('%s(%s==%s)' % (msg, val, want))
 
-    assert(greedy_parse_terms('And AND hello +world +iceland')
-        == (IntSet.Or, (IntSet.And, 'and', 'hello'), 'world', 'iceland'))
+    _assert(greedy_parse_terms('yes in:this-rocks.whee@foo world'),
+        (IntSet.And, 'yes', 'in:this-rocks.whee@foo', 'world'))
 
-    assert(greedy_parse_terms('hello +world -iceland')
-        == (IntSet.Sub, (IntSet.Or, 'hello', 'world'), 'iceland'))
+    _assert(greedy_parse_terms('yes hello world'),
+        (IntSet.And, 'yes hello', 'world'))
 
-    assert(greedy_parse_terms('hello +(world NOT iceland)')
-        == (IntSet.Or, 'hello', (IntSet.Sub, 'world', 'iceland')))
+    _assert(greedy_parse_terms('And AND hello +world +iceland'),
+        (IntSet.Or, (IntSet.And, 'and', 'hello'), 'world', 'iceland'))
 
-    assert(greedy_parse_terms('hello + (world iceland)')
-        == (IntSet.Or, 'hello', (IntSet.And, 'world', 'iceland')))
+    _assert(greedy_parse_terms('hello +world -iceland'),
+        (IntSet.Sub, (IntSet.Or, 'hello', 'world'), 'iceland'))
 
-    assert(greedy_parse_terms('hello) OR (world iceland')
-        == (IntSet.Or, 'hello', (IntSet.And, 'world', 'iceland')))
+    _assert(greedy_parse_terms('hello +(world NOT iceland)'),
+        (IntSet.Or, 'hello', (IntSet.Sub, 'world', 'iceland')))
 
-    assert(greedy_parse_terms('ALL - iceland')
-        == (IntSet.Sub, IntSet.All, 'iceland'))
+    _assert(greedy_parse_terms('hello + (world iceland)'),
+        (IntSet.Or, 'hello', (IntSet.And, 'world', 'iceland')))
+
+    _assert(greedy_parse_terms('hello) OR (world iceland'),
+        (IntSet.Or, 'hello', (IntSet.And, 'world', 'iceland')))
+
+    _assert(greedy_parse_terms('ALL - iceland'),
+        (IntSet.Sub, IntSet.All, 'iceland'))
 
     def swapper_one(kw):
         return ':'.join(reversed(kw.split(':')))
