@@ -1274,6 +1274,7 @@ class CommandTag(CLICommand):
         --batch            Read stdin for tag commands, one per line
         --input=<filename> Read batch commands from a file
         --comment=<C>      Add a comment to the tag-history for this op
+        --remove-all       Strip all tags from matching messages
         --undo=<ID>        Undo a recent tag operation
         --redo=<ID>        Redo a recent tag operation
 
@@ -1287,12 +1288,15 @@ class CommandTag(CLICommand):
         +inbox -unread -incoming -- in:incoming
         +potato -- in:incoming
 
-    Will tag all the messages as 'in:potato', even though the first line
-    strips the 'in:incoming' tag and the second would be a no-op if they
-    were done one after another.
+    ... will tag all the messages as 'in:potato', even though the first
+    line strips the 'in:incoming' tag and the second would be a no-op if
+    they were done one after another.
 
     Batches can have in-line trailing comments using a '#' sign, but it
     must be both preceded and followed by a space: # like this.
+
+    To remove all matches for a single search within a batch, use '-*'
+    as a tag operation.
 
     Note that tag metadata changes cannot be undone.
     """
@@ -1312,8 +1316,6 @@ class CommandTag(CLICommand):
         # These are notmuch options which we implement
         '--batch':           [],
         '--input=':          [],
-        # FIXME: These are unimplemented still, making this work sanely
-        #        within batches by adding a -* tag op?
         '--remove-all':      []}
 
     def _validate_and_normalize_tagops(self, tagops):
@@ -1329,6 +1331,8 @@ class CommandTag(CLICommand):
             if not tagop[1:]:
                 raise Nonsense('Missing tag: %s' % otagop)
             tagops[idx] = tag_unquote(tagop).lower()
+        if self.options['--remove-all'] and '-*' not in tagops:
+            tagops.insert(0, '-*')
 
     def _batch_configure(self, ifd):
         for line in ifd:

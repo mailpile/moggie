@@ -601,14 +601,17 @@ class SearchEngine:
                 raise ValueError('Unsupported op: %s' % o)
             return o
 
+        _asterisk = tag_quote('in:*')
+
         def _op_kwi(op, kw):
             op = _op(op)
-            if (kw == '*'):
-                # FIXME: What are we doing here?
-                return (op, kw, None)
+            if kw in ('in:*', _asterisk):
+                if op == IntSet.Sub:
+                    for tag, _ in self.iter_tags(tag_namespace=tag_namespace):
+                        yield (op, tag, self.keyword_index(tag, create=False))
             else:
                 kw = self._ns(kw, tag_namespace)
-                return (op, kw, self.keyword_index(kw, create=(op==IntSet.Or)))
+                yield (op, kw, self.keyword_index(kw, create=(op==IntSet.Or)))
 
         slot = None
         cset_all = IntSet()
@@ -616,7 +619,9 @@ class SearchEngine:
         mutations = 0
         with self.lock:
             for mset, op_kw_list in mlist:
-                op_idx_kw_list = [_op_kwi(op, kw) for op, kw in op_kw_list]
+                op_idx_kw_list = []
+                for op, kw in op_kw_list:
+                    op_idx_kw_list.extend(_op_kwi(op, kw))
 
                 for op, kw, idx in op_idx_kw_list:
                     plb = PostingListBucket(self.records.get(idx) or b'')

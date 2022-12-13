@@ -208,10 +208,6 @@ class SearchWorker(BaseWorker):
         no_hits = dumb_encode_asc(IntSet([]), compress=256)
         for (tag_ops, m) in tag_op_sets:
             mutation = [m, []]
-            if isinstance(m, str):
-                m = dumb_decode(m)
-                mutation[0] = m
-
             if not isinstance(m, (IntSet, list, dict)):
                 m = self.api_search(m,
                         mask_deleted, mask_tags, more_terms,
