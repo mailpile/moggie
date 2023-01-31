@@ -85,6 +85,25 @@ def rfc2074_unquote(quoted, strict=False):
     return ''.join(text)
 
 
+def rfc2074_quote(unquoted, linelengths=[72], charset='utf-8'):
+    try:
+        _ascii = bytes(unquoted, 'us-ascii')
+        return unquoted
+    except UnicodeEncodeError:
+        out = []
+        while unquoted:
+            maxlen = ((linelengths[0] - len(charset) - len('=??b?=')) * 3) // 4
+            for cc in reversed(range(2, maxlen)):
+                _utf8 = bytes(unquoted[:cc], charset)
+                if len(_utf8) <= maxlen:
+                    unquoted = unquoted[cc:]
+                    break
+            out.append(email_b.header_encode(_utf8, charset=charset))
+            if len(linelengths) > 1:
+                linelengths.pop(0)
+        return ' '.join(out)
+
+
 if __name__ == '__main__':
     import base64
 

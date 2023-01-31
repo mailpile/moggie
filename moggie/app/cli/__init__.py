@@ -5,6 +5,7 @@ from .admin import CommandWelcome, CommandGrant, CommandContext
 from .admin import CommandUnlock, CommandEnableEncryption, CommandImport
 from .notmuch import CommandSearch, CommandAddress, CommandShow, CommandCount
 from .notmuch import CommandConfig, CommandTag
+from .notmuch import CommandEmail, CommandCompose, CommandReply, CommandForward
 from .help import TOPICS
 
 
@@ -130,6 +131,10 @@ CLI_COMMANDS = {
     CommandSearch.NAME: CommandSearch,
     CommandShow.NAME: CommandShow,
     CommandCount.NAME: CommandCount,
+    CommandEmail.NAME: CommandEmail,
+    CommandCompose.NAME: CommandCompose,
+    CommandForward.NAME: CommandForward,
+    CommandReply.NAME: CommandReply,
     CommandTag.NAME: CommandTag,
     'import': CommandImport,
     'encrypt': CommandEnableEncryption,

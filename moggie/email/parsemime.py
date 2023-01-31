@@ -127,6 +127,11 @@ class MessagePart(dict):
                 if i == 0:
                     part['content-type'] = ['text/x-mime-preamble', {}]
                 elif i == len(begs)-1:
+                    # FIXME: If the message is truncated and doesn't have a
+                    #        closing MIME marker, we'll accidentally assign
+                    #        an actual part to the postamble. We need to 
+                    #        detect this more explicitly based on --*--.
+                    #        Or make sure find_parts copes!
                     part['content-type'] = ['text/x-mime-postamble', {}]
                 elif recurse:
                     sub = MessagePart(

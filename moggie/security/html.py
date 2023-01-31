@@ -221,14 +221,17 @@ class HTMLCleaner(HTMLParser):
             if a.startswith('on'):
                 self.saw_danger += 1
             validator = self.attribute_checks.get(a)
-            if validator and validator(v):
-                if css_cleaner and (a == 'style'):
-                    c = css_cleaner.copy().parse_styles(v)
-                    v = c.apply_styles(self.tag_stack)
-                    saw_style = True
-                if v:
-                    yield a, v
-            else:
+            try:
+                if validator and validator(v):
+                    if css_cleaner and (a == 'style'):
+                        c = css_cleaner.copy().parse_styles(v)
+                        v = c.apply_styles(self.tag_stack)
+                        saw_style = True
+                    if v:
+                        yield a, v
+                else:
+                    self.dropped_attrs.add((tag, a, v))
+            except (ValueError, TypeError):
                 self.dropped_attrs.add((tag, a, v))
         if css_cleaner and not saw_style:
             style = css_cleaner.apply_styles(self.tag_stack)
@@ -372,6 +375,51 @@ class HTMLCleaner(HTMLParser):
     def clean(self):
         self.close()
         return self.cleaned +'\n'+ self.report()
+
+
+def html_to_markdown(html, wrap=76):
+    lines = ['']
+
+    def emit_text(tag, attrs, txt):
+        adict = dict(attrs or [])
+        if tag not in ('script', 'style'):
+            if tag in ('b', 'strong'):
+                txt = '**%s**' % txt
+            elif tag in ('i', 'em'):
+                txt = '*%s*' % txt
+            elif tag == 'a' and adict.get('href'):
+                txt = '[%s](%s)' % (txt, adict['href'])
+            if txt:
+                lines[-1] += txt + ' '
+
+    def emit_break(cleaner, tag, attrs, txt):
+        if tag in ('p', 'div'):
+            lines.append('')
+        elif tag == 'hr':
+            if not lines[-1]:
+                lines.pop(-1)
+            lines.append('-' * 72)
+        lines.append('')
+        return tag, attrs, txt
+
+    HTMLCleaner(html, callbacks={
+        'DATA': emit_text,
+        'table': emit_break,
+        'div': emit_break,
+        'hr': emit_break,
+        'br': emit_break,
+        'tr': emit_break,
+        'p': emit_break}).close()
+
+    def wrap_text(txt):
+        lines = ['']
+        for word in txt.replace('\r', '').replace('\n', ' ').split():
+            if len(lines[-1]) + len(word) >= wrap:
+                lines.append('')
+            lines[-1] += ' ' + word
+        return '\r\n'.join(l.strip() for l in lines if l)
+
+    return '\r\n'.join(wrap_text(l) for l in lines)
 
 
 if __name__ == '__main__':

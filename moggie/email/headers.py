@@ -1,7 +1,9 @@
 import logging
 import re
+import datetime
+from email.utils import encode_rfc2231, formatdate, format_datetime
 
-from .rfc2074 import rfc2074_unquote
+from .rfc2074 import rfc2074_quote, rfc2074_unquote
 from .addresses import AddressHeaderParser
 
 
@@ -49,6 +51,46 @@ ADDRESS_HEADERS = (
 HEADERS_WITH_PARAMS = (
     'content-type',
     'content-disposition')
+
+HEADER_ORDER = {
+    'date': 100,
+    'subject': 101,
+    'from': 102,
+    'reply-to': 102,
+    'to': 103,
+    'cc': 104,
+    'bcc': 105,
+    'resent-date': 90,
+    'resent-from': 92,
+    'resent-to': 93,
+    'resent-cc': 94,
+    'in-reply-to': 99,
+    'references': 99,
+    'list-id': 20,
+    'list-help': 20,
+    'message-id': 16,
+    'mime-version': 16,
+    'content-id': 17,
+    'content-length': 17,
+    'content-type': 17,
+    'content-disposition': 18,
+    'content-transfer-encoding': 19}
+
+HEADER_CASEMAP = {
+    'mime-version': 'MIME-Version',
+    'content-type': 'Content-Type',
+    'content-disposition': 'Content-Disposition',
+    'content-transfer-encoding': 'Content-Transfer-Encoding',
+    'from': 'From',
+    'to': 'To',
+    'cc': 'Cc',
+    'date': 'Date',
+    'subject': 'Subject',
+    'autocrypt': 'Autocrypt',
+    'reply-to': 'Reply-To',
+    'in-reply-to': 'In-Reply-To',
+    'status': 'Status',
+    'references': 'References'}
 
 HWP_CONTENT_TYPE_RE = re.compile(r'^([a-zA-Z0-9_-]+\/[a-zA-Z0-9_\.-]+)', flags=re.DOTALL)
 HWP_VALUE_RE = re.compile(r'^([^;]+)', flags=re.DOTALL)
@@ -171,8 +213,102 @@ def parse_header(raw_header):
     return headers
 
 
+def format_header(hname, data,
+        as_timestamp=None, intfmt='%d', floatfmt='%.2f'):
+    hname = HEADER_CASEMAP.get(hname.lower(), hname)
+    values = []
+    sep = (
+        ', ' if (hname in ('To', 'Cc')) else
+        ' ' if (hname == 'Subject') else
+        '; ')
+    if not isinstance(data, list):
+        data = [data]
+
+    if hname == 'Date':
+        as_timestamp = True
+    elif hname == 'MIME-Version':
+        floatfmt = intfmt = '%.1f'
+
+    ll = [None, 70 - len(hname), 72]
+    def _quote_space(txt):
+        if ' ' in txt or '\t' in txt:
+            return '"%s"' % (txt.replace('"', '\\"'))
+        return txt
+    def _encode(item):
+        if isinstance(item, list):
+            rv = []
+            for i in item:
+                rv.extend(_encode(i))
+            return rv
+        elif hasattr(item, 'normalized'):
+            return [item.normalized()]
+        elif isinstance(item, tuple):
+            k, v = item
+            return ['%s=%s' % (k, _quote_space(_encode(v)[0]))]
+        elif isinstance(item, dict):
+            return _encode(list(item.items()))
+
+        if len(ll) > 1:
+            ll.pop(0)
+
+        if isinstance(item, datetime.datetime):
+            return [format_datetime(item)]
+        elif isinstance(item, int):
+            if as_timestamp:
+                return [formatdate(item)]
+            else:
+                return [intfmt % item]
+        elif isinstance(item, float):
+            if as_timestamp:
+                return [formatdate(item)]
+            else:
+                return [floatfmt % item]
+        elif isinstance(item, str):
+            return [rfc2074_quote(item, linelengths=ll)]
+        elif isinstance(item, bytes):
+            return [rfc2074_quote(str(item, 'utf-8'), linelengths=ll)]
+    for item in data:
+        values.extend(_encode(item))
+
+    def _fold(txt):
+        folds = [txt]
+        while len(folds[-1]) > 78:
+            if sep in folds[-1][3:(78 - len(sep))]:
+                pos = 3 + folds[-1][3:(78 - len(sep))].rindex(sep) + len(sep)
+            elif '?= =?' in folds[-1][3:78]:
+                pos = 3 + folds[-1][3:78].rindex('?= =?') + 3
+            elif ' ' in folds[-1][3:78]:
+                pos = 3 + folds[-1][3:78].rindex(' ')
+            else:
+                pos = 78
+            p1, p2 = folds[-1][:pos], folds[-1][pos:]
+            folds[-1] = '%s\n ' % p1
+            folds.append(p2)
+
+        return ''.join(folds)
+
+    return _fold('%s: %s' % (hname, sep.join(values)))
+
+
+def format_headers(header_dict, eol='\r\n'):
+    header_items = list(header_dict.items())
+    header_items.sort(key=lambda k:
+        (HEADER_ORDER.get(k[0].lower(), 0), k[0], k[1]))
+    return (
+        eol.join(format_header(k, v) for k, v in header_items)
+        + eol + eol)
+
+
 if __name__ == '__main__':
     import json
+    from .addresses import AddressHeaderParser
+
+    def _assert(val, want=True, msg='assert'):
+        if isinstance(want, bool):
+            if (not val) == (not want):
+                want = val
+        if val != want:
+            raise AssertionError('%s(%s==%s)' % (msg, val, want))
 
     parse = parse_header(b"""\
 From something at somedate
@@ -233,5 +369,38 @@ Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
     p6v, p6p = parse_parameters('okay; filename="Encryption key for \\"nobody@example.org\\".html"')
     assert(p6p['filename'] == 'Encryption key for "nobody@example.org".html')
     assert('_JUNK' not in p6p)
+
+    _assert(format_header('To', [
+             AddressHeaderParser('Björn <a@example.org>'),
+             AddressHeaderParser('Bjarni Runar b@example.org')]),
+        'To: =?utf-8?Q?Bj=C3=B6rn?= <a@example.org>, '
+        '"Bjarni Runar" <b@example.org>')
+
+    aedi = 'æði pæði skúmmelaði'
+    subject = format_header('Subject', aedi * 10)
+    _assert(
+        parse_header(subject)['subject'],
+        aedi * 10)
+
+    date = format_header('Date', 0, as_timestamp=True)
+    _assert(date, 'Date: Thu, 01 Jan 1970 00:00:00 -0000')
+    # FIXME: Should this parse to something else?
+    _assert(parse_header(date)['date'], 'Thu, 01 Jan 1970 00:00:00 -0000')
+
+    _assert(format_headers({
+            'Subject': 'Halló heimur',
+            'Date': 0,
+            'From': AddressHeaderParser('Bjarni R. E. bre@example.org')[0],
+            'MIME-Version': 1,
+            'Content-Type': ['multipart/mixed', ('boundary', 'magic123')],
+        }, eol='\n'),
+        """\
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary=magic123
+Date: Thu, 01 Jan 1970 00:00:00 -0000
+Subject: =?utf-8?b?SGFsbMOzIGhlaW11cg==?=
+From: "Bjarni R. E." <bre@example.org>
+
+""")
 
     print('Tests passed OK')
