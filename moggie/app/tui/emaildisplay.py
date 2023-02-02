@@ -23,6 +23,7 @@ class EmailDisplay(urwid.ListBox):
         self.uuid = self.metadata.uuid_asc
         self.crumb = self.parsed.get('subject', 'FIXME')
 
+        self.rendered_width = self.COLUMN_NEEDS
         self.email_body = urwid.Text('(loading...)')
         self.widgets = urwid.SimpleListWalker(
             list(self.headers()) + [self.email_body])
@@ -63,20 +64,41 @@ class EmailDisplay(urwid.ListBox):
         del self.tui_frame
         del self.email
 
+    def render(self, size, focus=False):
+        self.rendered_width = size[0]
+        return super().render(size, focus=focus)
+
     def incoming_message(self, message):
+        from moggie.security.html import html_to_markdown
+
+        def _to_md(txt):
+            return html_to_markdown(txt,
+                no_images=True, wrap=self.rendered_width)
+
         if (message.get('prototype') != self.search_obj['prototype'] or
                 message.get('req_id') != self.search_obj['req_id']):
             return
         self.email = message['email']
 
-        email_text = ''
-        for ctype in ('text/plain', 'text/html'):
+        email_txts = {'text/plain': '', 'text/html': ''}
+        for ctype, fmt in (
+                ('text/plain', lambda t: t),
+                ('text/html',  _to_md)):
             for part in self.email['_PARTS']:
                 if part['content-type'][0] == ctype:
-                    email_text += part.get('_TEXT', '')
-            if email_text:
-                break
-        email_text = re.sub(r'\n\s*\n', '\n\n', email_text, flags=re.DOTALL)
+                    email_txts[ctype] += fmt(part.get('_TEXT', ''))
 
-        self.email_body = urwid.Text(email_text)
+        # This is a heuristic to avoid the case where silly people
+        # send a plain-text part that says "there is no text part".
+        len_html = len(email_txts['text/html'])
+        len_text = len(email_txts['text/plain'])
+        if len_html > 60:
+            email_text = email_txts['text/html']
+        else:
+            email_text = email_txts['text/plain']
+
+        email_text = re.sub(
+            r'\n\s*\n', '\n\n', email_text.replace('\r', ''), flags=re.DOTALL)
+
+        self.email_body = urwid.Text(email_text.strip())
         self.widgets[-1] = self.email_body

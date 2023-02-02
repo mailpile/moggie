@@ -60,7 +60,7 @@ class CSSSelector:
             elif a == 'id':
                 description.add('#' + v)
             elif cls.RE_ALNUM.match(a):
-                description.add('[%s="%s"]' % (a, v.replace('"', '\\"')))
+                description.add('[%s="%s"]' % (a, (v or '').replace('"', '\\"')))
         return description
 
     def match(self, element_stack, more=None):
@@ -233,7 +233,7 @@ class CSSCleaner(CSSParser):
     CHECK_BCOLLAPSE = _rc(r'^(collapse)$')
     CHECK_COLOR     = _rc(r'^(rgba?\([\d\s\.,]+\)|#[0-9a-f]{3}|#[0-9a-f]{6}|inherit|transparent|white)$')
     CHECK_DIR       = _rc(r'^(inherit|rtl|ltr)$')
-    CHECK_DISPLAY   = _rc(r'^(block|inline|inline-block|inline-table|table)$')
+    CHECK_DISPLAY   = _rc(r'^(block|inline|inline-block|inline-table|table|none)$')
     CHECK_LSPACE    = _rc(r'^(normal)$')
     CHECK_NUMBER    = _rc(r'^\d+(\.\d+)?$')
     CHECK_OUTLINE   = _rc(r'^none$')

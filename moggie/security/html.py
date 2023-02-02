@@ -63,7 +63,7 @@ class HTMLCleaner(HTMLParser):
         'body',
         # These are tags we pass through
         'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'br',
-        'div', 'span', 'p', 'a', 'img',
+        'div', 'span', 'p', 'a', 'img', 'blockquote', 'pre',
         'table', 'thead', 'tbody', 'tr', 'th', 'td', 'ul', 'ol', 'li',
         'b', 'i', 'tt', 'center', 'strong', 'em', 'small', 'smaller', 'big'])
 
@@ -71,14 +71,16 @@ class HTMLCleaner(HTMLParser):
     DANGEROUS_TAGS = set(['script'])
 
     SINGLETON_TAGS = set(['hr', 'img', 'br'])
-    CONTAINER_TAGS = set(['table', 'ul', 'ol', 'div'])
+    CONTAINER_TAGS = set(['html', 'body', 'table', 'ul', 'ol', 'div'])
+    TAGS_END_P = set([
+        'table', 'ul', 'ol', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6'])
     SELF_NESTING = set([
         'div', 'span',
         'b', 'i', 'tt', 'center', 'strong', 'em', 'small', 'smaller', 'big'])
 
     def __init__(self, data=None, callbacks=None, css_cleaner=None):
         super().__init__()
-        self.cleaned = ''
+        self.cleaned = []
         self.keywords = set([])
         self.tag_stack = []
         self.tags_seen = []
@@ -110,7 +112,10 @@ class HTMLCleaner(HTMLParser):
         """
         for i, (a, v) in enumerate(attrs):
             if a == attr:
-                attrs[i] = (a, v + ' ' + value)
+                if v:
+                    attrs[i] = (a, v + ' ' + value)
+                else:
+                    attrs[i] = (a, value)
                 return attrs
         return attrs + [(attr, value)]
 
@@ -158,6 +163,17 @@ class HTMLCleaner(HTMLParser):
                     self.force_closed += 1
                 self.handle_endtag(closing)
                 if closing == tag:
+                    break
+
+        # Close dangling paragraphs
+        elif tag in self.TAGS_END_P and 'p' in container:
+            while self.tag_stack:
+                closing = self.tag_stack[-1][0]
+                if closing not in ('p', 'li'):
+                    # Bare <p> and <li> are common enough to not count
+                    self.force_closed += 1
+                self.handle_endtag(closing)
+                if closing == 'p':
                     break
 
         # FIXME: Sanitize attributes
@@ -272,20 +288,26 @@ class HTMLCleaner(HTMLParser):
                 self.tag_stack.pop(-1)
                 return
 
-            # Note: this depends on self.tag_stack being intact for
-            #       correct application of global styles.
-            a = self._render_attrs(self._clean_attributes(t, a))
-
-            if t in self.SINGLETON_TAGS:
-                regenerated = '<%s%s>' % (t, a)
-            else:
-                regenerated = '<%s%s>%s</%s>' % (t, a, b, t)
+            regenerated = self.rerender_tag(t, a, b)
 
             self.tag_stack.pop(-1)
             if self.tag_stack:
                 self.tag_stack[-1][-1] += regenerated
             else:
-                self.cleaned += regenerated
+                self.cleaned.append(regenerated)
+
+    def rerender_tag(self, t, a, b):
+        # Note: this depends on self.tag_stack being intact for
+        #       correct application of global styles.
+        a = list(self._clean_attributes(t, a))
+        if False and 'display:none;' in dict(a).get('style', ''):
+            return ''
+
+        a = self._render_attrs(a)
+        if t in self.SINGLETON_TAGS:
+            return '<%s%s>' % (t, a)
+        else:
+            return '<%s%s>%s</%s>' % (t, a, b, t)
 
     def handle_data(self, data):
         """
@@ -296,17 +318,20 @@ class HTMLCleaner(HTMLParser):
         if not data:
             return
 
-        if self.tag_stack:
-            self.tag_stack[-1][-1] += self._quote(data)
-            t, a, _ = self.tag_stack[-1]
-        else:
-            self.cleaned += self._quote(data)
-            t, a = None, None
+        def _callbacks(t, a, d):
+            for cbset in (self.builtins, self.callbacks):
+                cb = cbset.get('DATA')
+                if (cb is not None) and (t not in self.SUPPRESSED_TAGS):
+                    rv = cb(t, a, d)
+                    if rv is not None:
+                        d = rv
+            return d
 
-        for cbset in (self.builtins, self.callbacks):
-            cb = cbset.get('DATA')
-            if (cb is not None) and (t not in self.SUPPRESSED_TAGS):
-                cb(t, a, data)
+        if self.tag_stack:
+            t, a, _ = self.tag_stack[-1]
+            self.tag_stack[-1][-1] += self._quote(_callbacks(t, a, data))
+        else:
+            self.cleaned.append(self._quote(_callbacks(None, None, data)))
 
     def close(self):
         super().close()
@@ -315,8 +340,7 @@ class HTMLCleaner(HTMLParser):
             self.force_closed += 1
             self.handle_endtag(self.tag_stack[-1][0])
         self._make_html_keywords()
-        self.cleaned = self.cleaned.strip()
-        return self.cleaned
+        return ''.join(self.cleaned).strip()
 
     def report(self):
         return """\
@@ -374,60 +398,193 @@ class HTMLCleaner(HTMLParser):
 
     def clean(self):
         self.close()
-        return self.cleaned +'\n'+ self.report()
+        return ''.join(self.cleaned).strip() + '\n' + self.report()
 
 
-def html_to_markdown(html, wrap=76):
-    lines = ['']
+class HTMLToTextCleaner(HTMLCleaner):
+    def __init__(self, html, **kwargs):
+        self.html = html
+        self.wrap = int(kwargs.get('wrap', 72))
+        self.all_links = kwargs.get('all_links', False)
+        self.all_images = kwargs.get('all_images', False)
+        self.no_images = kwargs.get('no_images', False)
 
-    def emit_text(tag, attrs, txt):
-        adict = dict(attrs or [])
-        if tag not in ('script', 'style'):
-            if tag in ('b', 'strong'):
-                txt = '**%s**' % txt
-            elif tag in ('i', 'em'):
-                txt = '*%s*' % txt
-            elif tag == 'a' and adict.get('href'):
-                txt = '[%s](%s)' % (txt, adict['href'])
-            if txt:
-                lines[-1] += txt + ' '
+        for k in ('all_links', 'all_images', 'no_images', 'wrap'):
+            if k in kwargs:
+                del kwargs[k]
 
-    def emit_break(cleaner, tag, attrs, txt):
-        if tag in ('p', 'div'):
+        super().__init__(data=html, **kwargs)
+
+    def _wrap_text(self, txt, wrap=None):
+        wrap = wrap or self.wrap
+        lines = []
+        for chunk in txt.splitlines():
             lines.append('')
-        elif tag == 'hr':
-            if not lines[-1]:
-                lines.pop(-1)
-            lines.append('-' * 72)
-        lines.append('')
-        return tag, attrs, txt
+            for word in chunk.replace('\r', '').split():
+                if len(lines[-1]) + len(word) >= wrap:
+                    if lines[-1]:
+                        lines.append('')
+                if lines[-1]:
+                    lines[-1] += ' ' + word
+                else:
+                    lines[-1] += word
+        return '\n'.join(lines)
 
-    HTMLCleaner(html, callbacks={
-        'DATA': emit_text,
-        'table': emit_break,
-        'div': emit_break,
-        'hr': emit_break,
-        'br': emit_break,
-        'tr': emit_break,
-        'p': emit_break}).close()
+    def handle_data(self, data):
+        if not data:
+            data = ''
 
-    def wrap_text(txt):
-        lines = ['']
-        for word in txt.replace('\r', '').replace('\n', ' ').split():
-            if len(lines[-1]) + len(word) >= wrap:
-                lines.append('')
-            lines[-1] += ' ' + word
-        return '\r\n'.join(l.strip() for l in lines if l)
+        # FIXME: This needs to be done differently in order to support
+        #        tables, since the table gets to place the text fragments
+        #        in cells - so we can't entirely flatten the structure.
 
-    return '\r\n'.join(wrap_text(l) for l in lines)
+        if self.tag_stack:
+            t, a, _ = lts = self.tag_stack[-1]
+            if t == 'pre':
+                lts[-1] += data
+            else:
+                html = re.sub(r'\s+', ' ', data.lstrip(), flags=re.S)
+                lts[-1] += html
+
+        elif data:
+            self.cleaned.append(data)
+
+    def rerender_tag(self, t, a, b):
+        indents = {
+            'blockquote': 2,
+            'li': 2,
+            'ul': 3,
+            'ol': 3}
+        wrap = self.wrap
+        for tag, _, _ in self.tag_stack:
+            # FIXME: need different calculations for cells within a table.
+            wrap -= indents.get(tag, 0)
+
+        if t in ('script', 'style'):
+            return ''
+
+        def _strips(txt):
+            return re.sub(
+                    r'\n\s+\n', '\n\n', re.sub(r'^\s*\n', '', txt
+                )).rstrip()
+
+        def _alt(attr):
+            alt = adict.get(attr)
+            if alt and alt.startswith('http'):
+                return ''
+            return alt
+
+        adict = dict(self._clean_attributes(t, a))
+        if 'display:none;' in adict.get('style', ''):
+            return ''
+
+        if t == 'hr':
+            return '\n%s\n' % ('-' * wrap)
+        if t == 'br':
+            return '\n'
+        if t in ('b', 'strong'):
+            return (' **%s** ' % b.strip()) if b else ''
+        if t == ('i', 'em'):
+            return (' *%s* ' % b.strip()) if b else ''
+
+        if t == 'img':
+            src = adict.get('data-m-src', '')
+            txt = (_alt('alt') or _alt('title') or '').strip()
+            br = '\n' if (len(src) + len(txt) > self.wrap/2) else ''
+            if self.all_images and not txt:
+                txt = 'IMG'
+            if not self.no_images and (len(txt) > 1 or self.all_images):
+                tsp = ' ' if (len(src) < 40) else ''
+                return '%s![ %s ]( %s%s)' % (br, txt, src, tsp)
+            elif txt:
+                return txt
+            else:
+                return ''
+
+        if t == 'a':
+            href = adict.get('href', '')
+            text = b.strip()
+            br = '\n' if (len(href+text) > wrap or ' ' not in text) else ''
+            if href in ('', '#'):
+                return text + ' '
+            elif text and (text != href):
+                tsp = ' ' if (len(href) < wrap-3) else ''
+                return '%s[ %s ]( %s%s) ' % (br, text, href, tsp)
+            elif text or self.all_links:
+                return '%s<%s> ' % (br, href)
+            else:
+                return ''
+
+        if t in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
+            hashes = '#' * int(t[1])
+            text = b.strip()
+            return ('\n%s %s\n\n' % (hashes, text)) if text else ''
+
+        if t in ('p', ):
+            return '\n' + self._wrap_text(b.strip(), wrap=wrap) + '\n\n'
+
+        if t == 'pre':
+            return '\n```\n%s\n```\n' % _strips(b)
+
+        if t == 'blockquote':
+            contents = '\n> '.join(_strips(b).splitlines())
+            contents = contents.replace('\n> \n> \n', '\n>\n')
+            return '\n> %s\n' % contents
+
+        if t == 'li':
+            contents = b.rstrip()
+            if '* ' not in contents:
+                contents = self._wrap_text(contents.strip(), wrap=wrap)
+            if '\n' in contents:
+                contents = '\n  '.join(contents.splitlines())
+            return '\n* ' + contents
+
+        if t in ('ul', 'ol'):
+            ind = '\n   ' if (wrap == self.wrap - 3) else '\n '
+            return ind + ind.join(_strips(b).splitlines()) + '\n\n'
+
+        if t in ('div',):
+            if ' * ' in b:
+                return _strips(b) + '\n\n'
+            else:
+                return self._wrap_text(_strips(b), wrap=wrap) + '\n\n'
+
+        if False:  # FIXME
+            if t in ('th', 'td', 'tr', 'tbody', 'table'):
+                return '<%s>%s</%s>' % (t, b, t)
+
+        else:
+            if t in ('th', ):
+                text = b.strip()
+                return ('%s ' % text) if text else ''
+
+            if t in ('div', 'tr', 'tbody', 'table'):
+                if ' * ' in b:
+                    return _strips(b) + '\n\n'
+                else:
+                    return self._wrap_text(_strips(b), wrap=wrap) + '\n\n'
+
+            if t in ('td', ):
+                return _strips(b) + ' '
+
+        return self._wrap_text(_strips(b), wrap=wrap)
+
+
+def html_to_markdown(html, **kwargs):
+    from .css import CSSCleaner
+    cleaner = HTMLToTextCleaner(html, **kwargs, css_cleaner=CSSCleaner())
+    return re.sub(r'\n[\s]+\n', '\n\n', cleaner.close(), flags=re.DOTALL)
 
 
 if __name__ == '__main__':
     import sys
 
     if sys.argv[1:] == ['-']:
-        cleaner = HTMLCleaner(sys.stdin.read())
+        from .css import CSSCleaner
+        cleaner = HTMLCleaner(sys.stdin.read(), css_cleaner=CSSCleaner())
         print(cleaner.clean())
+    elif sys.argv[1:] == ['--to-markdown']:
+        print(html_to_markdown(sys.stdin.read(), wrap=72))
     else:
         input_data = """\
 <!DOCTYPE html>
