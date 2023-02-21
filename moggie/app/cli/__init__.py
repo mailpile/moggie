@@ -14,13 +14,20 @@ class CommandHelp(CLICommand):
 
     Help on how to use moggie (on the command-line). Run `moggie help`
     without any arguments for a quick introduction and list of topics.
+
+    Options:
+
+    %(OPTIONS)s
+
     """
     NAME = 'help'
     ROLES = None
     CONNECT = False
     WEBSOCKET = False
     WEB_EXPOSE = True
-    OPTIONS = {'--format=': ['text']}
+    OPTIONS = [[
+        ('--format=', ['text'], 'Output format; text*, json, html, sexp'),
+    ]]
 
     def configure(self, args):
         self.arglist = self.strip_options(args)
@@ -30,6 +37,29 @@ class CommandHelp(CLICommand):
             'json': 'application/json',
             }.get(self.options['--format='][-1], 'application/octet-stream')
         return []
+
+    def help_options(self, cls):
+        def _section(opt_list):
+            longest = 10
+            for opt, ini, comment in opt_list:
+                longest = max(len(opt or '')+3, longest)
+            fmt = '    %%-%ds %%s' % longest
+            for opt, ini, comment in opt_list:
+                if opt and comment:
+                    if opt.endswith('='):
+                        opt += 'X'
+                    yield fmt % (opt, comment)
+
+        help_hash = {
+            'OPTIONS': '\n\n'.join(
+                '\n'.join(_section(s)) for s in cls.OPTIONS)}
+
+        for section in cls.OPTIONS:
+            first = section[0]
+            if not first[0] and first[-1]:
+                help_hash[first[-1]] = '\n'.join(_section(section))
+
+        return help_hash
 
     async def run(self):
         global CLI_COMMANDS
@@ -49,6 +79,7 @@ class CommandHelp(CLICommand):
 
         def _unindent(lines):
             return (lines
+                 .replace('\n    %(', '\n%(')
                  .replace('\n    # ', '\n# ')
                  .replace('\n    ## ', '\n## ')
                  .replace('\n    ### ', '\n  ### ')
@@ -58,6 +89,7 @@ class CommandHelp(CLICommand):
             return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
 
         fmt = self.options['--format='][-1]
+        happy = True
         chunks = []
         output = {}
         def _print(*chunk_list):
@@ -94,8 +126,9 @@ class CommandHelp(CLICommand):
             elif arg in TOPICS:
                 _print(_unindent(TOPICS[arg]), '\n')
 
-            elif cmd is not None and cmd.__doc__:
-                _print(_unindent(cmd.__doc__.strip()), '\n')
+            elif (cmd is not None) and cmd.__doc__:
+                helptext = _unindent(cmd.__doc__.strip())
+                _print(helptext % self.help_options(cmd), '\n')
 
             else:
                 _print("""\
@@ -103,12 +136,12 @@ Unknown topic: %s
 
 Try `moggie help topics` for a list of what help has been written.
 """ % arg)
-                return False
+                happy = False
 
 
         output['text'] = '\n'.join(chunks)
         if fmt == 'text':
-            return self.print(output['text'])
+            return self.print(output['text']) and happy
         elif 'html' not in output:
             import markdown
             # FIXME: Linkify moggie commands?
@@ -121,6 +154,7 @@ Try `moggie help topics` for a list of what help has been written.
             self.print_json(output)
         elif fmt == 'sexp':
             self.print_json(output)
+        return happy
 
 
 CLI_COMMANDS = {

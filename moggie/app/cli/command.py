@@ -21,7 +21,7 @@ class CLICommand:
     AUTO_START = False
     NAME = 'command'
     ROLES = AccessConfig.GRANT_ALL
-    OPTIONS = {}
+    OPTIONS = []
     CONNECT = True
     WEBSOCKET = True
 
@@ -99,7 +99,11 @@ class CLICommand:
         from ...workers.app import AppWorker
         from ...util.rpc import AsyncRPCBridge
 
-        self.options = copy.deepcopy(self.OPTIONS)
+        self.options = {}
+        for opt_group in self.OPTIONS:
+            self.options.update(dict((opt, copy.copy(ini))
+                for (opt, ini, comment) in opt_group if opt))
+
         self.connected = False
         self.messages = []
         self.workdir = wd
@@ -130,9 +134,8 @@ class CLICommand:
             self.set_web_defaults(req_env)
 
         if connect and self.CONNECT:
-            self.worker = AppWorker.FromArgs(wd, self.configure(args))
-            if not self.worker.connect(autostart=self.AUTO_START, quick=True):
-                raise NotRunning('Failed to launch or connect to app')
+            self.worker = None
+            self.connect(self.configure(args))
         else:
             self.configure(args)
             self.worker = appworker
@@ -141,6 +144,14 @@ class CLICommand:
         if connect and self.WEBSOCKET:
             self.app = AsyncRPCBridge(self.ev_loop, 'cli', self.worker, self)
             self.ev_loop.run_until_complete(self._await_connection())
+
+    def connect(self, args=[]):
+        if not self.worker:
+            from ...workers.app import AppWorker
+            self.worker = AppWorker.FromArgs(self.workdir, args)
+            if not self.worker.connect(autostart=self.AUTO_START, quick=True):
+                raise NotRunning('Failed to launch or connect to app')
+        return self.worker
 
     def set_web_defaults(self, req_env):
         self.stdin = []
@@ -298,9 +309,9 @@ class CLICommand:
             if arg == '--':
                 leftovers.extend(args)
                 break
-            elif arg+'=' in self.OPTIONS:
+            elif arg+'=' in self.options:
                 _setopt(arg+'=', args.pop(0))
-            elif arg in self.OPTIONS:
+            elif arg in self.options:
                 _setopt(arg, True)
             elif arg[:2] == '--':
                 if '=' in arg:
@@ -310,7 +321,7 @@ class CLICommand:
                         arg, opt = arg.split(':', 1)
                     except ValueError:
                         pass
-                if arg+'=' not in self.OPTIONS:
+                if arg+'=' not in self.options:
                     raise Nonsense('Unrecognized argument: %s' % arg)
                 _setopt(arg+'=', opt)
             else:
