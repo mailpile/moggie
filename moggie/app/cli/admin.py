@@ -14,34 +14,12 @@ from ...config import AppConfig, AccessConfig
 from .command import Nonsense, CLICommand
 
 
-class CommandWelcome(CLICommand):
-    """moggie welcome
-
-    This command displays either a login page or welcomes the user to
-    the app. It is not useful from the command-line.
-    """
-    NAME = 'welcome'
-    ROLES = None
-    WEBSOCKET = False
-    AUTO_START = False
-    WEB_EXPOSE = True
-
-    async def run(self):
-        self.print_html_start()
-        try:
-            asset = self.worker.app.get_static_asset('html/welcome.html')
-            self.print(str(asset['body'], 'utf-8'))
-        except Exception as e:
-            self.print('<pre>Failed: %s</pre>' % traceback.format_exc())
-        self.print_html_end()
-
-
 class CommandContext(CLICommand):
     """moggie context [<op> [<name> [options]]]
 
     This command lists or configures moggie contexts.
 
-    Examples:
+    ### Examples
 
         moggie context list
         moggie context create Yum --with-standard-tags
@@ -52,36 +30,47 @@ class CommandContext(CLICommand):
         moggie context update Yum --forbid="vegetables" --forbid="veggies"
         moggie context remove Yum
 
-    Add `--output=ids` and/or `--output=scope` options to show more details
-    about each context.
+    ### Options
 
-    Specify `--format=X` to change the output format. Supported formats are
-    `text` and `json`.
+    %(OPTIONS)s
+
+    Contexts are used to organize how one or more users may have different
+    roles when interacting with a given collection of e-mail and accounts.
+
+    In particular, it is possible to limit which messages are visible to
+    the user when they are working in a specific context, either by
+    requiring messages have (or lack) specific tags or search terms.
+
+    For a stronger separation of concerns, it is possible to assign a "tag
+    namespace" to the context which will prevent messages tagged with
+    "in:inbox" within one context, from appearing in "in:inbox" in another.
+    """
+    __NOTES__ = """
 
     FIXME: Support --format = `html` and `jhtml`.
     FIXME: Always allow a user to LIST their own contexts; so tweak ROLES
            and the access control strategy. Or make context-list a command
            of its own with no ability to edit thigns?
-    FIXME: Document this all a bit better.
+
     """
     NAME = 'context'
     ROLES = AccessConfig.GRANT_ACCESS  # FIXME: Allow user to see own contexts?
     WEBSOCKET = False
     AUTO_START = False
     WEB_EXPOSE = True
-    OPTIONS = {
-        '--format=':            ['text'],
-        '--with-standard-tags': [],
-        '--name=':              [],
-        '--description=':       [],
-        '--tag-namespace=':     [],
-        '--tag=':               [],
-        '--show-tag=':          [],
-        '--remove-tag=':        [],
-        '--scope-search=':      [],
-        '--require=':           [],
-        '--forbid=':            [],
-        '--output=':            []}
+    OPTIONS = [[
+        ('--format=',      ['text'], 'X=(text*|json)'),
+        ('--output=',            [], 'X=(ids|scope), add details to listings'),
+        ('--with-standard-tags', [], 'Add common tags to a new context'),
+        ('--name=',              [], 'X="Context name"'),
+        ('--description=',       [], 'X="Context description"'),
+        ('--tag-namespace=',     [], 'X="tag_namespace"'),
+        ('--tag=',               [], 'X="tag" (required tag)'),
+        ('--show-tag=',          [], 'X="tag" (tag listed in UI)'),
+        ('--remove-tag=',        [], 'X="tag" (excluded tag)'),
+        ('--scope-search=',      [], 'X="search terms"'),
+        ('--require=',           [], 'X="search terms"'),
+        ('--forbid=',            [], 'X="search terms"')]]
 
     def configure(self, args):
         args = self.strip_options(args)
@@ -325,6 +314,12 @@ class CommandContext(CLICommand):
 
 
 class CommandUnlock(CLICommand):
+    """moggie unlock [<password>]
+
+    This command will unlock a running moggie, granting full access to any
+    encrypted content. If no password is supplied, the user will be promted
+    to enter one interactively.
+    """
     NAME = 'unlock'
     ROLES = AccessConfig.GRANT_ACCESS
     AUTO_START = False
@@ -365,10 +360,7 @@ class CommandGrant(CLICommand):
 
     This command lists or changes what access is currently granted.
 
-    The listing can be filtered by name or name and context, if a role
-    string is also specified grants will be changed to match.
-
-    Examples:
+    ### Examples
 
         moggie grant list
         moggie grant list --output=urls
@@ -377,6 +369,20 @@ class CommandGrant(CLICommand):
         moggie grant login  Bjarni --ttl=1m
         moggie grant logout Bjarni
         moggie grant remove Bjarni
+
+    ### Options
+
+    %(OPTIONS)s
+
+    Grant lists can be filtered by name or name and context, if a role
+    string is also specified then grants will be changed to match.
+
+    Available roles are `owner`, `admin`, `user` and `guest`. The owner
+    role has full access to all of Moggie's features and settings, an
+    admin is granted control over a specific context, users can use the
+    app but not change settings, and guests only have read access.
+
+    (FIXME: We should write in more detail about access roles.)
 
     The `logout` operation removes all access tokens, rendering any live
     sessions or shared URLs invalid.
@@ -391,17 +397,19 @@ class CommandGrant(CLICommand):
     which are currently live for each user. Requesting `--output=qrcodes`
     will list the URLs and a QR code for each one (or include an SVG
     of the QR code if the output format is JSON).
+
+    Note that QR codes are not generated for localhost/127.0.0.x URLs.
     """
     NAME = 'grant'
     ROLES = AccessConfig.GRANT_ACCESS
     WEBSOCKET = False
     AUTO_START = False
     WEB_EXPOSE = True
-    OPTIONS = {
-        '--context=': ['default'],
-        '--format=':  ['text'],
-        '--output=':  ['grants'],
-        '--ttl=':     [None]}
+    OPTIONS = [[
+        ('--context=', ['default'], 'X=(<context-name>|<context-id>)'),
+        ('--format=',  ['text'],    'X=(text*|json)'),
+        ('--output=',  ['grants'],  'X=(grants*|urls|qrcodes)'),
+        ('--ttl=',     [None],      'X=<duration>')]]
 
     def configure(self, args):
         args = self.strip_options(args)
@@ -667,42 +675,6 @@ class CommandGrant(CLICommand):
         return await self.get_roles()
 
 
-class CommandUnlock(CLICommand):
-    NAME = 'unlock'
-    ROLES = AccessConfig.GRANT_ACCESS
-    AUTO_START = False
-
-    def configure(self, args):
-        self.passphrase = ' '.join(args)
-        return []
-
-    def get_passphrase(self):
-        if self.passphrase == '-':
-            return ''
-        elif self.passphrase:
-            return self.passphrase
-        else:
-            import getpass
-            return getpass.getpass('Enter passphrase: ')
-
-    async def run(self):
-        app_crypto_status = self.worker.call('rpc/crypto_status')
-        if not app_crypto_status.get('locked'):
-            self.print('App already unlocked, nothing to do.')
-            return True
-
-        from ...jmap.requests import RequestUnlock
-        self.app.send_json(RequestUnlock(self.get_passphrase()))
-        while True:
-            msg = await self.await_messages('unlocked', 'notification')
-            if msg and msg.get('message'):
-                self.print(msg['message'])
-                return (msg['prototype'] == 'unlocked')
-            else:
-                self.print('Unknown error (%s) or timed out.' % msg)
-                return False
-
-
 class CommandImport(CLICommand):
     """# moggie import [options] </path/to/mailbox1> [</path/to/mbx2> [...]]
 
@@ -710,21 +682,16 @@ class CommandImport(CLICommand):
     search engine. Re-importing a mailbox will check for updates/changes to
     the contents.
 
+    ### Options
+
+    %(OPTIONS)s
+
     Importing messages without linking them to any particular account is
     possible, but not recommended since Moggie will be unable to ascertain
     whether the message was "to me" or not.
 
-    Options:
-      --context=ctx    Specify the context for the imported messages
-      --account=email  Specify the e-mail or account ID this mail belongs to
-      --ifnewer=ts     Ignore folders and files unchanged since the timestamp
-      --recurse        Search the named paths recursively for mailboxes
-      --compact        Compact the search engine after importing
-      --watch          Add these to our list of locations to check for new
-                       mail; note this will create a new local mail account
-                       if there is none associated with the context already.
-      --old            Treat messages as "old": do not add to inbox etc.
-
+    Note that using `--watch` will create a new local mail account if there
+    is none associated with the active context already.
     """
     NAME = 'import'
     ROLES = (
@@ -732,16 +699,19 @@ class CommandImport(CLICommand):
         AccessConfig.GRANT_COMPOSE +
         AccessConfig.GRANT_TAG_RW)
     SEARCH = ('in:incoming',)
-    OPTIONS = {
-        '--context=':  ['default'],
-        '--account=':  [None],
-        '--ifnewer=':  [],
-        '--ignore=':   ['.', '..', 'cur', 'new', 'tmp', '.notmuch'],
-        '--recurse':   [],
-        '--compact':   [],
-        '--watch':     [False],
-        '--dryrun':    [],
-        '--old':       []}
+    OPTIONS = [[
+        ('--context=',  ['default'], 'X=<ctx>, import messages into a specific context'),
+        ('--account=',  [None], 'X=<id>, the e-mail or account ID the mail belongs to'),
+        ('--username=', [None], 'X=<U>, username required to access the mail (if any)'),
+        ('--password=', [None], 'X=<P>, password requried to access the mail (if any)'),
+        ('--ifnewer=',      [], 'X=<ts>, ignore files/folders unchanged since timestamp'),
+        ('--ignore=',   ['.', '..', 'cur', 'new', 'tmp', '.notmuch'],
+                                ''),  # FIXME: Explain?
+        ('--recurse',       [], 'Search the named paths recursively for mailboxes'),
+        ('--compact',       [], 'Compact the search engine after importing'),
+        ('--watch',    [False], 'Watch for new mail in the future'),
+        ('--old',           [], 'Treat messages as "old": do not add to inbox etc.'),
+        ('--dryrun',        [], 'Test only, adds nothing')]]
 
     def configure(self, args):
         self.newest = 0
@@ -805,6 +775,8 @@ class CommandImport(CLICommand):
             else:
                 request_obj = RequestMailbox(
                     context=AppConfig.CONTEXT_ZERO,
+                    username=self.options['--username='][-1],
+                    password=self.options['--password='][-1],
                     mailbox=path)
 
             requests.append((path, RequestAddToIndex(
@@ -856,6 +828,31 @@ class CommandImport(CLICommand):
                 logging.exception('Woops')
                 raise
         return True
+
+
+## FIXME - Are these still what we want/need? ##
+
+
+class CommandWelcome(CLICommand):
+    """moggie welcome
+
+    This command displays either a login page or welcomes the user to
+    the app. It is not useful from the command-line.
+    """
+    NAME = 'welcome'
+    ROLES = None
+    WEBSOCKET = False
+    AUTO_START = False
+    WEB_EXPOSE = True
+
+    async def run(self):
+        self.print_html_start()
+        try:
+            asset = self.worker.app.get_static_asset('html/welcome.html')
+            self.print(str(asset['body'], 'utf-8'))
+        except Exception as e:
+            self.print('<pre>Failed: %s</pre>' % traceback.format_exc())
+        self.print_html_end()
 
 
 def CommandEnableEncryption(wd, args):
