@@ -23,6 +23,7 @@ import sys
 import time
 
 from .command import Nonsense, CLICommand, AccessConfig
+from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
 from ...jmap.requests import RequestSearch, RequestEmail
@@ -981,7 +982,421 @@ class CommandEmail(CLICommand):
             if not self.options.get('--subject='):
                 self.gather_subject()
 
-            if self.options.get('--send-to=') or self.options('--send-at='): 
+            if (self.options.get('--send-to=')
+                    or self.options.get('--send-at=')): 
                 await self.do_send()
             else:
                 self.render_result()
+
+
+class CommandParse(CLICommand):
+    """moggie parse [options] <terms>
+
+    This command will load and parse e-mails matching the search terms,
+    provided as files or standard input.
+
+    The output is either a human readable report, or a JSON data structure
+    explaining the contents and technical characteristics of the e-mail.
+
+    ### Options
+
+    %(OPTIONS)s
+
+    ### Examples
+
+        ...
+
+    FIXME
+    """
+    NAME = 'parse'
+    ROLES = AccessConfig.GRANT_READ
+    WEBSOCKET = False
+    WEB_EXPOSE = True
+    CONNECT = False    # We manually connect if we need to!
+    OPTIONS = [[
+        (None, None, 'moggie'),
+        ('--context=', ['default'], 'Context to use for default settings'),
+        ('--format=',     ['text'], 'X=(text*|json|sexp)'),
+        ('--stdin=',            [], None), # Allow lots to send stdin (internal)
+        ('--input=',            [], 'Load e-mail from file X, "-" for stdin'),
+        ('--allow-network',     [False], 'Allow outgoing network requests'),
+        ('--forbid-filesystem', [False], 'Forbid loading local files'),
+        ('--write-back',        [False], 'Write parse results to search index'),
+    ],[
+        (None, None, 'features'),
+        ('--with-metadata=',    ['Y'], 'X=(Y*|N), include message metadata'),
+        ('--with-headers=',     ['Y'], 'X=(Y*|N), include parsed message headers'),
+        ('--with-structure=',   ['N'], 'X=(Y|N*), include message structure'),
+        ('--with-text=',        ['Y'], 'X=(Y*|N), include message text parts'),
+        ('--with-html-clean=',  ['N'], 'X=(Y|N*), include sanitized message HTML'),
+        ('--with-html-text=',   ['Y'], 'X=(Y*|N), include text extracted from HTML'),
+        ('--with-data=',        ['N'], 'X=(Y|N*), include attachment data'),
+        ('--with-headprints=',  ['N'], 'X=(Y|N*), include header fingerprints'),
+        ('--with-keywords=',    ['N'], 'X=(Y|N*), include search-engine keywords'),
+        ('--scan-archives=',    ['N'], 'X=(Y|N*), scan ZIP archives for attachments'),
+        ('--decrypt=',          ['N'], 'X=(Y|N*), attempt to decrypt contents'),
+        ('--verify-pgp=',       ['N'], 'X=(Y|N*), attempt to verify PGP signatures'),
+        ('--verify-dkim=',      ['N'], 'X=(Y|N*), attempt to verify DKIM signatures'),
+        ('--with-nothing=',     ['N'], 'X=(Y|N*), parse nothing by default'),
+        ('--with-everything=',  ['N'], 'X=(Y|N*), try to parse everything!'),
+        ('--ignore-index=',     ['N'], 'X=(Y|N*), Ignore contents of search index'),
+    ],[
+        (None, None, 'encryption'),
+        ('--use-gnupg',         [False], 'Use GnuPG to parse OpenPGP content'),
+        ('--zip-password=',     [], 'Password to use for ZIP decryption'),
+    ]]
+
+    class Settings:
+        def __init__(self, **kwargs):
+            def _opt(k, a, defaults):
+                val = kwargs.get(a) or kwargs.get(k)
+                if val is None:
+                    if defaults:
+                        val = defaults[-1]
+                elif isinstance(val, list):
+                    if defaults or len(val) > 1:
+                        val = val[-1]
+                if val in (True, 'Y', 'y', 'true', 'True', 'TRUE'):
+                    return True
+                return False
+
+            w_none = _opt('--with-nothing=', 'with_nothing', None)
+            w_all = _opt('--with-everything=', 'with_everything', None)
+            for key, defaults, comment in CommandParse.OPTIONS[1]:
+                if w_none:
+                    defaults = None
+                if key:
+                    attr = key[2:-1].replace('-', '_')
+                    self.__setattr__(attr, w_all or _opt(key, attr, defaults))
+
+    @classmethod
+    async def Parse(cls, data, settings=None, **kwargs):
+        if settings is None:
+            settings = cls.Settings(**kwargs)
+
+        result = {}
+        if isinstance(data, dict):
+            result = data
+        else:
+            result['data'] = data
+        data = result.get('data')
+
+        md = result.get('metadata')
+        html_magic = settings.with_html_text or settings.with_html_clean
+        if data:
+            from moggie.email.parsemime import parse_message
+            p = parse_message(data, fix_mbox_from=(data[:5] == b'From '))
+            result['parsed'] = p
+
+            if (md is None) or settings.ignore_index:
+                from moggie.email.util import make_ts_and_Metadata, quick_msgparse
+                hend, hdrs = quick_msgparse(data, 0)
+                ts, md = make_ts_and_Metadata(time.time(), 0, hdrs, [], hdrs)
+                result['metadata'] = md
+
+            if settings.with_structure:
+                p.with_structure()
+            if settings.with_text or html_magic or settings.with_keywords:
+                p.with_text()
+            if settings.with_data:
+                p.with_data()
+
+            if html_magic:
+                for part in p['_PARTS']:
+                    if part.get('content-type', [None])[0] == 'text/html':
+                        html = part['_TEXT']
+                        if settings.with_html_clean:
+                            pass  # FIXME
+
+                        if settings.with_html_text:
+                            from moggie.security.html import html_to_markdown
+                            part['_HTML_TEXT'] = html_to_markdown(html)
+
+            if settings.with_headprints:
+                from moggie.search.headerprint import HeaderPrints
+                p['_HEADPRINTS'] = HeaderPrints(p)
+
+            if settings.with_keywords:
+                from moggie.search.extractor import KeywordExtractor
+                kwe = KeywordExtractor()
+                more, kws = kwe.extract_email_keywords(None, p)
+                p['_KEYWORDS'] = sorted(list(kws))
+
+            # Cleanup phase; depending on our --with-... arguments, we may
+            # want to remove some stuff from the output.
+
+            removing = []
+            if not settings.with_headers:
+                removing.extend(k for k in p if not k[:1] == '_')
+                removing.append('_DATE_TS')
+                removing.append('_mbox_separator')
+            if not (settings.with_structure and settings.with_headers):
+                removing.append('_ORDER')
+            if not (settings.with_structure
+                    or settings.with_text
+                    or settings.with_data
+                    or html_magic):
+                removing.append('_PARTS')
+            for hdr in removing:
+                if hdr in p:
+                    del p[hdr]
+
+            if not settings.with_structure and '_PARTS' in p:
+                parts = p['_PARTS']
+                for i in reversed(range(0, len(parts))):
+                    ctype = parts[i]['content-type'][0]
+                    if ctype.startswith('multipart/'):
+                        parts.pop(i)
+                    elif not (settings.with_data
+                            or ctype in ('text/plain', 'text/html')):
+                        parts.pop(i)
+                    else:
+                        for key in [k for k in parts[i] if k[:1] == '_']:
+                            if key == '_TEXT' and settings.with_text:
+                                pass
+                            elif key.startswith('_HTML') and html_magic:
+                                pass
+                            elif key == '_DATA' and settings.with_data:
+                                pass
+                            else:
+                                del parts[i][key]
+
+        if 'data' in result:
+            del result['data']
+
+        return result
+
+    def __init__(self, *args, **kwargs):
+        self.emitted = 0
+        self.settings = None
+        self.searches = []
+        self.messages = []
+        super().__init__(*args, **kwargs)
+
+    def configure(self, args):
+        args = self.strip_options(args)
+
+        # FIXME: Think about this, how DO we want to restrict access to the
+        #        filesytem? It is probaby per user/context.
+        self.allow_fs = not self.options['--forbid-filesystem'][-1]
+        self.allow_network = self.options['--allow-network'][-1]
+        self.write_back = self.options['--write-back'][-1]
+        self.use_gnupg = self.options['--use-gnupg'][-1]
+        self.zip_passwords = self.options['--zip-password=']
+
+        self.settings = self.Settings(**self.options)
+
+        def _load(t, target):
+            if t[:1] == '-':
+                if self.options['--stdin=']:
+                    data = self.options['--stdin='].pop(0)
+                else:
+                    data = sys.stdin.buffer.read()
+                target.append({
+                    'stdin': True,
+                    'data': data})
+                return True
+            elif t[:7] == 'base64:':
+                target.append({
+                    'base64': True,
+                    'data': base64.b64decode(t[7:])})
+                return True
+            elif self.allow_fs and (os.path.sep in t) and os.path.exists(t):
+                with open(t, 'rb') as fd:
+                    target.append({
+                        'path': t,
+                        'data': fd.read()})
+                return True
+            return False
+
+        def _read_file(current, i, t, target):
+            if _load(t, target):
+                current[i] = None
+
+        # This lets the caller provide messages for forwarding or replying to
+        # directly, instead of searching. Anything left in the options after
+        # this will be treated as a search term.
+        for target, key in (
+                (self.messages, '--input='),
+                (self.messages, None)):
+            current = self.options.get(key, []) if key else args
+            i = None
+            for i, t in enumerate(current):
+                _read_file(current, i, t, target)
+            if key:
+                self.options[key] = [t for t in current if t]
+            else:
+                if i is None:
+                    _read_file(['-'], 0, '-', self.messages)
+                else:
+                    args = [t for t in current if t]
+
+        return self.configure2(args)
+
+    def configure2(self, args):
+        self.searches.append(' '.join(args))
+        self.searches.extend(self.options['--input='])
+        self.options['--input='] = [] 
+        return []
+
+    def emit_text(self, parsed):
+        if parsed is None:
+            return
+
+        def _wrap(words, maxlen=72, indent=''):
+            lines = ['']
+            if isinstance(words, str):
+                words = words.split()
+            for word in words:
+                if len(lines[-1]) + len(word) < maxlen:
+                    lines[-1] += word + ' '
+                else:
+                    lines[-1] = lines[-1].rstrip()
+                    lines.append(word + ' ')
+            return ('\n'+indent).join(lines)
+
+        report = []
+        if parsed.get('stdin'):
+            report.append('# Parsed e-mail from standard input')
+        elif parsed.get('search'):
+            report.append('# Parsed e-mail from search: %s' % parsed['search'])
+
+        if self.settings.with_metadata:
+            md = parsed.get('metadata')
+            if not md:
+                report.append("""## Metadata unavailable""")
+            else:
+                if md.idx:
+                    msg = 'This is the metadata stored in the search index'
+                else:
+                    msg = 'This is the message metadata'
+                report.append("""## Metadata\n\n%s:\n\n%s\n
+    ts=%d, id=%s, parent=%s, thread=%s, pointers=%s
+    extras=%s""" % (msg,
+                    '\n'.join('    %s' % h for h in md.headers.splitlines()),
+                    md.timestamp,
+                    md.idx,
+                    md.parent_id,
+                    md.thread_id,
+                    len(md.pointers),
+                    md.more))
+
+        if 'error' in parsed:
+            report.append('Error loading message: %s' % parsed['error'])
+        elif 'parsed' in parsed:
+            parsed = parsed['parsed']        
+
+            if self.settings.with_headers:
+                seen = sorted([k for k in parsed if not k[:1] == '_'])
+                report.append("## Message headers\n\n"
+                    + _wrap('All seen: ' + ', '.join(seen)))
+
+            # FIXME: The header section is a bit anemic. And we are
+            #        still missing some things. But it's a start!
+
+            if self.settings.with_headprints:
+                report.append('## Header fingerprints\n\n'
+                    + '\n'.join('   * %s: %s' % (hp, val)
+                        for hp, val
+                        in sorted(list(parsed['_HEADPRINTS'].items()))))
+
+            if self.settings.with_structure:
+                report.append('## Message structure')
+
+            if self.settings.with_text:
+                report.append('## Message text')
+                for part in parsed['_PARTS']:
+                    if part['content-type'][0] == 'text/plain':
+                        report[-1] += '\n\n```\n' + part['_TEXT'] + '\n```'
+
+            if self.settings.with_html_text:
+                report.append('## Message text (from HTML)')
+                for part in parsed['_PARTS']:
+                    if part['content-type'][0] == 'text/html':
+                        report[-1] += '\n\n```\n' + part['_HTML_TEXT'] + '\n```'
+
+            if self.settings.with_keywords:
+                kw = parsed.get('_KEYWORDS')
+                if not kw:
+                    report.append('## Keywords unavailable')
+                else:
+                    special = [k for k in kw if ':' in k]
+                    others = [k for k in kw if ':' not in k]
+                    report.append("""## Keywords
+
+These are the %d searchable keywords for this message:
+
+%s\n\n%s""" % (
+                        len(special) + len(others),
+                        _wrap(', '.join(special)),
+                        _wrap(', '.join(others))))
+
+        self.print('\n\n'.join(report) + '\n\n')
+ 
+    def emit_sexp(self, parsed):
+        if not self.emitted:
+            self.print('(', nl='')
+        if parsed is None:
+            self.print(')')
+        else:
+            if self.emitted:
+                self.print(',')
+            self.print_sexp(parsed)
+            self.emitted += 1
+
+    def emit_json(self, parsed):
+        if not self.emitted:
+            self.print('[')
+        if parsed is None:
+            self.print(']')
+        else:
+            if self.emitted:
+                self.print(',')
+            self.print_json(parsed)
+            self.emitted += 1
+
+    async def gather_emails(self):
+        worker = self.connect()
+        for search in self.searches:
+            request = RequestSearch(context=self.context, terms=search)
+            result = await self.worker.async_jmap(self.access, request)
+            if result and 'emails' in result:
+                for metadata in result['emails']:
+                    req = RequestEmail(metadata=metadata, full_raw=True)
+                    msg = await self.worker.async_jmap(self.access, req)
+                    md = Metadata(*metadata)
+                    if msg and 'email' in msg:
+                        yield {
+                            'data': base64.b64decode(msg['email']['_RAW']),
+                            'metadata': md,
+                            'search': search}
+                    else:
+                        yield {
+                            'error': 'Not found',
+                            'metadata': md,
+                            'search': search}
+            else:
+                yield {
+                    'error': 'Not found',
+                    'search': search}
+
+    def get_emitter(self):
+        if self.options['--format='][-1] == 'sexp':
+            return self.emit_sexp
+        if self.options['--format='][-1] == 'text':
+            return self.emit_text
+        else:
+            return self.emit_json
+
+    async def run(self):
+        emitter = self.get_emitter()
+
+        if self.searches:
+            async for message in self.gather_emails():
+                emitter(await self.Parse(message, self.settings))
+
+        if self.messages:
+            for message in self.messages:
+                emitter(await self.Parse(message, self.settings))
+
+        emitter(None)
