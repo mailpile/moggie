@@ -255,7 +255,6 @@ class PublicWorker(BaseWorker):
         self.app = self.get_app()
         self.shared_req_env = {'app': self.app, 'worker': self}
 
-        self._rpc_lock = asyncio.Lock()
         self._rpc_response = None
         self._rpc_response_map = {
             self.HTTP_400: {'code': 400, 'msg': 'Invalid Request'},
@@ -323,13 +322,17 @@ class PublicWorker(BaseWorker):
     def shutdown_tasks(self):
         pass
 
-    def reply(self, what, *args, **kwargs):
-        self._rpc_response = self._rpc_response_map.get(what)
-        if not self._rpc_response:
-            raise Exception('Not Implemented')
+    def client_info_tuple(self):
+        return [None, None]
 
-    def reply_json(self, data):
-        self._rpc_response = {
+    def reply(self, what, *args, **kwargs):
+        _rpc_response = self._rpc_response_map.get(what)
+        if not _rpc_response:
+            raise Exception('Not Implemented')
+        kwargs['client_info_tuple'][1] = _rpc_response
+
+    def reply_json(self, data, **kwargs):
+        kwargs['client_info_tuple'][1] = {
             'ttl': 30,
             'mimetype': 'application/json',
             'body': json.dumps(data, indent=1) + '\n'}
@@ -337,15 +340,16 @@ class PublicWorker(BaseWorker):
     async def handle_web_rpc(self, req_env):
         args = bytes(req_env.request_path, 'latin-1').split(b'/')[3:]
         func = b'rpc/' + args.pop(0)
-        async with self._rpc_lock:
-            await self.async_rpc_handler(
-                func,
-                req_env.http_method,
-                args,
-                req_env.query_tuples,
-                lambda m: {'method': m},
-                lambda: req_env.payload)
-            return self._rpc_response
+        c_i_t = self.client_info_tuple()
+        await self.async_rpc_handler(
+            func,
+            req_env.http_method,
+            args,
+            req_env.query_tuples,
+            lambda m: {'method': m},
+            lambda: req_env.payload,
+            client_info_tuple=c_i_t)
+        return c_i_t[1]
 
     def _is_public(self):
         return (self.kite_name and self.kite_secret and True)

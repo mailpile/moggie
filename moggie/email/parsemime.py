@@ -38,7 +38,7 @@ class MessagePart(dict):
         self.update(parse_header(msg_bin[:self.hend]))
 
     def _find_parts_re(self, boundary, buf_idx=0):
-        boundary = self.eol + b'--' + bytes(boundary, 'latin-1')
+        boundary = b'\n--' + bytes(boundary, 'latin-1')
         msg_bin = self.msg_bin[buf_idx]
         body_beg = self.hend + 2*len(self.eol)
         body_end = len(msg_bin)
@@ -54,7 +54,7 @@ class MessagePart(dict):
         regexp syntax. It's also even faster for large messages.
         """
         buf = self.msg_bin[buf_idx]
-        boundary = self.eol + b'--' + bytes(boundary, 'latin-1')
+        boundary = b'\n--' + bytes(boundary, 'latin-1')
         body_beg = self.hend + 2*len(self.eol)
         body_end = len(buf)
 
@@ -129,7 +129,7 @@ class MessagePart(dict):
                 elif i == len(begs)-1:
                     # FIXME: If the message is truncated and doesn't have a
                     #        closing MIME marker, we'll accidentally assign
-                    #        an actual part to the postamble. We need to 
+                    #        an actual part to the postamble. We need to
                     #        detect this more explicitly based on --*--.
                     #        Or make sure find_parts copes!
                     part['content-type'] = ['text/x-mime-postamble', {}]

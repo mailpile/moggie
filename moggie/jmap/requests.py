@@ -61,7 +61,8 @@ class RequestTag(RequestBase):
 
 class RequestAddToIndex(RequestBase):
     def __init__(self,
-            context='', search='', initial_tags=[], force=False,
+            context='', account='', search='', initial_tags=[],
+            watch=False, force=False,
             req_id=None):
         self.update({
             'prototype': 'add_to_index',
@@ -73,11 +74,16 @@ class RequestAddToIndex(RequestBase):
 
 
 class RequestMailbox(RequestBase):
-    def __init__(self, context='', mailbox='', limit=50, skip=0, req_id=None):
+    def __init__(self, context='',
+            mailbox='', limit=50, skip=0,
+            username=None, password=None,
+            req_id=None):
         self.update({
             'prototype': 'mailbox',
             'context': context,
             'mailbox': mailbox,
+            'username': username,
+            'password': password,
             'limit': limit,
             'skip': skip
         }, req_id=req_id)
@@ -136,6 +142,19 @@ class RequestConfigSet(RequestBase):
             'new': new,
             'section': section,
             'updates': updates
+        }, req_id=req_id)
+
+
+class RequestSetSecret(RequestBase):
+    def __init__(self,
+            key=None, context=None, secret=None, ttl=None, req_id=None):
+        self.update({
+            'prototype': 'set_secret',
+            'context': context,
+            'key': key,
+            'ttl': ttl,
+            'secret': secret,
+            'passphrase': passphrase
         }, req_id=req_id)
 
 

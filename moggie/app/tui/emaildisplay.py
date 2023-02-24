@@ -73,7 +73,8 @@ class EmailDisplay(urwid.ListBox):
 
         def _to_md(txt):
             return html_to_markdown(txt,
-                no_images=True, wrap=self.rendered_width)
+                no_images=True,
+                wrap=min(self.COLUMN_WANTS, self.rendered_width-1))
 
         if (message.get('prototype') != self.search_obj['prototype'] or
                 message.get('req_id') != self.search_obj['req_id']):

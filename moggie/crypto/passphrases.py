@@ -75,6 +75,14 @@ def stretch_with_scrypt(password, salt, params=KDF_PARAMS['scrypt']):
         length=32).derive(password), newline=False)
 
 
+def intlist_to_string(il):
+    return str(bytes(il), 'utf-8')
+
+
+def intlist_to_bytes(il):
+    return bytes(il)
+
+
 class SecurePassphraseStorage(object):
     """
     This is slightly obfuscated in-memory storage of passphrases.
@@ -157,7 +165,7 @@ class SecurePassphraseStorage(object):
                     name += ' ' + json.dumps(how, sort_keys=True)
                     sc_key = '%s/%s' % (name, salt)
                     if sc_key not in self.stretch_cache:
-                        pf = intlist_to_string(self.data).encode('utf-8')
+                        pf = intlist_to_string(self.data)
                         self.stretch_cache[sc_key] = SecurePassphraseStorage(
                             stretch(pf, salt, how), stretched=name)
                     yield (name, self.stretch_cache[sc_key])
@@ -174,7 +182,9 @@ class SecurePassphraseStorage(object):
         # This stores the passphrase as a list of integers, which is a
         # primitive in-memory obfuscation relying on how Python represents
         # small integers as globally shared objects. Better Than Nothing!
-        self.data = [b for b in bytes(passphrase, 'utf-8')]
+        if not isinstance(passphrase, bytes):
+            passphrase = bytes(passphrase, 'utf-8')
+        self.data = [b for b in passphrase]
         self.stretch_cache = {}
         self.generation += 1
 
@@ -194,6 +204,11 @@ class SecurePassphraseStorage(object):
         if self.data is None:
             return ''
         return intlist_to_string(self.data)
+
+    def get_passphrase_bytes(self):
+        if self.data is None:
+            return b''
+        return intlist_to_bytes(self.data)
 
     def get_reader(self):
         class SecurePassphraseReader(object):

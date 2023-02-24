@@ -255,7 +255,7 @@ DKIM-Signature: v=1; a=rsa-sha256; q=dns/txt; c=relaxed/simple;
         T45yNa35l2r8SDU6lzEvSvQ4xdrJ+OCfGqFIhWJes=
 Subject: Ohai this is greats
 From: bre@example.org
-Message-Id: <testing@mailpile>
+Message-ID: <testing@mailpile>
 To: joe@example.org
 
 This is a great test oh yes it is!

@@ -44,7 +44,7 @@ class Metadata(list):
         msgid = msgid if isinstance(msgid, bytes) else bytes(msgid, 'latin-1')
         return Metadata(0, 0,
             Metadata.PTR(0, b'/dev/null', 0),
-            b'Message-Id: %s' % msgid,
+            b'Message-ID: %s' % msgid,
             parent_id=0,
             thread_id=0,
             more=more)

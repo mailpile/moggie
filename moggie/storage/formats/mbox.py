@@ -111,7 +111,8 @@ From: nobody <deleted@example.org>\r\n\
         return (self._range_to_key(b, e)
             for b, he, e, hdrs in self.iter_email_offsets(skip=skip))
 
-    def iter_email_metadata(self, skip=0, iterator=None):
+    def iter_email_metadata(self,
+            skip=0, iterator=None, username=None, password=None):
         obj = self.container
         now = int(time.time())
         lts = 0

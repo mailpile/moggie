@@ -1,41 +1,91 @@
 # This is the Mailpile1 compatibility, for importing mail and tags
 # from a legacy Mailpile 0.x/1.x installation.
 #
-# It is possible to either access a WERVD (Mailpile's encrypted Maildir)
-# directly, without any tag information, or iterate through Mailpile's entire 
-# metadata store, which will generate metadata that delegates to other
-# storage formats as appropriate.
-#
-from urllib.parse import unquote
+import os
+from urllib.parse import unquote, quote
 from configparser import ConfigParser
 
-from ...crypto.mailpilev1 import decrypt_mailpilev1
+import moggie.crypto.mailpilev1 as mailpilev1
 from ...crypto.mailpilev1 import get_mailpile_config, get_mailpile_metadata
 from ...crypto.passphrases import SecurePassphraseStorage
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.util import quick_msgparse, make_ts_and_Metadata
-from ...util.mailpile import tag_quote, tag_unquote
+from ...util.mailpile import PleaseUnlockError, tag_quote, tag_unquote
 
 from .maildir import FormatMaildir
 from . import tag_path
 
 
+MASTER_KEY_CACHE = {}
+
+
+def get_master_key(fs, path, password):
+    global MASTER_KEY_CACHE
+    path = bytes(path, 'utf-8') if isinstance(path, str) else path
+    path_parts = path.split(b'/')
+
+    mailpile_dir = None
+    while path_parts and path_parts[-1]:
+        _dir = b'/'.join(path_parts)
+        if b'/'.join([_dir, b'mailpile.key']) in fs:
+            mailpile_dir = _dir
+            break
+        path_parts.pop(-1)
+    if not mailpile_dir:
+        raise OSError('file not found: mailpile.key')
+
+    if mailpile_dir in MASTER_KEY_CACHE:
+        master_key = MASTER_KEY_CACHE[mailpile_dir]
+
+    else:
+        if not password:
+            raise PleaseUnlockError(
+                'Need passphrase to unlock Mailpile',
+                resource=mailpile_dir)
+
+        try:
+            if not isinstance(password, bytes):
+                password = bytes(password, 'utf-8')
+            master_key = mailpilev1.get_mailpile_key(mailpile_dir, password)
+            master_key = SecurePassphraseStorage(passphrase=master_key)
+            MASTER_KEY_CACHE[mailpile_dir] = master_key
+        except (PleaseUnlockError, ValueError) as e:
+            raise PleaseUnlockError('Password incorrect', resource=mailpile_dir)
+
+    return mailpile_dir, master_key
+
+
 class FormatMaildirWERVD(FormatMaildir):
     NAME = 'maildir1.wervd'
     TAG = b'm1'
- 
-    @classmethod
-    def Magic(cls, parent, key, info=None, is_dir=None):
-        return False
 
-    def unlock(self, username, password):
-        # FIXME: Find and decrypt the Mailpile v1 config, derive the WERVD
-        #        encryption keys...
-        pass
+    # Make sure the Magic method checks for wervd.ver.
+    MAGIC_CHECKS = (b'cur', b'new', b'wervd.ver')
 
-    def __getitem__(self, *args, **kwargs):
-        raise IOError('FIXME: Decrypt')
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.master_key = None
+
+    def unlock(self, ignored_username, password, ask_key=None, set_key=None):
+        if not self.master_key:
+            master_key = None
+            try:
+                resource, master_key = self._get_master_key(password)
+                if set_key is not None:
+                    set_key(resource, self.master_key)
+            except PleaseUnlockError as pue:
+                if ask_key is not None:
+                    master_key = ask_key(pue.resource)
+                if not master_key:
+                    raise pue
+            self.master_key = master_key
+        return self
+
+    def relock(self):
+        global MASTER_KEY_CACHE
+        MASTER_KEY_CACHE = {}
+        self.master_key = None
 
     def __delitem__(self, *args, **kwargs):
         raise IOError('WERVD Maildirs are read-only')
@@ -43,9 +93,36 @@ class FormatMaildirWERVD(FormatMaildir):
     def __setitem__(self, *args, **kwargs):
         raise IOError('WERVD Maildirs are read-only')
 
+    def _get_master_key(self, password=None):
+        if self.master_key is None:
+            _, self.master_key = get_master_key(
+                self.parent, self.path[0], password)
+        return self.master_key
+
+    def _decrypt(self, ciphertext, maxbytes):
+        plaintext = ciphertext
+        for marker in mailpilev1.MARKERS:
+            if marker in ciphertext[:512].split(b'\r\n', 1)[0]:
+                plaintext = b''.join(mailpilev1.decrypt_mailpilev1(
+                    self._get_master_key(),
+                    ciphertext,
+                    maxbytes=maxbytes,
+                    _raise=True))
+                break
+        if maxbytes:
+            return plaintext[:maxbytes]
+        return plaintext
+
+    def __getitem__(self, path, *args, **kwargs):
+        """
+        Should raise PleaseUnlockError if decryption fails.
+        """
+        ciphertext = super().__getitem__(path, *args, **kwargs)
+        return self._decrypt(ciphertext, None)
+
     def get_email_headers(self, sub, fn):
-        # FIXME: Only decrypt enough of the message to read the headers
-        return self.parent[os.path.join(self.basedir, sub, fn)]
+        ciphertext = self.parent[os.path.join(self.basedir, sub, fn)]
+        return self._decrypt(ciphertext, 4096)
 
 
 class FormatMailpilev1:
@@ -58,7 +135,7 @@ class FormatMailpilev1:
             path = os.expanduser('~/.local/share/Mailpile/default')
         elif '/' not in path:
             path = os.path.expanduser('~/.local/share/Mailpile/%s' % path)
-        self.path = path
+        self.path = [path]
         self.passphrase = None
         self.config = None
 
@@ -70,11 +147,22 @@ class FormatMailpilev1:
            return True
         return False
 
-    def unlock(self, username, password):
-        self.passphrase = SecurePassphraseStorage(passphrase=password)
-        self.config = get_mailpile_config(self.path, self.passphrase)
+    def unlock(self, ignored_username, password, ask_key=None, set_key=None):
+        if not self.passphrase:
+            if not isinstance(password, bytes):
+                password = bytes(password, 'utf-8')
+            path = self.path[0]
+            self.passphrase = SecurePassphraseStorage(passphrase=password)
+            _, self.master_key = get_master_key(self.parent, path, password)
+            self.config = get_mailpile_config(path, password)
+        return self
 
-        # FIXME: Extract Mailpile's tags from the config
+    def relock(self):
+        global MASTER_KEY_CACHE
+        MASTER_KEY_CACHE = {}
+        self.passphrase = None
+        self.master_key = None
+        self.config = None
 
     def __getitem__(self, *args, **kwargs):
         raise IOError('Mailpile v1 is metadata only')
@@ -105,12 +193,21 @@ class FormatMailpilev1:
                 lines.pop(0)
         return tags
 
+    def slugs_as_keys(self, ti):
+        tags = {}
+        for key, info in ti.items():
+            info['mp_key'] = key
+            tags[info['slug']] = info
+            if info.get('parent'):
+                info['parent'] = ti[info['parent']]['slug']    
+        return tags
+
     def message_tags(self):
         tag_info = self.tag_info()
         msg_tags = {}
         count = 0
         for chunk in get_mailpile_metadata(
-                self.path, self.passphrase, _iter=True):
+                self.path[0], self.passphrase, _iter=True):
             chunk = chunk.splitlines()
             for line in chunk:
                 if line and line[:1] not in (b'#', b'@'):
@@ -137,7 +234,7 @@ class FormatMailpilev1:
                  for i in field.split(',') if i and i in known_emails]
 
         for chunk in get_mailpile_metadata(
-                self.path, self.passphrase, _iter=True):
+                self.path[0], self.passphrase, _iter=True):
             print('Got %d bytes of metadata' % len(chunk))
             chunk = chunk.splitlines()
             for line in chunk:
@@ -170,32 +267,54 @@ class FormatMailpilev1:
 
 if __name__ == "__main__":
     import os, sys, getpass, time, json
+    from ...util.dumbcode import dumb_decode
     from ..files import FileStorage
-
-    fs = FileStorage()
-
-    if len(sys.argv) > 1:
-        profile, op = sys.argv[1:]
-        mp = FormatMailpilev1(fs, profile, None)
-        mp.unlock(None,
-            getpass.getpass('Your Mailpile(%s) passphrase: ' % profile))
-        if op == 'tag_infos':
-            print('%s' % json.dumps(mp.tag_info(), indent=1))
-        elif op == 'message_tags':
-            for msgid, tags in mp.message_tags():
-                print('%s -- msgid:%s' % (
-                    ' '.join('+%s' % t for t in tags),
-                    msgid))
-        else:
-            data = {'error': 'Unknown op: %s' % op}
-
-        sys.exit(0)
-
-    ## Tests follow ##
 
     fs = FileStorage()
     fs.RegisterFormat(FormatMaildirWERVD)
     fs.RegisterFormat(FormatMailpilev1)
+
+    if len(sys.argv) > 1:
+        profile, op = sys.argv[1:3]
+
+        try:
+            mp = FormatMailpilev1(fs, profile, None)
+            mp.unlock(None,
+                getpass.getpass('Your Mailpile(%s) passphrase: ' % profile))
+        except PleaseUnlockError as pue:
+            print('Unlock(%s) failed: %s' % (pue.resource, pue))
+            sys.exit(1)
+
+        if op == 'tag_infos':
+            print('%s' % json.dumps(mp.tag_info(), indent=1))
+
+        elif op == 'tag_export':
+            tfilter = sys.argv[3:]
+            skiplist = [t[1:] for t in tfilter if t[:1] == '-']
+            droplist = [t[1:] for t in tfilter if t[:1] == '_']
+            for msgid, tags in mp.message_tags():
+                drop = [t for t in tags if t in droplist]
+                tags = [t for t in tags if t not in skiplist]
+                if tags and not drop:
+                    print('%-31s -- msgid:%s' % (
+                        ' '.join('+%s' % tag_quote(t) for t in tags),
+                        msgid))
+            for slug, info in sorted(mp.slugs_as_keys(mp.tag_info()).items()):
+                if slug not in skiplist:
+                    print('+%-30s -- META=%s' % (
+                       tag_quote(slug), json.dumps(info)))
+
+        elif os.path.isdir(op):
+            op = bytes(op, 'utf-8')
+            for md in FormatMaildirWERVD(fs, [op], None).iter_email_metadata():
+                print('Subject: %s' % md.get_raw_header('Subject'))
+
+        else:
+            raise Exception('Error: unknown op: %s' % op)
+
+        sys.exit(0)
+
+    ## Tests follow ##
 
     assert(FormatMaildir.Magic(fs, b'/tmp/maildir-test', None, is_dir=True))
 

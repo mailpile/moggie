@@ -81,7 +81,7 @@ if __name__ == '__main__':
 From: bre@example.org
 To: bre@example.org
 Date: Thu, 1 Sep 2022 03:37:29 +0200 (CEST)
-Message-Id: <testing@moggie>
+Message-ID: <testing@moggie>
 Status: N
 Subject: ohai
 

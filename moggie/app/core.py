@@ -97,6 +97,8 @@ main app worker. Hints:
         self.rpc_functions = {
             b'rpc/notify':            (True, self.rpc_notify),
             b'rpc/jmap':              (True, self.rpc_jmap),
+            b'rpc/ask_secret':        (True, self.rpc_ask_secret),
+            b'rpc/set_secret':        (True, self.rpc_set_secret),
             b'rpc/jmap_session':      (True, self.rpc_session_resource),
             b'rpc/crypto_status':     (True, self.rpc_crypto_status),
             b'rpc/get_access_token':  (True, self.rpc_get_access_token)}
@@ -106,6 +108,7 @@ main app worker. Hints:
         self.metadata = None
         self.importer = None
         self.storage = None
+        self.stores = {}
         self.search = None
         self.ticker = None
         self.jmap = {
@@ -198,11 +201,15 @@ main app worker. Hints:
 
         self.storage = StorageWorker(self.worker.worker_dir,
             FileStorage(
+                ask_secret=self._fs_ask_secret,
+                set_secret=self._fs_set_secret,
                 relative_to=os.path.expanduser('~'),
                 metadata=self.metadata),
             notify=notify_url,
             name='fs',
             log_level=log_level).connect()
+
+        # FIXME: For each live account in config, start IMAP worker
 
         if (self.storage and self.search and self.metadata
                 and (self.importer is None)):
@@ -270,6 +277,16 @@ main app worker. Hints:
 
     def keep_result(self, rid, rv):
         self._results[rid] = (time.time(), rv)
+
+    def _fs_ask_secret(self, context, resource):
+        rv = self.worker.call('rpc/ask_secret', context, resource)
+        if rv is None:
+            raise PleaseUnlockError('Secret unavailable', resource=resource)
+        return rv
+
+    def _fs_set_secret(self, context, resource, secret, ttl):
+        return self.worker.call('rpc/set_secret',
+            context, resource, secret, ttl)
 
     def _is_locked(self):
         return (self.config.has_crypto_enabled and not self.config.aes_key)
@@ -396,6 +413,26 @@ main app worker. Hints:
 
         return ResponseConfigSet(jmap_request, result, error=', '.join(errors))
 
+    async def api_jmap_set_secret(self, conn_id, access, jmap_request):
+        ctx = jmap_request.get('context') or self.config.CONTEXT_ZERO
+        # Will raise ValueError or NameError if access denied
+        # FIXME: Is this a reasonable permission requirement?
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
+
+        key = jmap_request['key']
+        ttl = int(jmap_request['ttl'] or 0)
+        secret = jmap_request['secret']
+        context = self.config.get_context(ctx)
+        if not context:
+            raise ValueError('No such context')
+        if not key:
+            raise ValueError('Set which secret?')
+
+        with self.config:
+            context.set_secret(key, secret, ttl=ttl)
+
+        return ResponseConfigSet(jmap_request, {'set_secret': key, 'ttl': ttl})
+
     async def api_jmap_config_get(self, conn_id, access, jmap_request):
         result = {}
         czero = self.config.CONTEXT_ZERO
@@ -448,12 +485,19 @@ main app worker. Hints:
         return ResponseConfigGet(jmap_request, result, error=error)
 
     async def api_jmap_mailbox(self, conn_id, access, jmap_request):
-        # FIXME: Make sure access grants right to read mailboxes directly
+        ctx = jmap_request['context']
+        roles, tag_ns, scope_s = access.grants(ctx,
+            AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
 
         loop = asyncio.get_event_loop()
         async def load_mailbox():
+            # FIXME: Triage local/remote here? Hmm.
+            # Note: This might return a "please login" if the mailbox
+            #       is encrypted or on a remote server.
             return await self.storage.async_mailbox(loop,
                 jmap_request['mailbox'],
+                username=jmap_request['username'],
+                password=jmap_request['password'],
                 limit=jmap_request['limit'],
                 skip=jmap_request['skip'])
         watched = False
@@ -467,9 +511,12 @@ main app worker. Hints:
 
         loop = asyncio.get_event_loop()
         async def perform_search():
+            terms = jmap_request['terms']
+            if isinstance(terms, list):
+                terms = ' '.join(terms)
             s_result = await self.search.with_caller(conn_id).async_search(
                 loop,
-                jmap_request['terms'],
+                terms,
                 tag_namespace=tag_ns,
                 mask_deleted=jmap_request.get('mask_deleted', True),
                 more_terms=scope_s,
@@ -558,6 +605,9 @@ main app worker. Hints:
 
         loop = asyncio.get_event_loop()
         async def get_email():
+            # FIXME: Triage local/remote here? Hmm.
+            # Note: This might return a "please login" if the mailbox
+            #       is encrypted or on a remote server.
             return await self.storage.with_caller(conn_id).async_email(loop,
                 jmap_request['metadata'],
                 text=jmap_request.get('text', False),
@@ -712,6 +762,8 @@ main app worker. Hints:
             result = await self.api_jmap_unlock(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestChangePassphrase:
             result = await self.api_jmap_changepass(conn_id, access, jmap_request)
+        elif type(jmap_request) == RequestSetSecret:
+            result = await self.api_jmap_set_secret(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestPing:
             result = ResponsePing(jmap_request)
 
@@ -786,7 +838,7 @@ main app worker. Hints:
         await self.worker.broadcast(
             ResponseNotification(notification),
             only=only)
-        self.worker.reply_json({'ok': 'thanks'})
+        self.worker.reply_json({'ok': 'thanks'}, **kwargs['reply_kwargs'])
 
     async def rpc_check_result(self, request_id, **kwargs):
         pass
@@ -799,28 +851,36 @@ main app worker. Hints:
             else:
                 access = self.config.access_zero()
             rv = await self.api_jmap(None, access, request, internal=True)
-            self.worker.reply_json(rv)
+            self.worker.reply_json(rv, **kwargs['reply_kwargs'])
         except:
             logging.exception('rpc_jmap failed %s' % (request,))
-            self.worker.reply_json({'error': 'FIXME'})
+            self.worker.reply_json({'error': 'FIXME'}, **kwargs['reply_kwargs'])
+
+    def rpc_ask_secret(self, context, resource, **kwargs):
+        self.worker.reply_json(False, **kwargs['reply_kwargs'])
+
+    def rpc_set_secret(self, context, resource, secret, secret_ttl, **kwargs):
+        self.worker.reply_json(False, **kwargs['reply_kwargs'])
 
     def rpc_session_resource(self, **kwargs):
         jsr = AppSessionResource(self, self.config.access_zero())
-        self.worker.reply_json(jsr)
+        self.worker.reply_json(jsr, **kwargs['reply_kwargs'])
 
     def rpc_crypto_status(self, **kwargs):
         all_started = self.metadata and self.search and self.importer
         unlocked = self.config.get(
             self.config.SECRETS, 'passphrase', fallback=False) and True
         self.worker.reply_json({
-            'encrypted': self.config.has_crypto_enabled,
-            'unlocked': unlocked,
-            'locked': self._is_locked()})
+                'encrypted': self.config.has_crypto_enabled,
+                'unlocked': unlocked,
+                'locked': self._is_locked()},
+            **kwargs['reply_kwargs'])
 
     def rpc_get_access_token(self, **kwargs):
         a0 = self.config.access_zero()
         token, expiration = a0.get_fresh_token()
         self.worker.reply_json({
-            'token': token,
-            'expires': expiration})
+                'token': token,
+                'expires': expiration},
+            **kwargs['reply_kwargs'])
 

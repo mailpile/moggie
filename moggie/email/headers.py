@@ -1,7 +1,8 @@
+import datetime
 import logging
 import re
-import datetime
-from email.utils import encode_rfc2231, formatdate, format_datetime
+import time
+from email.utils import encode_rfc2231, parsedate, formatdate, format_datetime
 
 from .rfc2074 import rfc2074_quote, rfc2074_unquote
 from .addresses import AddressHeaderParser
@@ -19,7 +20,9 @@ SINGLETONS = (
     'date',
     'errors-to',
     'from',
-    'resent-from',
+    # Note: according to https://www.rfc-editor.org/rfc/rfc5322.html#page-28
+    #       there maybe multiple resent-X headers, if a message is resent may
+    #       times. So unlike the originals, resent-X cannot be singletons!
     'x-original-from',
     'message-id',
     'mime-version',
@@ -42,6 +45,7 @@ ADDRESS_HEADERS = (
     'resent-bcc',
     'resent-cc',
     'resent-from',
+    'resent-sender',
     'x-original-from',
     'resent-reply-to',
     'resent-sender',
@@ -60,10 +64,13 @@ HEADER_ORDER = {
     'to': 103,
     'cc': 104,
     'bcc': 105,
-    'resent-date': 90,
-    'resent-from': 92,
-    'resent-to': 93,
-    'resent-cc': 94,
+    # FIXME: According to https://www.rfc-editor.org/rfc/rfc5322.html#page-28
+    #        the order and grouping of resent headers has meaning. So if/when
+    #        we sort them, we are losing information. :-( So we have a bug.
+    #'resent-date': 90,
+    #'resent-from': 92,
+    #'resent-to': 93,
+    #'resent-cc': 94,
     'in-reply-to': 99,
     'references': 99,
     'list-id': 20,
@@ -77,6 +84,7 @@ HEADER_ORDER = {
     'content-transfer-encoding': 19}
 
 HEADER_CASEMAP = {
+    'message-id': 'Message-ID',
     'mime-version': 'MIME-Version',
     'content-type': 'Content-Type',
     'content-disposition': 'Content-Disposition',
@@ -85,6 +93,13 @@ HEADER_CASEMAP = {
     'to': 'To',
     'cc': 'Cc',
     'date': 'Date',
+    'subject': 'Subject',
+    'resent-from': 'Resent-From',
+    'resent-to': 'Resent-To',
+    'resent-cc': 'Resent-Cc',
+    'resent-date': 'Resent-Date',
+    'resent-sender': 'Resent-Sender',
+    'resent-message-id': 'Resent-Message-ID',
     'subject': 'Subject',
     'autocrypt': 'Autocrypt',
     'reply-to': 'Reply-To',
@@ -201,6 +216,14 @@ def parse_header(raw_header):
 
         else:
             headers[hdr] = headers.get(hdr, []) + [val]
+
+            if hdr == 'date':
+                try:
+                    ts = int(time.mktime(parsedate(val)))
+                    if ts > 0:
+                        headers['_DATE_TS'] = ts
+                except ValueError:
+                    pass
 
     headers['_ORDER'] = order
     for hdr in SINGLETONS:
@@ -382,10 +405,10 @@ Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
         parse_header(subject)['subject'],
         aedi * 10)
 
-    date = format_header('Date', 0, as_timestamp=True)
-    _assert(date, 'Date: Thu, 01 Jan 1970 00:00:00 -0000')
-    # FIXME: Should this parse to something else?
-    _assert(parse_header(date)['date'], 'Thu, 01 Jan 1970 00:00:00 -0000')
+    date = format_header('Date', 1, as_timestamp=True)
+    _assert(date, 'Date: Thu, 01 Jan 1970 00:00:01 -0000')
+    _assert(parse_header(date)['date'], 'Thu, 01 Jan 1970 00:00:01 -0000')
+    _assert(parse_header(date)['_DATE_TS'], 1)
 
     _assert(format_headers({
             'Subject': 'Halló heimur',

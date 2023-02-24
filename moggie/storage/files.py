@@ -16,6 +16,7 @@ from .formats import split_tagged_path, tag_path
 from .formats.base import FormatBytes
 from .formats.mbox import FormatMbox
 from .formats.maildir import FormatMaildir
+from .formats.mailpilev1 import FormatMaildirWERVD
 
 
 # These are the file types we understand how to parse. Note that the
@@ -23,6 +24,7 @@ from .formats.maildir import FormatMaildir
 # multiple.
 FORMATS = OrderedDict()
 FORMATS[FormatMbox.TAG] = FormatMbox
+FORMATS[FormatMaildirWERVD.TAG] = FormatMaildirWERVD
 FORMATS[FormatMaildir.TAG] = FormatMaildir
 FORMATS[FormatBytes.TAG] = FormatBytes
 
@@ -37,13 +39,13 @@ class FileMap(mmap.mmap):
 
 class FileStorage(BaseStorage):
     def __init__(self, *args, **kwargs):
-        self.relative_to = kwargs.get('relative_to')
-        if 'relative_to' in kwargs:
-            del kwargs['relative_to']
-
         self.metadata = kwargs.get('metadata')
-        if 'metadata' in kwargs:
-            del kwargs['metadata']
+        self.relative_to = kwargs.get('relative_to')
+        self.ask_secret = kwargs.get('ask_secret')
+        self.set_secret = kwargs.get('set_secret')
+        for k in ('metadata', 'relative_to', 'ask_secret', 'set_secret'):
+            if k in kwargs:
+                del kwargs[k]
 
         if isinstance(self.relative_to, str):
             self.relative_to = self.relative_to.encode('utf-8')
@@ -249,13 +251,27 @@ class FileStorage(BaseStorage):
                     return cls(self, paths, self[filepath])
         return None
 
-    def iter_mailbox(self, key, skip=0, limit=None):
+    def iter_mailbox(self, key,
+            skip=0, limit=None,
+            username=None, password=None, context=None, secret_ttl=None):
+
         parser = iter([])
         if (limit is None) or (limit > 0):
             mailbox = self.get_mailbox(key)
             if mailbox is None:
                 logging.debug('Failed to open mailbox: %s' % key)
             else:
+                if hasattr(mailbox, 'unlock'):
+                    _unlock_kwa = {}
+                    if self.ask_secret:
+                        def _ak(resource):
+                            return self.ask_secret(context, resource)
+                        _unlock_kwa['ask_key'] = _ak
+                    if self.set_secret:
+                        def _sk(resource, key):
+                            self.set_secret(context, resource, key, secret_ttl)
+                        _unlock_kwa['set_key'] = _sk
+                    mailbox.unlock(username, password, **_unlock_kwa)
                 parser = mailbox.iter_email_metadata(skip=skip)
         if limit is None:
             yield from parser

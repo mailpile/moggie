@@ -78,7 +78,8 @@ class HTMLCleaner(HTMLParser):
         'div', 'span',
         'b', 'i', 'tt', 'center', 'strong', 'em', 'small', 'smaller', 'big'])
 
-    def __init__(self, data=None, callbacks=None, css_cleaner=None):
+    def __init__(self,
+            data=None, callbacks=None, css_cleaner=None, stop_after=None):
         super().__init__()
         self.cleaned = []
         self.keywords = set([])
@@ -89,6 +90,7 @@ class HTMLCleaner(HTMLParser):
         self.a_hrefs = []
         self.img_srcs = []
         self.attribute_checks = copy.copy(self.ALLOWED_ATTRIBUTES)
+        self.stop_after = stop_after
 
         self.css_cleaner = css_cleaner
         if css_cleaner:
@@ -152,6 +154,10 @@ class HTMLCleaner(HTMLParser):
             self.dropped_tags.append(tag)
             return
 
+        if self.stop_after is not None:
+            if self.stop_after < 0:
+                attrs = [('style', 'display:none;')]
+
         container = self._container_tags()
 
         # Does this tag imply we should close previous ones?
@@ -176,7 +182,7 @@ class HTMLCleaner(HTMLParser):
                 if closing == 'p':
                     break
 
-        # FIXME: Sanitize attributes
+        # FIXME? Sanitize attributes
         self.tag_stack.append([tag, attrs, ''])
         if tag in self.SINGLETON_TAGS:
             self.handle_endtag(tag)
@@ -289,6 +295,8 @@ class HTMLCleaner(HTMLParser):
                 return
 
             regenerated = self.rerender_tag(t, a, b)
+            if self.stop_after is not None:
+                self.stop_after -= len(regenerated)
 
             self.tag_stack.pop(-1)
             if self.tag_stack:
@@ -300,7 +308,7 @@ class HTMLCleaner(HTMLParser):
         # Note: this depends on self.tag_stack being intact for
         #       correct application of global styles.
         a = list(self._clean_attributes(t, a))
-        if False and 'display:none;' in dict(a).get('style', ''):
+        if 'display:none;' in dict(a).get('style', ''):
             return ''
 
         a = self._render_attrs(a)
@@ -340,7 +348,7 @@ class HTMLCleaner(HTMLParser):
             self.force_closed += 1
             self.handle_endtag(self.tag_stack[-1][0])
         self._make_html_keywords()
-        return ''.join(self.cleaned).strip()
+        return ''.join(t for t in self.cleaned if t).strip()
 
     def report(self):
         return """\
@@ -398,7 +406,9 @@ class HTMLCleaner(HTMLParser):
 
     def clean(self):
         self.close()
-        return ''.join(self.cleaned).strip() + '\n' + self.report()
+        return (
+            ''.join(t for t in self.cleaned if t).strip() +
+            '\n' + self.report())
 
 
 class HTMLToTextCleaner(HTMLCleaner):

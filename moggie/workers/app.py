@@ -55,6 +55,9 @@ async def web_cli(req_env):
     conn = req_env['conn']
     frame = req_env['frame']
 
+    # FIXME: Have we completely fucked up our CSRF? Any commands doing
+    #        exciting stuff should reject GET. This needs urgent checking.
+
     args = req_env.request_path.split('/')
     while args.pop(0) != 'cli':
         pass

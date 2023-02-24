@@ -14,12 +14,16 @@ import struct
 from configparser import ConfigParser, NoOptionError, _UNSET
 from logging.handlers import TimedRotatingFileHandler
 
-from passcrow.client import PasscrowServerPolicy, PasscrowIdentityPolicy
-from passcrow.client import PasscrowClientPolicy, PasscrowClient
+try:
+    from passcrow.client import PasscrowServerPolicy, PasscrowIdentityPolicy
+    from passcrow.client import PasscrowClientPolicy, PasscrowClient
+except ImportError:
+    pass
 
 from ..crypto.aes_utils import make_aes_key
 from ..crypto.passphrases import stretch_with_scrypt, generate_passcode
 from ..util.dumbcode import dumb_decode, dumb_encode_asc
+from ..email.addresses import AddressInfo
 from .helpers import cfg_bool, ListItemProxy, EncodingListItemProxy
 from .helpers import DictItemProxy, ConfigSectionProxy
 
@@ -329,7 +333,8 @@ class ContextConfig(ConfigSectionProxy):
         # Optional...
         'scope_search': str,
         'tag_namespace': str}
-    _EXTRA_KEYS = ['identities', 'tags', 'extra_tags', 'flags', 'accounts']
+    _EXTRA_KEYS = [
+        'identities', 'tags', 'extra_tags', 'flags', 'accounts', 'secrets']
 
     def __init__(self, *args, **kwarg):
         super().__init__(*args, **kwarg)
@@ -338,12 +343,14 @@ class ContextConfig(ConfigSectionProxy):
         self._etags_list = EncodingListItemProxy(self.config, self.config_key, 'extra_tags')
         self._flags_list = ListItemProxy(self.config, self.config_key, 'flags')
         self._accts_list = ListItemProxy(self.config, self.config_key, 'accounts')
+        self._secrets = DictItemProxy(self.config, self.config_key, 'secrets')
 
     tags = property(lambda self: self._tags_list)
     extra_tags = property(lambda self: self._etags_list)
     flags = property(lambda self: self._flags_list)
     identities = property(lambda self: self._ids_list)
     accounts = property(lambda self: self._accts_list)
+    secrets = property(lambda self: self._secrets)
 
     def _accounts(self):
         return [
@@ -357,6 +364,57 @@ class ContextConfig(ConfigSectionProxy):
         for akey, acct in accounts:
             etags.extend(acct.get_tags())
         return set(etags)
+
+    def _volatile(self, what):
+        vol_id = '%s/%s' % (self.config_key, what)
+        if vol_id not in self.config.volatile:
+            self.config.volatile[vol_id] = {}
+        return self.config.volatile[vol_id]
+
+    def set_secret(self, key, secret, ttl=None):
+        key_id = self.get_secret(key, _get_key=True)
+        if secret is None or ttl:
+            try:
+                del self.secrets[key_id]
+            except KeyError:
+                pass
+
+        if secret is None:
+            pass
+        elif ttl:
+            exp = ttl + int(time.time())
+            self._volatile('secrets')[key_id] = (exp, dumb_encode_asc(
+                [key, secret],
+                aes_key_iv=self.config._aes_key_iv()))
+        else:
+            self.secrets[key_id] = dumb_encode_asc(
+                [key, secret],
+                aes_key_iv=self.config._aes_key_iv())
+
+    def get_secret(self, key, _get_key=False):
+        key_id = hashlib.sha1(bytes(key, 'utf-8')).hexdigest()
+        key_len = 4
+        def items():
+            now = time.time()
+            expired = []
+            volatile = self._volatile('secrets')
+            for k, (exp, v) in volatile.items():
+                if exp > now:
+                    yield k, v
+                else:
+                    expired.append(k)
+            for k in expired:
+                del volatile[k]
+            for k, v in self.secrets.items():
+                yield k, v
+
+        for k, v in items():
+            if key_id.startswith(k):
+                key_len = len(k) + 1
+                decoded = dumb_decode(v, aes_key=self.config.aes_key)
+                if decoded[0] == key:
+                    return k if _get_key else decoded[1]
+        return key_id[:key_len] if _get_key else None
 
     def as_dict(self, deep=True):
         if not deep:
@@ -384,6 +442,9 @@ class IdentityConfig(ConfigSectionProxy):
     _KEYS = {
         'name': str,
         'address': str}
+
+    def as_address_info(self):
+        return AddressInfo(address=self.address, fn=self.name)
 
 
 class AppConfig(ConfigParser):
@@ -471,6 +532,9 @@ class AppConfig(ConfigParser):
             self.SECRETS + '/master_key_N',
             self.ACCOUNT_PREFIX+'N/mailbox_password',
             self.ACCOUNT_PREFIX+'N/sendmail_password'}
+
+        # Ad-hoc storage for data which doesn't live forever
+        self.volatile = {}
 
         self.read(self.filepath)
         with self:
@@ -564,6 +628,12 @@ class AppConfig(ConfigParser):
             self[czero].update({'name': 'My Mail'})
             self.do_not_save()
             return ContextConfig(self, czero)
+
+    def get_context(self, which):
+        if which.startswith(self.CONTEXT_PREFIX):
+            if which in self:
+                return ContextConfig(self, which)
+        return None
 
     def get_account(self, which):
         if which.startswith(self.ACCOUNT_PREFIX):
@@ -887,6 +957,15 @@ if __name__ == '__main__':
     assert(len(old_keys[0]) > 20)
     assert(len(old_keys[1]) > 20)
 
+    cz = ac.context_zero()
+    cz.set_secret('bjarni is silly', {'secret': 'hello world', 'magic': 1})
+    cz.set_secret('bjarni is very silly', 'ohai world')
+    cz.set_secret('bjarni is very silly', 'ohai world', ttl=10)
+    assert(cz.get_secret('bjarni is silly')['secret'] == 'hello world')
+    cz.set_secret('bjarni is silly', None)
+    assert(cz.get_secret('bjarni is silly') is None)
+    assert(cz.get_secret('bjarni is very silly') == 'ohai world')
+
     acct = ac.get_account('bre@example.org')
     acct.addresses.append(b'bre2@example.org')
     assert(acct.addresses[0] == 'bre@example.org')
@@ -894,6 +973,5 @@ if __name__ == '__main__':
     assert('bre@example.org' in ac.get_account('Bjarni').addresses)
     assert('bre@example.org' in ac.get_account('Account 1').addresses)
 
-    ac.write(sys.stderr)
     os.remove('/tmp/config.rc')
     print('Tests passed OK')

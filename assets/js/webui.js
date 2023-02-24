@@ -65,7 +65,7 @@ moggie_webui = (function() {
         content_div = document.getElementsByClassName('content')[0];
         moggie_api.record_data(content_div, moggie_state);
 
-        _b('div', 'headbar').innerHTML = "<p>Welcome to Moggie</p>";
+        _b('div', 'headbar').innerHTML = "<p><a href='/'>Welcome to Moggie</a></p>";
         _b('div', 'sidebar').innerHTML = "<p>Yay a sidebar</p>";
 
         with_script('/static/js/jquery3.js', function() {

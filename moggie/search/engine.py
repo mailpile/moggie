@@ -557,6 +557,11 @@ class SearchEngine:
         if history['id'] != hist_id:
             raise KeyError('Not found: %s' % hist_id)
 
+        logging.debug('%s(%s) history:%s' % (
+            'undo' if undo else 'redo',
+            hist_id,
+            history))
+
         changes = history['changes']
         if undo:
             changes = reversed(changes)
@@ -656,11 +661,13 @@ class SearchEngine:
                             cset |= iset
                             cset ^= oset  # XOR tells us which bits changed
                             cset &= mset  # Scope
+                            cset_all |= cset
+
                             iset &= mset  # Scope
+                            oset &= mset  # Scope
                             changes.append([kw, idx,
                                 dumb_encode_asc(iset, compress=256),
-                                dumb_encode_asc(cset, compress=256)])
-                            cset_all |= cset
+                                dumb_encode_asc(oset, compress=256)])
 
             if record_history:
                 # Allocate slot while still locked, then release.
@@ -672,6 +679,7 @@ class SearchEngine:
                 'comment': record_history,
                 'changes': changes}
             self.records[slot] = changes
+            logging.debug('recording(%d): %s' % (slot, changes))
 
         return {
             'mutations': mutations,

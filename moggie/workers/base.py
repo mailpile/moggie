@@ -426,6 +426,7 @@ class BaseWorker(Process):
             logging.debug(
                 'async_call(%s), uploading %d bytes'  % (fn, len(upload)))
             try:
+                conn.settimeout(len(upload) // 10)
                 await loop.sock_sendall(conn, upload)
                 conn.shutdown(socket.SHUT_WR)
             except BrokenPipeError as e:
@@ -542,27 +543,40 @@ class BaseWorker(Process):
             # FIXME: Parse the HTTP response code and raise better exceptions
             raise PermissionError(str(peeked[:12], 'latin-1'))
 
-    def reply(self, pre, data=b'', close=True):
+    def client_info_tuple(self):
+        return [
+            None,
+            self._client,
+            self._client_addrinfo,
+            self._client_args,
+            self._client_method]
+
+    def reply(self, pre, data=b'', close=True, client_info_tuple=None):
+        if client_info_tuple is None:
+            client_info_tuple = self.client_info_tuple()
+
+        caller, client, cli_ai, cli_args, cli_method = client_info_tuple
         if data:
             pre += b'Content-Length: %d\r\n\r\n' % len(data)
-            self._client.send(pre + data)
+            client.send(pre + data)
             data_len = b'%d' % (len(pre) + len(data))
         else:
-            self._client.send(pre)
+            client.send(pre)
             data_len = b'%d' % len(pre)
         if close:
-            self._client.close()
+            client.close()
         else:
             data_len = b'..'
 
         # FIXME: This is not a good way to do logging
         logging.info(str(
-            b'%s - %s %s - %s /%s' % (
-                self._client_addrinfo[0].encode('latin-1'),
+            b'%s %s %s %s - %s /%s' % (
+                cli_ai[0].encode('latin-1'),
+                bytes(caller or '-', 'utf-8'),
                 pre[9:12],
                 data_len,
-                self._client_method,
-                self._client_args), 'latin-1'))
+                cli_method,
+                cli_args), 'latin-1'))
 
     def start_sending_data(self, mimetype, length):
         self.reply(self.HTTP_200
@@ -571,11 +585,15 @@ class BaseWorker(Process):
             close=False)
         return self._client
 
-    def reply_json(self, data):
-        if self._caller and isinstance(data, dict):
-            data['_caller'] = self._caller
+    def reply_json(self, data, client_info_tuple=None):
+        if isinstance(data, dict):
+            if client_info_tuple and client_info_tuple[0]:
+                data['_caller'] = client_info_tuple[0]
+            elif self._caller:
+                data['_caller'] = self._caller
         self.reply(self.HTTP_JSON,
-            json.dumps(data, indent=1).encode('utf-8') + b'\n')
+            json.dumps(data, indent=1).encode('utf-8') + b'\n',
+            client_info_tuple=client_info_tuple)
 
     def parse_header(self, hdr):
         hdr_lines = str(hdr, 'latin-1').replace('\r', '').splitlines()
@@ -598,7 +616,6 @@ class BaseWorker(Process):
 
     def decode_args(self, args):
         return [dumb_decode(a) for a in args]
-
 
     def handler(self, method, args):
         a_and_q = args.split(b'?', 1)
@@ -624,10 +641,17 @@ class BaseWorker(Process):
     # FIXME: This duplicates the code below almost completely, it would
     #        be nice to refactor and avoid that...
     async def async_rpc_handler(self,
-            fn, method, args, qs_pairs, prep, uploaded):
+            fn, method, args, qs_pairs, prep, uploaded,
+            reply=None, client_info_tuple=None):
         t0 = time.time()
         argdecode_and_func = self.functions.get(fn)
         fn = str(fn, 'latin-1')
+
+        if client_info_tuple is None:
+            client_info_tuple = self.client_info_tuple()
+        def async_reply(msg):
+            return self.reply(msg, client_info_tuple=client_info_tuple)
+
         if argdecode_and_func is not None:
             try:
                 argdecode, func = argdecode_and_func
@@ -646,6 +670,10 @@ class BaseWorker(Process):
                     for p in qs_pairs))
 
                 self._caller = dumb_decode(args.pop(0)) if args else None
+                client_info_tuple[0] = self._caller
+                kwargs['reply_kwargs'] = {
+                    'client_info_tuple': client_info_tuple}
+
                 if argdecode:
                     args = [dumb_decode(a) for a in args]
                 rv = func(*args, **kwargs)
@@ -663,18 +691,18 @@ class BaseWorker(Process):
                     % (method, fn, args, kwargs))
                 if kwargs:
                     self.status['requests_ignored'] += 1
-                    return self.reply(self.HTTP_400)  # This is a guess :-(
+                    return async_reply(self.HTTP_400)  # This is a guess :-(
             except KeyboardInterrupt:
                 pass
             except:
                 logging.exception('Error in RPC handler %s %s(%s, %s)'
                     % (method, fn, args, kwargs))
             self.status['requests_failed'] += 1
-            self.reply(self.HTTP_500)
+            async_reply(self.HTTP_500)
         else:
             logging.debug('Unknown method: %s' % (fn,))
             self.status['requests_ignored'] += 1
-            self.reply(self.HTTP_404)
+            async_reply(self.HTTP_404)
 
     def common_rpc_handler(self,
             fn, method, args, qs_pairs, prep, uploaded):

@@ -155,12 +155,15 @@ class KeywordExtractor:
     def header_keywords(self, metadata, parsed_email):
         status, keywords = set(), set()
 
+        ts = 0
         if metadata and metadata.timestamp:
-            keywords |= set(ts_to_keywords(metadata.timestamp))
+            ts = metadata.timestamp
+        elif parsed_email.get('_DATE_TS'):
+            ts = parsed_email['_DATE_TS']
         elif parsed_email.get('date'):
             ts = int(time.mktime(email.utils.parsedate(parsed_email['date'])))
-            if ts > 0:
-                keywords |= set(ts_to_keywords(ts))
+        if ts > 0:
+            keywords |= set(ts_to_keywords(ts))
 
         # Record the same message-ID-hashes as Mailpile v1 did
         keywords.add('msgid:' + msg_id_hash(parsed_email.get('message-id')))
@@ -216,7 +219,9 @@ class KeywordExtractor:
         # the spam filters.
         #
         status, keywords = set(), set()
-        hp = HeaderPrints(parsed_email)
+        hp = parsed_email.get('_HEADPRINTS')
+        if not hp:
+            hp = HeaderPrints(parsed_email)
         for k in ('org', 'sender', 'tools'):
             if k in hp and hp[k]:
                 keywords.add('hp_%s:%s' % (k, hp[k]))

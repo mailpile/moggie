@@ -238,11 +238,11 @@ if __name__ == '__main__':
             md_id = added['added'][0]
 
             m1 = list(mw.metadata([md_id], sort=mw.SORT_DATE_ASC))
-            assert(msgid == m1[0].get_raw_header('Message-Id'))
+            assert(msgid == m1[0].get_raw_header('Message-ID'))
 
             iset = dumb_encode_asc(IntSet([md_id]))
             m2 = list(mw.metadata(iset, sort=mw.SORT_DATE_ASC))
-            assert(msgid == m2[0].get_raw_header('Message-Id'))
+            assert(msgid == m2[0].get_raw_header('Message-ID'))
 
             if 'wait' not in sys.argv[1:]:
                 mw.quit()

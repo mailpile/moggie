@@ -36,7 +36,8 @@ from base64 import b64decode
 
 import moggie.platforms
 from .aes_utils import aes_ctr_decrypt
-from ..util.mailpile import sha512b64
+from .passphrases import SecurePassphraseStorage
+from ..util.mailpile import PleaseUnlockError, sha512b64
 from ..util.safe_popen import Popen, PIPE
 
 
@@ -44,6 +45,8 @@ PGP_MARKER_DELIM1 = b'-----BEGIN PGP MESSAGE-----'
 MEP_MARKER_DELIM1 = b"-----BEGIN MAILPILE ENCRYPTED DATA-----"
 MEP_MARKER_DELIM2 = b"-----END MAILPILE ENCRYPTED DATA-----"
 MEP_MARKER_SINGLE = b"X-Mailpile-Encrypted-Data:"
+
+MARKERS = (PGP_MARKER_DELIM1, MEP_MARKER_DELIM1, MEP_MARKER_SINGLE)
 
 OPENSSL_COMMAND = moggie.platforms.GetDefaultOpenSSLCommand
 OPENSSL_MD_ALG = 'md5'
@@ -106,7 +109,7 @@ def _openssl_dec(cipher, key, ciphertext, _debug):
     return _proc_decrypt(command, key, ciphertext, _debug)
 
 
-def _decrypt_chunk(key, data, _debug, _raise):
+def _decrypt_chunk(key, data, _debug, _raise, maxbytes):
     eol = b'\r\n' if (b'\r\n' in data) else b'\n'
     head, ciphertext = data.split(eol+eol, 1)
     headers = dict([l.split(': ', 1)
@@ -118,6 +121,17 @@ def _decrypt_chunk(key, data, _debug, _raise):
     md5sum = headers.get('md5sum')
     sha256 = headers.get('sha256')
     nonce = bytes(headers.get('nonce', ''), 'utf-8')
+
+    if maxbytes:
+        # A block size of 32 bytes, is a multiple of both 128 and 256 bit.
+        # Base64 blocks are 3 bytes per every 4 encoded.
+        # So we align to a multiple of 32*3 = 96.
+        if (maxbytes % 96):
+            maxbytes -= (maxbytes % 96)
+            maxbytes += 96
+        maxbytes //= 3
+        maxbytes *= 4
+        ciphertext = ciphertext.strip()[:maxbytes]
 
     mutated_key = sha512b64(key, nonce)[:32].strip()
     if _debug:
@@ -138,42 +152,51 @@ def _decrypt_chunk(key, data, _debug, _raise):
     else:
         raise ValueError('Unsupported cipher: %s' % cipher)
 
-    if md5sum:
+    if md5sum and not maxbytes:
         dighex = hashlib.md5(mutated_key + nonce + plaintext).hexdigest()
         if dighex != md5sum:
             if _debug:
                 _debug('Bad decrypt? %s' % plaintext)
             if _raise:
-                raise ValueError('MD5 mismatch: %s != %s' % (dighex, md5sum))
+                raise PleaseUnlockError(
+                    'MD5 mismatch: %s != %s' % (dighex, md5sum))
             else:
                 return ciphertext
 
-    if sha256:
+    if sha256 and not maxbytes:
         inner_sha = hashlib.sha256(mutated_key + nonce + plaintext).digest()
         dighex = hashlib.sha256(mutated_key + inner_sha).hexdigest()
         if dighex != sha256:
             if _debug:
                 _debug('Bad decrypt? %s' % plaintext)
             if _raise:
-                raise ValueError('SHA256 mismatch: %s != %s' % (dighex, sha256))
+                raise PleaseUnlockError(
+                    'SHA256 mismatch: %s != %s' % (dighex, sha256))
             else:
                 return ciphertext
 
     return plaintext
 
 
-def decrypt_mailpilev1(key, data, _debug=False, _raise=False):
+def decrypt_mailpilev1(key, data, _debug=False, _raise=False, maxbytes=None):
     if isinstance(data, str):
         data = bytes(data, 'latin-1')
     elif hasattr(data, 'read'):
         data = data.read()
 
-    if data.startswith(MEP_MARKER_SINGLE):
-        yield _decrypt_chunk(key, data, _debug, _raise)
+    # This is our SecurePassphraseStorage support
+    if hasattr(key, 'get_passphrase_bytes'):
+        key = key.get_passphrase_bytes()
 
-    elif data.startswith(PGP_MARKER_DELIM1):
+    if data.startswith(PGP_MARKER_DELIM1):
         plaintext, err = _gnupg_dec(key, data, _debug)
-        yield plaintext
+        if maxbytes:
+            yield plaintext[:maxbytes]
+        else:
+            yield plaintext
+
+    elif MEP_MARKER_SINGLE in data[:512]:
+        yield _decrypt_chunk(key, data, _debug, _raise, maxbytes)
 
     elif not data.startswith(MEP_MARKER_DELIM1):
         if _raise:
@@ -187,32 +210,49 @@ def decrypt_mailpilev1(key, data, _debug=False, _raise=False):
                 chunk = chunk.strip()
                 if chunk.endswith(MEP_MARKER_DELIM2):
                     chunk = chunk[:-len(MEP_MARKER_DELIM2)].rstrip()
-                yield _decrypt_chunk(key, chunk, _debug, _raise)
+                plain = _decrypt_chunk(key, chunk, _debug, _raise, maxbytes)
+                yield plain
+                if maxbytes:
+                    maxbytes -= len(plain)
+                    if maxbytes < 128:
+                        break
 
 
 def get_mailpile_key(mailpile_path, passphrase, keydata=None, _debug=False):
     if not keydata:
-        with open(os.path.join(mailpile_path, 'mailpile.key'), 'rb') as fd:
+        if isinstance(mailpile_path, str):
+            mailpile_path = bytes(mailpile_path, 'utf-8')
+        with open(os.path.join(mailpile_path, b'mailpile.key'), 'rb') as fd:
             keydata = fd.read()
 
     for master_key in decrypt_mailpilev1(passphrase, keydata, _debug):
-        return master_key
+        if master_key:
+            return master_key
 
     raise ValueError('Unrecognized key data format')
 
 
 def get_mailpile_data(mailpile_path, passphrase, filepath,
-        filedata=None, keydata=None, _debug=False, _raise=True):
+        filedata=None, keydata=None, _debug=False, _raise=True, _iter=False):
+    if isinstance(mailpile_path, str):
+        mailpile_path = bytes(mailpile_path, 'utf-8')
+    if isinstance(filepath, str):
+        filepath = bytes(filepath, 'utf-8')
     if not filedata:
-        if not os.path.sep in filepath:
+        if not b'/' in filepath:
             filepath = os.path.join(mailpile_path, filepath)
         with open(filepath, 'rb') as fd:
             filedata = fd.read()
 
     master_key = get_mailpile_key(mailpile_path, passphrase, keydata, _debug)
-    return b''.join(decrypt_mailpilev1(master_key, filedata,
-        _debug=_debug,
-        _raise=_raise))
+    if _iter:
+        return decrypt_mailpilev1(master_key, filedata,
+            _debug=_debug,
+            _raise=_raise)
+    else:
+        return b''.join(decrypt_mailpilev1(master_key, filedata,
+            _debug=_debug,
+            _raise=_raise))
 
 
 def get_mailpile_config(mailpile_path, passphrase,
@@ -222,9 +262,9 @@ def get_mailpile_config(mailpile_path, passphrase,
 
 
 def get_mailpile_metadata(mailpile_path, passphrase,
-        keydata=None, metadata=None, _debug=False):
+        keydata=None, metadata=None, _debug=False, _iter=False):
     return get_mailpile_data(mailpile_path, passphrase, 'mailpile.idx',
-        filedata=metadata, keydata=keydata, _debug=_debug)
+        filedata=metadata, keydata=keydata, _debug=_debug, _iter=_iter)
 
 
 if __name__ == '__main__':
@@ -338,21 +378,40 @@ o58wVfYsXFiJaxSRQACC8o6tRJot/+S2nNo992PL7QwzcJsJECQVpc1L
 =ebA7
 -----END PGP MESSAGE-----
 """
+    # If we are keeping passphrases in RAM for extended periods of
+    # time, we should use the SecurePassphraseStorage.  Make sure
+    # secrets in that format are usable.
+    secret = SecurePassphraseStorage(passphrase=LEGACY_TEST_KEY)
 
     # Test the Mailpile v1 AES encryption, both built-in and openssl based
-    for i, o in (
-            (LEGACY_TEST_1, LEGACY_PLAINTEXT),
-            (LEGACY_TEST_2, LEGACY_PLAINTEXT * 2),
-            (LEGACY_TEST_3, LEGACY_PLAINTEXT),
-            (LEGACY_TEST_4, LEGACY_PLAINTEXT)):
-        c = decrypt_mailpilev1(LEGACY_TEST_KEY, i, _debug=False, _raise=True)
-        _assert(b''.join(c), want=o)
+    for i, o, mb in (
+            (LEGACY_TEST_1, LEGACY_PLAINTEXT,      None),
+            (LEGACY_TEST_2, LEGACY_PLAINTEXT * 2,  None),
+            (LEGACY_TEST_3, LEGACY_PLAINTEXT,      None),
+            (LEGACY_TEST_4, LEGACY_PLAINTEXT,      None),
+            (LEGACY_TEST_1, LEGACY_PLAINTEXT,      96),
+            (LEGACY_TEST_2, LEGACY_PLAINTEXT,      96), # Partial result!
+            (LEGACY_TEST_3, LEGACY_PLAINTEXT,      96),
+            (LEGACY_TEST_4, LEGACY_PLAINTEXT,      95)):
+        # Decryption success test
+        c = b''.join(decrypt_mailpilev1(
+                        secret, i,
+                        _debug=False, _raise=True, maxbytes=mb))
+        _assert(c, want=o)
+
+        # Decryption failure test
+        if not mb:
+          try:
+            c = b''.join(decrypt_mailpilev1(b'bad secret', i, _raise=True))
+            _assert(b'not reached', False)
+          except PleaseUnlockError:
+            pass
 
     # Test our logic for extracting the Mailpile master key
     for i, o in (
             (GNUPG_KEYDATA_TEST, GNUPG_KEYDATA_SECRET),
             ):
-        k = get_mailpile_key(None, LEGACY_TEST_KEY, keydata=i)
+        k = get_mailpile_key(None, secret, keydata=i)
         _assert(k, want=o)
 
     print('Tests passed OK')

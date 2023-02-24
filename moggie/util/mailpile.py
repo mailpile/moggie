@@ -5,6 +5,16 @@ from urllib.parse import quote
 from urllib.parse import unquote as tag_unquote
 
 
+class PleaseUnlockError(OSError):
+    """
+    This exception is raised when we need credentials to unlock something,
+    be it an encrypted file or remote resource we need to log-in to.
+    """
+    def __init__(self, err, resource=None):
+        super().__init__(err)
+        self.resource = resource
+
+
 def tag_quote(txt):
     return (quote(txt.lower(), safe='@:').lower()
         .replace('-', '%2d')

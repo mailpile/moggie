@@ -5,6 +5,7 @@ import zipfile
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.util import quick_msgparse, make_ts_and_Metadata
+from ...util.mailpile import PleaseUnlockError
 from . import tag_path
 
 
@@ -15,11 +16,13 @@ class FormatMaildir:
     NAME = 'maildir'
     TAG = b'md'
 
+    MAGIC_CHECKS = (b'cur', b'new', b'tmp')
+
     @classmethod
     def Magic(cls, parent, key, info=None, is_dir=None):
         if not is_dir:
             return False
-        for sub in (b'cur', b'new', b'tmp'):
+        for sub in cls.MAGIC_CHECKS:
             if not os.path.join(key, sub) in parent:
                 return False
         return True
@@ -122,12 +125,19 @@ class FormatMaildir:
     def __len__(self):
         return sum(1 for sub, fn in self.full_keys())
 
-    def iter_email_metadata(self, skip=0, iterator=None):
+    def unlock(self, username, password, ask_key=None, set_key=None):
+        return self
+
+    def get_email_headers(self, sub, fn):
+        return self.parent[os.path.join(self.basedir, sub, fn)]
+
+    def iter_email_metadata(self,
+            skip=0, iterator=None, username=None, password=None):
         lts = 0
         now = int(time.time())
         for sub, fn in self.full_keys(skip=skip):
             try:
-                obj = self.parent[os.path.join(self.basedir, sub, fn)]
+                obj = self.get_email_headers(sub, fn)
                 hend, hdrs = quick_msgparse(obj, 0)
                 path = self.get_tagged_path(self.sep + fn)
                 lts, md = make_ts_and_Metadata(

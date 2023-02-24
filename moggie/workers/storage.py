@@ -103,11 +103,13 @@ class StorageWorker(BaseWorker):
             return self.call('info', key, qs={'details': details})
         return self.call('info', key)
 
-    async def async_mailbox(self, loop, key, skip=0, limit=None):
-        return await self.async_call(loop, 'mailbox', key, skip, limit)
+    async def async_mailbox(self, loop, key,
+            skip=0, limit=None, username=None, password=None):
+        return await self.async_call(loop,
+            'mailbox', key, skip, limit, username, password)
 
-    def mailbox(self, key, skip=0, limit=None):
-        return self.call('mailbox', key, skip, limit)
+    def mailbox(self, key, skip=0, limit=None, username=None, password=None):
+        return self.call('mailbox', key, skip, limit, username, password)
 
     def get(self, key, *args, dumbcode=None):
         if dumbcode is not None:
@@ -137,7 +139,7 @@ class StorageWorker(BaseWorker):
     def api_info(self, key, details=False, method=None):
         self.reply_json(self.backend.info(key, details=details))
 
-    def api_mailbox(self, key, skip, limit, method=None):
+    def api_mailbox(self, key, skip, limit, username, password, method=None):
         self._expire_parse_cache()
         if key in self.parsed_mailboxes:
             while (not self.parsed_mailboxes[key][1]
@@ -150,7 +152,8 @@ class StorageWorker(BaseWorker):
             return self.reply_json(pm[beg:end])
 
         collect = []
-        parser = self.backend.iter_mailbox(key, skip=skip)
+        parser = self.backend.iter_mailbox(key,
+            skip=skip, username=username, password=password)
         self.parsed_mailboxes[key] = [time.time(), False, collect]
 
         if limit is None:
