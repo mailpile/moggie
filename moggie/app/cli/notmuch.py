@@ -1,9 +1,6 @@
 # These are CLI commands which aim to behave as similarly to notmuch as
 # possible. Because why not? Compatibility is nice.
 #
-# FIXME: Most of the complex logic in here should probably be moved to the
-#        back-end, so we can expose the same API via the web.
-#
 # TODO: Look into tabular
 #
 # These are the commands used by the dodo mail client:
@@ -38,7 +35,10 @@ import sys
 import time
 
 from .command import Nonsense, CLICommand, AccessConfig
+from .email import CommandEmail
 from ...config import AppConfig
+from ...email.addresses import AddressInfo
+from ...email.parsemime import MessagePart
 from ...email.metadata import Metadata
 from ...jmap.requests import RequestSearch, RequestMailbox, RequestEmail
 from ...security.html import HTMLCleaner
@@ -49,11 +49,22 @@ from ...util.mailpile import tag_unquote
 from ...util.dumbcode import dumb_decode
 
 
+def _html_quote(t):
+    return (t
+        .replace('&', '&amp;')
+        .replace('<', '&lt;')
+        .replace('>', '&gt;'))
+
+
 class CommandSearch(CLICommand):
     """# moggie search [options] <search terms ...>
 
-    Search for emails or threads matching the given search terms. Search
-    terms are exact matches, unless the wildcard (*) is used. Examples:
+    Search for emails or threads matching the given search terms, returning
+    matching data in a variety of formats.
+
+    Search terms are exact matches, unless the wildcard (*) is used.
+
+    ### Examples
 
         moggie search bjarni                 # Exact match
         moggie search bjarn*                 # Will match bjarni or bjarna
@@ -65,25 +76,46 @@ class CommandSearch(CLICommand):
 
         moggie search dates:2022-08 --format=mbox > August2022.mbx  # Export!
 
-    Options:                                   (defaults are marked with a *)
+    See also `moggie help how-to-search` for more details and examples.
 
-        --context=<ctx>  Choose which context to search within.
-        --format=<fmt>   Result format: text*, text0, json, zip, maildir, mbox
-        --output=<data>  Result output: summary*, threads, messages, files,
-                                        tags, emails, thread_emails.
-        --offset=<N>     Skip the first N results
-        --limit=<N>      Output at most N results
-        --sort=<N>       Either newest-first (the default) or oldest-first.
+    ### Search options
 
-    The search command can emit various types of results in various formats.
-    Some constraints and special cases:
+    %(search)s
+
+    ### Output options
+
+    The search command can emit various types of results in various formats,
+    depending on these options:
+
+    %(output)s
+
+    The outputs can be:
+
+       * `summary` - A summary of threads matching the search
+       * `threads` - A list of thread IDs matching the search
+       * `messages` - A list of moggie messagee IDs matching the search
+       * `files` - A list of file paths matching the search
+       * `tags` - A list of tags found on messages matching the search
+       * `emails` - Entire e-mails matching the search
+       * `thread_emails` - Entire e-mails from threads matching the search
+
+    Supported formats:
+
+       * `text` - More-or-less human-readable text
+       * `text0` - The same as text, but deliminated by null characters
+                   instead of newlines.
+       * `json` - A structured JSON object
+       * `sexp` - The same contents as JSON outputs, but as an S-expression
+       * `zip` - Entire messages as individual files in a ZIP archove
+       * `maildir` - Entire messages in a Maildir mailbox, in a .TGZ archive
+       * `mbox` - Entire messages in a Unix mbox mailbox
+
+    Notes:
 
        * The default output is `summary`, unless something else is implied
          by the format. The default format is `text`.
        * The only valid outputs for zip, maildir and mbox are emails and
          thread_emails.
-       * The maildir format actually generates a gzipped tar archive, which
-         contains the maildir.
        * The headers of messages contained in mbox and zip results will be
          modified to include Moggie metadata (tags, read/unread, etc.).
        * Searching for `*` returns all known mail.
@@ -94,11 +126,18 @@ class CommandSearch(CLICommand):
          formatting with `--output=files` may fail in some cases. Use
          `--format=text0` for the most reliable results.
 
+    ### Notmuch compatibility
+
     Where moggie and notmuch options overlap (see `man notmuch`), an attempt
     has been made to ensure compatibility. However, note that Moggie file
     paths have extra data appended (offets within a mbox, etc). Moggie's
     search syntax also differs from that of notmuch in important ways.
     """
+    __NOTES__ = """
+
+FIXME: Document html and html formats!
+
+"""
     NAME = 'search'
     ROLES = AccessConfig.GRANT_READ
     WEBSOCKET = False
@@ -106,24 +145,25 @@ class CommandSearch(CLICommand):
     HTML_DEFAULT_LIMIT = 25
     HTML_COLUMNS = ['count', 'thread', 'address', 'name', 'authors',
                     'tags', 'subject', 'date_relative']
-    OPTIONS = {
-        # These are moggie specific
-        '--context=':        ['default'],
-        '--q=':              [],
-        '--username=':       [None],
-        '--password=':       [None],
-        '--zip-password=':   [None],
-        # These are notmuch options which we implement
-        '--format=':         ['text'],
-        '--output=':         ['default'],
-        '--offset=':         ['0'],
-        '--limit=':          [''],
-        '--entire-thread=':  [],
+    OPTIONS = [[
+        (None, None, 'search'),
+        ('--context=',   ['default'], 'The context for scope and settings'),
+        ('--q=',                  [], 'Search terms (used by web API)'),
+        ('--offset=',          ['0'], 'Skip the first X results'),
+        ('--limit=',            [''], 'Output at most X results'),
+        ('--entire-thread=',      [], 'X=(true|false)'),
+        ('--username=',       [None], ''),  # FIXME
+        ('--password=',       [None], ''),  # FIXME
+    ],[
+        (None, None, 'output'),
+        ('--format=',       ['text'], 'X=(text*|text0|json|sexp|zip|maildir|mbox|..)'),
+        ('--output=',    ['default'], 'X=(summary*|threads|messages|files|emails|..)'),
+        ('--zip-password=',   [None], 'Password for encrypted ZIP exports'),
         # These are notmuch options which we currently ignore
-        '--sort=':           ['newest-first'],
-        '--format-version=': [''],
-        '--exclude=':        ['true'],
-        '--duplicate=':      ['']}
+        ('--sort=', ['newest-first'], ''),  # notmuch: ignored
+        ('--format-version=',   [''], ''),  # notmuch: ignored
+        ('--exclude=',      ['true'], ''),  # notmuch: ignored
+        ('--duplicate=',        [''], '')]] # notmuch: ignored
 
     def __init__(self, *args, **kwargs):
         self.displayed = {}
@@ -160,7 +200,7 @@ class CommandSearch(CLICommand):
         if self.options['--format='][-1] in ('maildir', 'zip', 'mbox'):
             self.default_output = 'emails'
 
-        if (self.options['--zip-password='][-1] and
+        if ((self.options.get('--zip-password=') or [None])[-1] and
                self.options['--format='][-1] not in ('zip',)):
             raise Nonsense('Encryption is only supported with --format=zip')
 
@@ -444,11 +484,6 @@ class CommandSearch(CLICommand):
 \x0cbody}
 \x0cmessage}""")
         def _as_html(r):
-            def _html_quote(t):
-                return (t
-                    .replace('&', '&amp;')
-                    .replace('<', '&lt;')
-                    .replace('>', '&gt;'))
             return _textify(r, 'text/html', _html_quote,
                 """
     <div class="%(class)s" data-part-id="%(id)s" data-mimetype="%(_ct)s">
@@ -683,7 +718,7 @@ class CommandSearch(CLICommand):
 
     def _get_exporter(self, cls):
         if self.exporter is None:
-            password = self.options['--zip-password='][-1]
+            password = (self.options.get('--zip-password=') or [None])[-1]
             class _wwrap:
                 def write(ws, data):
                     self.write_reply(data)
@@ -896,16 +931,20 @@ class CommandAddress(CommandSearch):
     """# moggie address [options] <search terms ...>
 
     Search for emails or threads matching the given search terms and display
-    addresses related to them (senders, recipients or both). Examples:
+    addresses related to them (senders, recipients or both).
+
+    ### Examples
 
         moggie address to:bre dates:2022-09
         moggie address --output=recipients from:bre dates:2022-09
 
-    Options:                                   (defaults are marked with a *)
+    ### Search options
 
-        --format=<F>       One of text*, text0, json or sexp
-        --output=<O>       One or more of sender*, recipients, address, count
-        --deduplicate=<D>  One of no, mailbox*, address
+    %(search)s
+
+    ### Output options
+
+    %(output)s
 
     When choosing output formats, multiple options can be specified at once.
     When `sender` is requested, the output will include all senders. The
@@ -922,18 +961,19 @@ class CommandAddress(CommandSearch):
     NAME = 'address'
     ROLES = AccessConfig.GRANT_READ
     WEB_EXPOSE = True
-    OPTIONS = {
-        # These are moggie specific
-        '--context=':        ['default'],
-        '--q=':              [],
-        # These are notmuch options which we implement
-        '--format=':         ['text'],
-        '--output=':         [],
-        '--deduplicate=':    ['mailbox'],
-        # These are notmuch options which we currently ignore
-        '--sort=':           ['newest-first'],
-        '--format-version=': [''],
-        '--exclude=':        ['true']}
+    OPTIONS = [[
+        (None, None, 'search'),
+        ('--context=',     ['default'], 'The context for scope and settings'),
+        ('--q=',                    [], 'Search terms (used by web API)'),
+        ('--deduplicate=', ['mailbox'], 'X=(no|mailbox|address)'),
+    ],[
+        (None, None, 'output'),
+        ('--format=',   ['text'], 'X=(text*|text0|json|sexp)'),
+        ('--output=',         [], 'X=(sender*|recipients|address|count)'),
+    # These are notmuch options which we currently ignore
+        ('--sort=',           ['newest-first'], ''),
+        ('--format-version=', [''], ''),
+        ('--exclude=',        ['true'], '')]]
 
     def __init__(self, *args, **kwargs):
         self.address_only = False
@@ -1032,43 +1072,51 @@ class CommandAddress(CommandSearch):
 class CommandShow(CommandSearch):
     """moggie show [options] <terms>
 
-    JSON output:
+    Display messages or extract parts from e-mails or threads matching
+    a given search.
 
-      message_dict = { id: match: excluded: filename:[]
-                       timestamp: date_relative: tags:[]
-                       body[{id: content-type: content:}*]
-                       crypto:{} headers:{} }
+    ### Search options
 
-      message_tuple = ( message_dict, [ message_tuple* ] )
+    %(search)s
 
-      list of message_tuples
+    ### Output options
 
+    %(output)s
+
+    ### Examples
+
+        ...
+
+    FIXME
     """
     NAME = 'show'
     ROLES = None
     REAL_ROLES = AccessConfig.GRANT_READ
     WEB_EXPOSE = True
 
-    RE_SIGNED_ID = re.compile(r'^id:[0-9a-f,]+\.[0-9a-zA-Z]+\.[0-9a-zA-Z]+\.[0-9a-f]+$')
+    RE_SIGNED_ID = re.compile(
+        r'^id:[0-9a-f,]+\.[0-9a-zA-Z]+\.[0-9a-zA-Z]+\.[0-9a-f]+$')
 
-    OPTIONS = {
-        # These are moggie specific
-        '--context=':        ['default'],
-        '--q=':              [],
-        # These are notmuch options which we implement
-        '--format=':         ['text'],
-        '--offset=':         ['0'],
-        '--limit=':          [''],
-        '--part=':           [],
-        '--entire-thread=':  [],
-        '--include-html':    [],
-        '--body=':           ['true'],
-        # These are notmuch options which we currently ignore
-        '--verify':          [],
-        '--decrypt=':        [],
-        '--format-version=': [''],
-        '--exclude=':        ['true'],
-        '--duplicate=':      ['']}
+    OPTIONS = [[
+        (None, None, 'search'),
+        ('--context=',     ['default'], 'The context for scope and settings'),
+        ('--q=',                    [], 'Search terms (used by web API)'),
+        ('--deduplicate=', ['mailbox'], 'X=(no|mailbox|address)'),
+    ],[
+        (None, None, 'output'),
+        ('--format=',   ['text'], 'X=(text*|text0|json|sexp)'),
+        ('--output=',         [], 'X=(sender*|recipients|address|count)'),
+        ('--limit=',        [''], ''),
+        ('--entire-thread=',  [], 'X=(true|false*), show all messages in thread?'),
+        ('--body=',     ['true'], 'X=(true*|false), output message body?'),
+        ('--part=',           [], 'Show part number X (0=entire raw message)'),
+        ('--include-html',    [], 'Include HTML parts in output'),
+    # These are notmuch options which we currently ignore
+        ('--verify',          [], ''),
+        ('--decrypt=',        [],  ''),
+        ('--format-version=', [''], ''),
+        ('--exclude=',    ['true'], ''),
+        ('--duplicate=',      [''], '')]]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1193,21 +1241,45 @@ class CommandShow(CommandSearch):
 
 
 class CommandCount(CLICommand):
+    """moggie count [options] <terms>
+
+    Count how many messages or threads match the given search terms.
+    Multiple searches can be performed at once, and terms can be loaded
+    from standard input or a file, as well as the command line.
+
+    With no search terms, return results for the entire context.
+
+    ### Search options
+
+    %(search)s
+
+    ### Output options
+
+    %(output)s
+
+    ### Examples
+
+        ...
+
+    FIXME
+    """
     NAME = 'count'
     ROLES = AccessConfig.GRANT_READ
     WEB_EXPOSE = True
-    OPTIONS = {
-        # These are moggie specific
-        '--context=':        ['default'],
-        '--multi':           [],          # Multiple terms as arguments?
-        '--format=':         ['text'],    # Also json, sexp!
-        '--stdin=':          [],          # Allow lots to send us stdin
-        # These are notmuch options which we implement
-        '--batch':           [],
-        '--input=':          [],
-        # These are notmuch options which still need work
-        '--output=':         ['messages'],
-        '--lastmod':         []}
+    OPTIONS = [[
+        (None, None, 'search'),
+        ('--stdin=',            [], ''),  # Internal: lots stdin hack
+        ('--context=', ['default'], 'The context for scope and settings'),
+        ('--q=',                [], 'Search terms (used by web API)'),
+        ('--multi',             [], 'Search and count each term separately'),
+    ],[
+        (None, None, 'output'),
+        ('--format=',     ['text'], 'X=(text*|text0|json|sexp)'),
+        ('--batch',             [], 'Read terms, one per line, from stdin'),
+        ('--input=',            [], 'Read terms, one per line, from file X'),
+    # These are notmuch options which still need work
+        ('--output=', ['messages'], ''),   # FIXME
+        ('--lastmod',           [], '')]]
 
     def configure(self, args):
         args = self.strip_options(args)
@@ -1217,6 +1289,9 @@ class CommandCount(CLICommand):
             self.terms = args
         elif args:
             self.terms = [' '.join(args)]
+
+        if not self.terms:
+            self.terms = ['*']
 
         if self.options['--batch']:
             for stdin in self.options['--stdin=']:
@@ -1258,550 +1333,7 @@ class CommandCount(CLICommand):
                     self.print('%d%s' % (count, suffix))
 
 
-class CommandEmail(CLICommand):
-    """
-    Prepare an e-mail for sending, including headers, attachments and
-    any encryption or digital signatures.
-
-    Generate headers and optionally a message template for sending a
-    new message.
-
-     - Oops, what we actually do is generate the message itself.
-     - We want the message template for notmuch compat
-     - Being able to generate full messages is more useful though
-     - For proper email clients a JSON (or sexp) representation is
-       desirable, but we need to be able to receive it back and work
-       with that instead of command line args.
-     - Do we care to support primitive composition? It's mutt/unix-like
-       but gets quite faffy.
-
-    TODO:
-     - Think about output formats
-     - Accept our output as input?
-     - Make forward/reply subcommands work
-     - Add PGP and DKIM support, maybe AGE?
-
-    """
-    NAME = 'email'
-    ROLES = AccessConfig.GRANT_READ
-    WEBSOCKET = False
-    WEB_EXPOSE = True
-    CONNECT = False    # We manually connect if we need to!
-    OPTIONS = {
-        # These are moggie specific
-        '--context=':        ['default'],
-        '--format=':         ['rfc822'],  # Also text, json, sexp!
-        '--stdin=':          [],          # Allow lots to send us stdin
-
-        # These options should all get defaults from the active context.
-        '--from=':           [],  # name <e-mail> OR account ID.
-        '--signature=':      [],  # A snippet of text to append to the message
-        '--sign-as=':        [],  # Auto, Key ID (PGP or DKIM) to sign with
-        '--bcc=':            [],  # Hidden recipient (BCC)
-        '--header=':         [],  # header:value
-
-        # These may be set indirectly by --reply=
-        '--to=':             [],  # To: recipient
-        '--cc=':             [],  # Cc: recipient
-
-        '--date=':           [],  # Message date, default is "now"
-        '--subject=':        [],  # "message subject"
-
-        '--reply=':          [],  # Search terms
-        '--forward=':        [],  # Search terms
-        '--decrypt=':        [],  # false, auto, true  (FIXME: notmuch compat)
-        '--reply-to=':       ['all'],  # all or sender (notmuch compat)
-        '--forwarding=':     [],  # inline (default) or attachment
-        '--quoting=':        [],  # html, text, trim, below (multiple allowed)
-
-        '--text=':           [],  # Y, N, "actual text content"
-        '--html=':           [],  # Y, N, "actual HTML content"
-        '--message=':        [],  # A snippet of text to add to the message
-        '--attach=':         [],  # mimetype:/path/to/file
-
-        '--encrypt=':        ['N'], # N, all, attachments
-        '--zip-password=':   [],  # Password to use for ZIP encryption
-        '--encrypt-to=':     [],  # Auto, Key-IDs (age, PGP, ...) to encrypt to
-
-        '--send-to=':        [],  # E-mails to send to, instead of inferring
-                                  # .. from the to/cc/bcc.
-        '--send-at=':        [],  # NOW or a time/date to send
-        }
-
-    DEFAULT_QUOTING = ['trim']
-    DEFAULT_FORWARDING = ['inline']
-
-    def __init__(self, *args, **kwargs):
-        self.replying_to = []
-        self.forwarding = []
-        self.attachments = []
-        self.headers = {}
-        super().__init__(*args, **kwargs)
-
-    def _load_email(self, fd):
-        from moggie.email.parsemime import parse_message
-        if fd == sys.stdin.buffer and self.options['--stdin=']:
-            data = self.options['--stdin='].pop(0)
-        else:
-            data = fd.read()
-        return parse_message(data, fix_mbox_from=(data[:5] == b'From '))
-
-    def configure(self, args):
-        args = self.strip_options(args)
-
-        # FIXME: Accept the same JSON object as we emit; convert it back
-        #        to command-line arguments here.
-        # FIXME: Accept the same TEXT representation as we emit; convert it
-        #        back to command-line arguments here.
-
-        def as_file(key, i, t, target, reader):
-            if t[:1] == '-':
-                # FIXME: Is this how we handle stdin?
-                target.append(reader(sys.stdin.buffer))
-                self.options[key][i] = None
-            elif (os.path.sep in t) and os.path.exists(t):
-                with open(t, 'rb') as fd:
-                    target.append(reader(fd))
-                self.options[key][i] = None
-            # FIXME: Allow in-place base64 encoded data?
-
-        # This lets the caller provide messages for forwarding or replying to
-        # directly, instead of searching. Anything left in the reply/forward
-        # options after this will be treated as a search term.
-        for target, key in (
-                  (self.replying_to, '--reply='),
-                  (self.forwarding, '--forward=')):
-            for i, t in enumerate(self.options[key]):
-                as_file(key, i, t, target, self._load_email)
-            self.options[key] = [t for t in self.options[key] if t]
-
-        # Similarly, gather attachment data, if it is local. Anything left
-        # in the attachment option will be treated as a remote reference.
-        key = '--attach='
-        for i, t in enumerate(self.options[key]):
-            if ':' in t:
-                mt, path = t.split(':', 1)
-            else:
-                mt, path = 'application/octet-stream', t
-            as_file(key, i, path, self.attachments,
-                lambda fd: (mt, os.path.basename(path), fd.read()))
-        self.options[key] = [t for t in self.options[key] if t]
-
-        # Complain if the user attempts both --text= and --message= style
-        # composition; we want one or the other!
-        if self.options['--message='] and (
-                self.options['--text='] or self.options['--html=']):
-            raise Nonsense('Use --message= or --text=/--html= (not both)')
-
-        # Parse any supplied dates...
-        import datetime
-        key = '--date='
-        for i, dv in enumerate(self.options[key]):
-            try:
-                self.options[key][i] = datetime.datetime.fromtimestamp(int(dv))
-            except ValueError:
-                raise Nonsense('Dates must be Unix timestamps (FIXME)')
-
-        return self.configure2(args)
-
-    def _get_terms(self, args):
-        """Used by Reply and Forward"""
-        if '--' in args:
-            pos = args.indexOf('--')
-            if pos > 0:
-                raise Nonsense('Unknown args: %s' % args[:pos])
-            args = args[(pos+1):]
-        else:
-            opts = [a for a in args if a[:2] == '--']
-            args = [a for a in args if a[:2] != '--']
-            if pos > 0:
-                raise Nonsense('Unknown args: %s' % opts)
-        return args
-
-    def configure2(self, args):
-        if args:
-            raise Nonsense('Unknown args: %s' % args)
-        return args
-
-    def text_part(self, text, mimetype='text/plain'):
-        try:
-            data = str(bytes(text, 'us-ascii'), 'us-ascii')
-            enc = '7bit'
-        except UnicodeEncodeError:
-            import email.base64mime as b64
-            #data = b64.body_encode(bytes(text, 'utf-8'))
-            data = text  # FIXME: Delete this
-            enc = 'base64'
-        return ({
-                'content-type': [mimetype, ('charset', 'utf-8')],
-                'content-disposition': 'inline',
-                'content-transfer-encoding': enc
-            }, data)
-
-    def multi_part(self, mtype, parts):
-        from moggie.email.headers import format_headers
-        from moggie.util.mailpile import b64c, sha1b64
-        import os
-        boundary = b64c(sha1b64(os.urandom(32)))
-        bounded = ['\r\n--%s\r\n%s%s' % (
-                boundary,
-                format_headers(headers),
-                body
-            ) for headers, body in parts]
-        bounded.append('\r\n--%s--' % boundary)
-        return ({
-                'content-type': [
-                    'multipart/%s' % mtype, ('boundary', boundary)],
-                'content-transfer-encoding': '7bit'
-            }, '\r\n'.join(bounded).strip())
-
-    def attach_part(self, mimetype, filename, data):
-        import email.base64mime as b64
-        ctyp = [mimetype]
-        disp = ['attachment']
-        if filename:
-            disp.append(('filename', filename))
-        return ({
-                'content-type': ctyp,
-                'content-disposition': disp,
-                'content-transfer-encoding': 'base64'
-            }, b64.body_encode(data).strip())
-
-    def get_encryptor(self):
-        return None, ''
-
-    def get_passphrase(self):
-        if self.options['--zip-password=']:
-            return bytes(self.options['--zip-password='][-1], 'utf-8')
-        # FIXME: Generate a password? How do we tell the user?
-        raise Nonsense('FIXME: need a password')
-        return None
-
-    def attach_encrypted_attachments(self, text_parts=None):
-        from moggie.storage.exporters.maildir import ZipWriter
-        import io, base64
-
-        mimetype = 'application/octet-stream'
-        filename = 'message.zip' if text_parts else 'attachments.zip'
-        encryptor, ext = self.get_encryptor()
-        passphrase = None if encryptor else self.get_passphrase()
-
-        now = time.time()
-        fd = io.BytesIO()
-        zw = ZipWriter(fd, password=passphrase)
-        if text_parts:
-            for headers, b64data in text_parts:
-                if headers['content-type'][0] == 'text/html':
-                    fn = 'message.html'
-                else:
-                    fn = 'message.txt'
-                zw.add_file(fn, now, base64.b64decode(b64data))
-        for _unused, fn, data in self.attachments:
-            zw.add_file(fn, now, data)
-        zw.close()
-        data = fd.getvalue()
-
-        # If we are PGP or AGE encrypting the file, that transformation
-        # happens here.
-        if encryptor:
-            filename += '.%s' % ext
-            data = encryptor(data)
-
-        return self.attach_part(mimetype, filename, data)
-
-    def wrap_text(self, txt):
-        lines = ['']
-        for word in txt.replace('\r', '').replace('\n', ' ').split():
-            if len(lines[-1]) + len(word) >= 72:
-                lines.append('')
-            lines[-1] += ' ' + word
-        return '\r\n'.join(l.strip() for l in lines if l)
-
-    def html_to_text(self, html):
-        from moggie.security.html import html_to_markdown
-        return html_to_markdown(html, wrap=72)
-
-    def text_to_html(self, text):
-        import markdown
-        return markdown.markdown(text)
-
-    def text_and_html(self, msg, is_html=None):
-        msg = msg.strip()
-        if is_html is True or (is_html is None and msg.startswith('<')):
-            return self.html_to_text(msg), msg
-        else:
-            return msg, self.text_to_html(msg)
-
-    def get_message_text(self, message, mimetype='text/plain'):
-        message.with_text()
-        print('%s' % message)
-        found = []
-        for part in message['_PARTS']:
-            if part['content-type'][0] == mimetype and '_TEXT' in part:
-                found.append(part['_TEXT'])
-        return '\n'.join(found)
-
-    def collect_quotations(self, message):
-        import time
-        import email.utils
-        from moggie.security.html import HTMLCleaner
-
-        #when = ' '.join(message['date'].strip().split()[:-2])
-        if message['from']['fn']:
-            frm = '%(fn)s <%(address)s>' % message['from']
-        else:
-            frm = message['from']['address']
-
-        strategy = self.options['--quoting='] or self.DEFAULT_QUOTING
-        quote_text = quote_html = ''
-
-        def _quotebrackets(txt):
-            return ''.join('> %s' % l for l in txt.strip().splitlines(True))
-        quote_text = _quotebrackets(self.get_message_text(message))
-
-        if 'html' in strategy or ('text' not in strategy and not quote_text):
-            quote_html = self.get_message_text(message, mimetype='text/html')
-            if quote_html:
-                quote_html = '<blockquote>%s</blockquote>' % quote_html
-
-        if 'trim' in strategy:
-            pass  # Trim the quoted text a bit
-
-        if quote_text and not quote_html:
-            # Note: _quotebrackets becomes <blockquote>
-            quote_html = self.text_to_html(quote_text)
-        elif quote_html and not quote_text:
-            # FIXME: Should html_to_text instead convert <blockquotes> to >>> ?
-            quote_text = _quotebrackets(self.html_to_text(quote_html))
-
-        if quote_text:
-            quote_text = '%s wrote:\n%s' % (frm, quote_text)
-        if quote_html:
-            # FIXME: add our own CSS definitions, which the cleaner will then
-            #        apply for prettification?
-            quote_html = HTMLCleaner('<p>%s wrote:</p>\n%s' % (
-                    frm.replace('<', '&lt;').replace('>', '&gt;'),
-                    quote_html)
-                ).close()
-
-        return strategy, quote_text, quote_html
-
-    def collect_inline_forwards(self, message):
-        strategy = self.options['--forwarding='] or self.DEFAULT_FORWARDING
-        if 'inline' in strategy:
-            pass  # Extract text, add it
-        return strategy, fwd_text, fwd_html
-
-    def generate_text_parts(self, want_text, want_html):
-        text, html = [], []
-
-        quoting = {}
-        for msg in self.options['--message=']:
-            t, h = self.text_and_html(msg)
-            text.append(t)
-            html.append(self.wrap_text(h))
-
-        for msg in self.replying_to:
-            strategy, q_txt, q_htm = self.collect_quotations(msg)
-            if q_txt and q_htm:
-                if 'below' in strategy:
-                    text[:0] = [q_txt]
-                    html[:0] = [q_htm]
-                else:
-                    text.append(q_txt)
-                    html.append(q_htm)
-
-        for msg in self.forwarding:
-            strategy, f_txt, f_htm = self.collect_inline_forwards(msg)
-            if f_txt and f_htm:
-                text.append(f_txt)
-                html.append(f_htm)
-
-        for sig in self.options['--signature=']:
-            t, h = self.text_and_html(sig)
-            text.append('-- \r\n' + t)
-            html.append('<br><br>--<br>\n' + self.wrap_text(h))
-
-        if not want_text:
-            text = []
-        if not want_html:
-            html = []
-        return text, html
-
-    def render(self):
-        from moggie.email.addresses import AddressHeaderParser
-        from moggie.email.headers import HEADER_CASEMAP, format_headers
-
-        for hdr_val in self.options['--header=']:
-            hdr, val = hdr_val.split(':', 1)
-            if hdr.lower() in HEADER_CASEMAP:
-                hdr = hdr.lower()
-            h = self.headers[hdr] = self.headers.get(hdr, [])
-            h.append(val)
-
-        for hdr, opt, parse in (
-                ('from',    '--from=',    lambda a: AddressHeaderParser(a)),
-                ('to',      '--to=',      lambda a: AddressHeaderParser(a)),
-                ('cc',      '--cc=',      lambda a: AddressHeaderParser(a)),
-                ('date',    '--date=',    lambda v: v),
-                ('subject', '--subject=', lambda v: v)):
-            val = [parse(t) for t in self.options[opt]]
-            h = self.headers[hdr] = self.headers.get(hdr, [])
-            for v in val:
-                # Someone should spank me for playing golf
-                (h.extend if isinstance(v, list) else h.append)(v)
-            if not h:
-                del self.headers[hdr]
-
-        if 'date' not in self.headers:
-            import datetime
-            self.headers['date'] = [datetime.datetime.now()]
-
-        if 'mime-version' not in self.headers:
-            self.headers['mime-version'] = 1.0
-
-        # Sanity checks
-        if len(self.headers.get('from', [])) != 1:
-            raise Nonsense('There must be exactly one From address!')
-        if len(self.headers.get('date', [])) > 1:
-            raise Nonsense('There can only be one Date!')
-
-        msg_opt = self.options['--message=']
-        text_opt = self.options['--text=']
-        want_text = (msg_opt or text_opt) and (['N'] != text_opt)
-
-        html_opt = self.options['--html=']
-        want_html = (msg_opt or html_opt) and (['N'] != html_opt)
-
-        if html_opt and 'Y' in text_opt:
-            text_opt.append(self.html_to_text('\n\n'.join(html_opt)))
-
-        elif text_opt and 'Y' in html_opt:
-            html_opt.append(self.text_to_html('\n\n'.join(text_opt)))
-
-        else:
-            text_opt, html_opt = self.generate_text_parts(want_text, want_html)
-
-        # FIXME: Is this where we fork, on what the output format is?
-
-        parts = []
-        text_opt = [t for t in text_opt if t not in ('', 'Y')]
-        if want_text and text_opt:
-            parts.append(self.text_part(
-                '\r\n\r\n'.join(t.strip() for t in text_opt)))
-
-        html_opt = [t for t in html_opt if t not in ('', 'Y')]
-        while 'Y' in html_opt:
-            html_opt.remove('Y')
-        if want_html and html_opt:
-            parts.append(
-                self.text_part(
-                    '\r\n\r\n'.join(html_opt),
-                    mimetype='text/html'))
-
-        encryption = self.options['--encrypt='][-1].lower()
-        if encryption == 'all' and not self.options['--encrypt-to=']:
-            # Create an encrypted .ZIP with entire message content
-            parts = [self.attach_encrypted_attachments(text_parts=parts)]
-        else:
-            if len(parts) > 1:
-                parts = [self.multi_part('alternative', parts)]
-
-            if encryption == 'attachments':
-                # This will create an encrypted .ZIP with our attachments only
-                parts.append(self.attach_encrypted_attachments())
-            else:
-                for mimetype, filename, data in self.attachments:
-                    parts.append(self.attach_part(mimetype, filename, data))
-
-        if len(parts) > 1:
-            parts = [self.multi_part('mixed', parts)]
-
-        if encryption == 'all' and self.options['--encrypt-to=']:
-            # Encrypt to someone: a PGP or AGE key
-            parts = [self.encrypt_to_recipient(parts)]
-
-        self.headers.update(parts[0][0])
-        body = parts[0][1]
-
-        return ''.join([format_headers(self.headers), body])
-
-    def _reply_addresses(self):
-        senders = {}
-        recipients = {}
-        def _add(_hash, _ai):
-             _hash[_ai.address] = _ai
-        for email in self.replying_to:
-             _add(senders, email['from'])
-             for ai in email.get('to', []) + email.get('cc', []):
-                 _add(recipients, ai)
-        return senders, recipients
-
-    def gather_from(self, senders_and_recipients=None):
-        senders, recipients = senders_and_recipients or self._reply_addresses()
-
-        # FIXME: Check the current context for addresses that were on the
-        #        recipient list. If none are found, use the main address for
-        #        the context.
-        print('Candidates: %s' % recipients)
-
-        # FIXME: Check the replied messages, are any of those e-mails
-        #        ours?
-        raise Nonsense('FIXME: No From')
-
-    def gather_to_cc(self, senders_and_recipients=None):
-        senders, recipients = senders_and_recipients or self._reply_addresses()
-
-        from moggie.email.addresses import AddressHeaderParser
-        frm = AddressHeaderParser(self.options['--from='][0])[0].address
-
-        self.options['--to='].extend(
-            a.normalized() for a in senders.values() if a.address != frm)
-        if self.options['--reply-to='][-1] == 'all':
-            self.options['--cc='].extend(
-                a.normalized() for a in recipients.values()
-                if a.address != frm and a.address not in senders)
-
-    async def gather_emails(self, searches):
-        emails = []
-        for search in searches:
-            print('FIXME: Search for %s' % search)
-        return emails
-
-    async def gather_attachments(self, searches):
-        atts = []
-        for search in searches:
-            print('FIXME: Find attachment for %s' % search)
-        return atts
-
-    async def run(self):
-        for target, key, gather in (
-                (self.replying_to, '--reply=',   self.gather_emails),
-                (self.forwarding,  '--forward=', self.gather_emails),
-                (self.attachments, '--attach=',  self.gather_attachments)):
-            if self.options[key]:
-                target.extend(await gather(self.options[key]))
-
-        if not self.options['--from=']:
-            self.gather_from()
-
-        if not self.options['--to='] and not self.options['--cc=']:
-            self.gather_to_cc()
-
-        self.print(self.render())
-
-
-class CommandCompose(CommandEmail):
-    """
-    Generate headers and optionally a message template for replying
-    to a set of messages.
-
-    FIXME
-    """
-    NAME = 'compose'
-
-
-class CommandReply(CommandCompose):
+class CommandReply(CommandEmail):
     """
     Generate headers and optionally a message template for replying
     to a set of messages.
@@ -1815,63 +1347,71 @@ class CommandReply(CommandCompose):
     structures (multipart, HTML text), applications should use the JSON
     format and construct their own message using the provided data.
 
-    IDEAS:
-       ... add a mode where the caller can specify the user's response
-           and queue for sending directly. This will let us cleanly
-           generate HTML mail, using a "standard but abhorred" top-posting
-           style.
-       ... allow the user to specify attachments on the command line
+    Note: This command is notmuch-compatibility command; see `moggie email`
+          for a more powerful composition tool.
     """
     NAME = 'reply'
+    OPTIONS = {
+        # These are moggie specific
+        '--context=':        ['default'],
+        '--format=':         ['default'], # Also json, sexp, headers-only
+        '--stdin=':          [],          # Allow lots to send us stdin
+
+        '--reply=':          [],  # Search terms
+        '--decrypt=':        [],  # false, auto, true  (FIXME: notmuch compat)
+        '--reply-to=':       ['all'],  # all or sender (notmuch compat)
+        }
 
     def configure2(self, args):
         self.options['--reply='].extend(self._get_terms(args))
         return []
 
-
-class CommandForward(CommandCompose):
-    """
-    This command behaves simplarly to `moggie reply`, except it assumes
-    the user is forwarding the matching messages instead of replying to
-    them.
-
-    IDEAS:
-       ... Support bounce or resend, where the messages are not modified
-           at all, just resent, one at a time.
-       ... Allow the user to request messages be forwarded as message/rfc822
-           attachments.
-    """
-    NAME = 'forward'
-
-    def configure2(self, args):
-        self.options['--forward='].extend(self._get_terms(args))
-        return []
-
+    def render_result(self):
+        self.print(self.render())
 
 
 class CommandTag(CLICommand):
     """# moggie tag [options] +<tag>|-<tag> [...] -- <search terms ...>
 
-    Tag or untag e-mails matching a particular search query. Examples:
+    Tag or untag e-mails matching a particular search query.
+
+    Alternately, add/remove metadata from the tags themselves.
+
+    ### Examples
 
         moggie tag +family -- to:bjarni from:dad
         moggie tag --context=Personal -play +school -- homework
 
-    Alternately, instead of a search query a JSON object can be used to
-    add or remove metadata on the tags themselves:
+    Instead of a search query, a JSON object can be used to add or
+    remove metadata on the tags themselves:
 
         moggie tag +family -- 'META={"name": "My Family"}'
         moggie tag +family +school -- 'META={"parent": "personal"}'
 
-    Options:
+    ### Tagging options
 
-        --context=<C>      Set the context for the operation
-        --batch            Read stdin for tag commands, one per line
-        --input=<filename> Read batch commands from a file
-        --comment=<C>      Add a comment to the tag-history for this op
-        --remove-all       Strip all tags from matching messages
-        --undo=<ID>        Undo a recent tag operation
-        --redo=<ID>        Redo a recent tag operation
+    %(tagging)s
+
+    ### Tag history
+
+    Moggie keeps a history of tag operations, primarily to allow the user
+    to *undo* any mistakes. Related options:
+
+    %(history)s
+
+    As a rule, most tag operations should include a human-readable comment
+    explaining what happened. This comment is recorded in the log, along
+    with the information required to undo/redo the operation itself.
+
+    Note that tag metadata changes are not recorded in the log and cannot
+    be undone.
+
+    ### Batch operations
+
+    Moggie allows users (or apps) to apply multiple search-and-tag operations
+    as a single batch. Options:
+
+    %(batch)s
 
     For the purposes of recording history and facilitating undo, we treat
     all operations within a single batch as one; all searches are performed
@@ -1890,28 +1430,33 @@ class CommandTag(CLICommand):
     Batches can have in-line trailing comments using a '#' sign, but it
     must be both preceded and followed by a space: # like this.
 
-    To remove all matches for a single search within a batch, use '-*'
-    as a tag operation.
-
-    Note that tag metadata changes cannot be undone.
+    To remove all matches for a single search within a batch (similar to
+    the `--remove-all` option for a simple invocation), use '-*' as a tag
+    operation.
     """
     NAME = 'tag'
     ROLES = AccessConfig.GRANT_READ + AccessConfig.GRANT_TAG_RW
     MAX_TAGOPS = 5000
     WEB_EXPOSE = True
-    OPTIONS = {
-        # These are moggie specific
-        '--context=':        ['default'],
-        '--format=':         [None],
-        '--comment=':        [None],
-        '--stdin=':          [],          # Allow lots to send us stdin
-        '--undo=':           [None],
-        '--redo=':           [None],
-        '--big':             [],         # Big batch?
-        # These are notmuch options which we implement
-        '--batch':           [],
-        '--input=':          [],
-        '--remove-all':      []}
+    OPTIONS = [[
+        (None, None, 'tagging'),
+        ('--context=', ['default'], 'The context for scope and settings'),
+        ('--remove-all', [],
+                           'First strip all tags from matching messages'),
+        ('--big', [],
+               'Override sanity checks and allow large, slow operations'),
+    ],[
+        (None, None, 'batch'),
+        ('--batch',             [], 'Read ops, one per line, from stdin'),
+        ('--input=',            [], 'Read ops, one per line, from file X'),
+    ],[
+        (None, None, 'history'),
+        ('--comment=',      [None], 'Explain this operation in the tag history'),
+        ('--undo=',         [None], 'X=<id>, undo a previous tag operation'),
+        ('--redo=',         [None], 'X=<id>, redo an undone tag operation'),
+    ],[
+        ('--format=',       [None], ''),
+        ('--stdin=',            [], '')]]  # Internal: lots stdin hack
 
     def _validate_and_normalize_tagops(self, tagops):
         for idx, tagop in enumerate(tagops):
