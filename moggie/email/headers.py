@@ -10,6 +10,9 @@ from .addresses import AddressHeaderParser
 
 FOLDING_RE = re.compile(r'\r?\n\s+', flags=re.DOTALL)
 
+RECEIVED_TOKENS = ('from', 'by', 'via', 'with', 'id', 'for')
+RECEIVED_TOKENS_RE = re.compile(r'\b(from|by|via|with|id|for)\s+', flags=re.I)
+
 SINGLETONS = (
     '_mbox_separator',
     'content-transfer-encoding',
@@ -55,6 +58,11 @@ ADDRESS_HEADERS = (
 HEADERS_WITH_PARAMS = (
     'content-type',
     'content-disposition')
+
+HEADERS_ONLY_PARAMS = (
+    'dkim-signature',
+    'arc-seal',
+    'arc-message-signature')
 
 HEADER_ORDER = {
     'date': 100,
@@ -110,11 +118,11 @@ HEADER_CASEMAP = {
 HWP_CONTENT_TYPE_RE = re.compile(r'^([a-zA-Z0-9_-]+\/[a-zA-Z0-9_\.-]+)', flags=re.DOTALL)
 HWP_VALUE_RE = re.compile(r'^([^;]+)', flags=re.DOTALL)
 HWP_TOKEN_RE = re.compile(r'^([a-zA-Z0-9_-]+)', flags=re.DOTALL)
-HWP_PARAM_RE = re.compile(r'(;\s*([a-zA-Z0-9_-]+)=([a-zA-Z0-9_\.-]+|\"(?:\\.|[^"\\]+)+\"))', flags=re.DOTALL)
+HWP_PARAM_RE = re.compile(r'(;\s*([a-zA-Z0-9_-]+)=(\"(?:\\.|[^"\\]+)+\"|[^;\(]+))', flags=re.DOTALL)
 HWP_COMMENT_RE = re.compile(r'^(;?\s*\(([^\(]*)\))', flags=re.DOTALL)
 
 
-def parse_parameters(hdr, value_re=HWP_VALUE_RE):
+def parse_parameters(hdr, value_re=HWP_VALUE_RE, unspace=False):
     """
     This will parse a typical value-with-parameters into a descriptive
     dictionary. The algorithm does not preserve white-space, and is a
@@ -122,12 +130,16 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE):
     parameters named _COMMENT and _JUNK respectively.
     """
     ohdr = hdr
-    m0 = value_re.match(hdr)
-    if not m0:
-        return [None, {'_JUNK': hdr}]
+    if value_re is None:
+        m0 = ''
+        hdr = '; ' + hdr
+    else:
+        m0 = value_re.match(hdr)
+        if not m0:
+            return [None, {'_JUNK': hdr}]
+        m0 = m0.group(0)
 
     params = {}
-    m0 = m0.group(0)
     hdr = hdr[len(m0):]
     while hdr:
         p = HWP_PARAM_RE.match(hdr)
@@ -140,6 +152,10 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE):
                 except UnicodeDecodeError:
                     logging.error('UNDECODABLE: %s in %s' % (val, ohdr))
                     raise
+            elif unspace:
+                val = val.replace(' ', '')
+            else:
+                val = val.rstrip()
             params[p.group(2).lower()] = rfc2074_unquote(val)
         else:
             c = HWP_COMMENT_RE.match(hdr)
@@ -153,7 +169,10 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE):
                 params['_JUNK'] = hdr
                 break
 
-    return [m0, params]
+    if value_re is None:
+        return params
+    else:
+        return [m0, params]
 
 
 def parse_content_type(hdr):
@@ -161,6 +180,32 @@ def parse_content_type(hdr):
     if ct:
         ct = ct.lower()
     return [ct, params]
+
+
+def parse_received(header_value):
+    try:
+        fields, date = [f.strip() for f in header_value.rsplit(';', 1)]
+        try:
+            date = int(time.mktime(parsedate(date)))
+        except ValueError:
+            date = None
+    except ValueError:
+        fields = header_value.strip()
+        date = None
+
+    fields = [f.strip() for f in RECEIVED_TOKENS_RE.split(fields)]
+    fdict = {'date': date}
+    while fields and not fields[0]:
+        fields.pop(0)
+
+    while fields:
+        if fields[0].lower() in RECEIVED_TOKENS and len(fields) > 1:
+            fdict[fields[0]] = fields[1]
+            fields = fields[2:]
+        else:
+            fields['_'] = fields.get('_', '') + fields.pop(0) + ' '
+
+    return fdict
 
 
 def parse_header(raw_header):
@@ -213,6 +258,13 @@ def parse_header(raw_header):
 
         elif hdr in HEADERS_WITH_PARAMS:
             headers[hdr] = headers.get(hdr, []) + [parse_parameters(val)]
+
+        elif hdr in HEADERS_ONLY_PARAMS:
+            headers[hdr] = headers.get(hdr, []) + [parse_parameters(val,
+                value_re=None, unspace=True)]
+
+        elif hdr == 'received':
+            headers[hdr] = headers.get(hdr, []) + [parse_received(val)]
 
         else:
             headers[hdr] = headers.get(hdr, []) + [val]
@@ -335,8 +387,8 @@ if __name__ == '__main__':
 
     parse = parse_header(b"""\
 From something at somedate
-Received: from foo by bar
-Received: from bar by baz
+Received: from foo by bar; Thu, 01 Jan 1970 00:00:05 -0000
+Received: from bar by baz; Thu, 01 Jan 1970 00:00:10 -0000
 From: Bjarni R. Einarsson <bre@example.org>
 To: spamfun@example.org
 To: duplicate@example.org
@@ -348,6 +400,10 @@ Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
     #print('%s' % json.dumps(parse, indent=1))
 
     assert(json.dumps(parse))
+    assert(parse['received'][0]['from'] == 'foo')
+    assert(parse['received'][0]['date'] == 5)
+    assert(parse['received'][1]['by'] == 'baz')
+    assert(parse['received'][1]['date'] == 10)
     assert(parse['_mbox_separator'] == 'From something at somedate')
     assert(parse['to'][0].fn == '')
     assert(parse['to'][0].address == 'spamfun@example.org')
@@ -359,15 +415,14 @@ Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
     assert(not parse.get('_has_errors'))
 
     p0v, p0p = parse_parameters('text/plain; charset=us-ascii (Ugh Ugh)')
-    assert(p0v == 'text/plain')
-    assert(p0p['charset'] == 'us-ascii')
-    assert(p0p['_COMMENT'] == 'Ugh Ugh')
-    assert('_JUNK' not in p0p)
+    _assert(p0v, 'text/plain')
+    _assert(p0p['charset'], 'us-ascii')
+    _assert(p0p['_COMMENT'], 'Ugh Ugh')
+    _assert('_JUNK' not in p0p)
 
     p1v, p1p = parse_parameters('text/plain; charset=us ascii')
     assert(p1v == 'text/plain')
-    assert(p1p['charset'] == 'us')
-    assert(p1p['_JUNK'] == ' ascii')
+    assert(p1p['charset'] == 'us ascii')
     assert('_COMMENT' not in p1p)
 
     p2v, p2p = parse_parameters('multipart/x-mixed; charset="us ascii"')
