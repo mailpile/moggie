@@ -1,0 +1,9 @@
+websockets
+cryptography
+pycrypto
+numpy
+urwid
+aiosmtplib
+pyqrcode
+dkimpy
+aiodns
