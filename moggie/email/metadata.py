@@ -98,7 +98,8 @@ class Metadata(list):
             date = self.get_raw_header('Date')
             if date:
                 try:
-                    self[0] = int(time.mktime(email.utils.parsedate(date)))
+                    tt = email.utils.parsedate_tz(date)
+                    self[0] = int(time.mktime(tt[:9])) - tt[9]
                 except (ValueError, TypeError):
                     pass
 

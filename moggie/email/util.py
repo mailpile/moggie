@@ -39,7 +39,8 @@ def make_ts_and_Metadata(now, lts, raw_headers, *args):
     if raw_headers[:5] == 'From ':
         dt = raw_headers.split('\n', 1)[0].split('  ', 1)[-1].strip()
         try:
-            ts = int(time.mktime(email.utils.parsedate(dt)))
+            tt = email.utils.parsedate_tz(dt)
+            ts = int(time.mktime(tt[:9])) - tt[9]
             md[md.OFS_TIMESTAMP] = ts
             return (max(lts, md.timestamp), md)
         except (ValueError, TypeError):
@@ -49,8 +50,9 @@ def make_ts_and_Metadata(now, lts, raw_headers, *args):
     rcvd_ts = []
     for rcvd in parse_header(raw_headers).get('received', []):
         try:
-            tail = rcvd.split(';')[-1].strip()
-            rcvd_ts.append(int(time.mktime(email.utils.parsedate(tail))))
+            tt = email.utils.parsedate_tz(rcvd.split(';')[-1].strip())
+            ts = int(time.mktime(tt[:9])) - tt[9]
+            rcvd_ts.append(ts)
         except (ValueError, TypeError):
             pass
     if rcvd_ts:

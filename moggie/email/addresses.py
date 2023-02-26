@@ -1,5 +1,9 @@
 # vim: set fileencoding=utf-8 :
 #
+# FIXME: Should we do a better job handling the group construct?
+#        At least recognize when e-mails belong to a group and record that?
+#        Or does it just not matter at all in practice?
+#
 import base64
 import quopri
 import re

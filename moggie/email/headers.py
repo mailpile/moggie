@@ -2,7 +2,7 @@ import datetime
 import logging
 import re
 import time
-from email.utils import encode_rfc2231, parsedate, formatdate, format_datetime
+from email.utils import encode_rfc2231, parsedate_tz, formatdate, format_datetime
 
 from .rfc2074 import rfc2074_quote, rfc2074_unquote
 from .addresses import AddressHeaderParser
@@ -186,15 +186,17 @@ def parse_received(header_value):
     try:
         fields, date = [f.strip() for f in header_value.rsplit(';', 1)]
         try:
-            date = int(time.mktime(parsedate(date)))
+            tt = parsedate_tz(date)
+            ts = int(time.mktime(tt[:9])) - tt[9]
         except ValueError:
-            date = None
+            ts = None
     except ValueError:
         fields = header_value.strip()
         date = None
+        ts = None
 
     fields = [f.strip() for f in RECEIVED_TOKENS_RE.split(fields)]
-    fdict = {'date': date}
+    fdict = {'date': date, 'timestamp': ts}
     while fields and not fields[0]:
         fields.pop(0)
 
@@ -271,7 +273,8 @@ def parse_header(raw_header):
 
             if hdr == 'date':
                 try:
-                    ts = int(time.mktime(parsedate(val)))
+                    tt = parsedate_tz(val)
+                    ts = int(time.mktime(tt[:9])) - tt[9]
                     if ts > 0:
                         headers['_DATE_TS'] = ts
                 except ValueError:
@@ -388,7 +391,7 @@ if __name__ == '__main__':
     parse = parse_header(b"""\
 From something at somedate
 Received: from foo by bar; Thu, 01 Jan 1970 00:00:05 -0000
-Received: from bar by baz; Thu, 01 Jan 1970 00:00:10 -0000
+Received: from bar by baz; Thu, 01 Jan 1970 01:00:10 +0100
 From: Bjarni R. Einarsson <bre@example.org>
 To: spamfun@example.org
 To: duplicate@example.org
@@ -397,13 +400,13 @@ Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
  =?utf-8?b?SGVsbG8gd29ybGQ=?=
 
 """)
-    #print('%s' % json.dumps(parse, indent=1))
+    print('%s' % json.dumps(parse, indent=1))
 
     assert(json.dumps(parse))
     assert(parse['received'][0]['from'] == 'foo')
-    assert(parse['received'][0]['date'] == 5)
+    assert(parse['received'][0]['timestamp'] == 5)
     assert(parse['received'][1]['by'] == 'baz')
-    assert(parse['received'][1]['date'] == 10)
+    assert(parse['received'][1]['timestamp'] == 10)
     assert(parse['_mbox_separator'] == 'From something at somedate')
     assert(parse['to'][0].fn == '')
     assert(parse['to'][0].address == 'spamfun@example.org')
