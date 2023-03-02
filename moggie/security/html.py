@@ -3,6 +3,7 @@ import re
 import hashlib
 
 from html.parser import HTMLParser
+from moggie.security.mime import magic_part_id
 
 
 class HTMLCleaner(HTMLParser):
@@ -584,6 +585,73 @@ def html_to_markdown(html, **kwargs):
     from .css import CSSCleaner
     cleaner = HTMLToTextCleaner(html, **kwargs, css_cleaner=CSSCleaner())
     return re.sub(r'\n[\s]+\n', '\n\n', cleaner.close(), flags=re.DOTALL)
+
+
+
+def clean_email_html(metadata, email, part,
+        id_signer=None,
+        inline_images=False,
+        remote_images=False,
+        target_blank=False):
+
+    if metadata.idx and (id_signer is not None):
+        url_prefix = '/cli/show/%s?part=' % id_signer('id:%s' % metadata.idx)
+    else:
+        url_prefix = 'cid:'
+
+    def _find_by_cid(cid):
+        for i, p in enumerate(email['_PARTS']):
+            if p.get('content-id') == cid:
+                return (i+1), p
+        return None, None
+
+    def a_fixup(cleaner, tag, attrs, data):
+        if target_blank:
+            # FIXME: Exempt links that are anchors within this document?
+            # FIXME: Forbid relative links!
+            return tag, cleaner._aa(attrs, 'target', '_blank'), data
+        else:
+            return tag, attrs, data
+
+    def img_fixup(cleaner, tag, attrs, data):
+        dropping = []
+        for i, (a, v) in enumerate(attrs):
+            if v and (a == 'data-m-src'):
+                if v.startswith('cid:'):
+                    idx, part = _find_by_cid(v[4:].strip())
+                    part_id = None
+                    if idx and part:
+                        part_id = magic_part_id(idx, part)
+                        if not part_id:
+                            cleaner.saw_danger += 1
+                    if part_id:
+                        an = 'src' if inline_images else 'data-m-src'
+                        attrs[i] = (an, url_prefix + part_id)
+                    else:
+                        dropping.append(i)
+                elif remote_images and v.startswith('http'):
+                    pass  # FIXME: Update URL to use our proxy
+
+        for idx in reversed(dropping):
+            cleaner.dropped_attrs.append((tag, attrs[idx][0], attrs[idx][1]))
+            attrs.pop(idx)
+
+        return tag, attrs, data
+
+        # FIXME; Do we also want to fixup other URLs?
+        #        3rd party image loading is blocked by our CSP,
+        #        ... so we need a proxy if they are to work at all.
+        #        Attempt to block tracking images?
+        #        Load content over Tor?
+        #        Redirect clicks through some sort of security checker?
+
+    from moggie.security.css import CSSCleaner
+    return HTMLCleaner(part['_TEXT'],
+        callbacks={
+            'img': img_fixup,
+            'a': a_fixup
+        },
+        css_cleaner=CSSCleaner()).clean()
 
 
 if __name__ == '__main__':
