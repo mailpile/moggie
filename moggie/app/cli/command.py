@@ -309,10 +309,13 @@ class CLICommand:
             if arg == '--':
                 leftovers.extend(args)
                 break
-            elif arg+'=' in self.options:
-                _setopt(arg+'=', args.pop(0))
             elif arg in self.options:
                 _setopt(arg, True)
+            elif arg+'=' in self.options:
+                if args and args[0][:2] != '--':
+                    _setopt(arg+'=', args.pop(0))
+                else:
+                    _setopt(arg+'=', True)
             elif arg[:2] == '--':
                 if '=' in arg:
                     arg, opt = arg.split('=', 1)
