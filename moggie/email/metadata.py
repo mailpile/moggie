@@ -14,10 +14,18 @@ class Metadata(list):
     OFS_IDX = 1
     OFS_POINTERS = 2
     OFS_HEADERS = 3
+    OFS_DATA_TYPE = 4  # We overload the Parent ID for parent-less data types
     OFS_PARENT_ID = 4
     OFS_THREAD_ID = 5
     OFS_MORE = 6
     _FIELDS = 7
+
+    TYPE_EMAIL = 'email'      # RFC 2822 message
+    TYPE_EVENT = 'event'      # Calendar entry (ical)
+    TYPE_CONTACT = 'contact'  # Contact information (vcard)
+    TYPE_MAP = {
+       -1: TYPE_CONTACT,
+       -2: TYPE_EVENT}
 
     # These are the headers we want extracted and stored in metadata.
     # Note the Received headers are omitted, too big and too much noise.
@@ -105,6 +113,7 @@ class Metadata(list):
 
     timestamp      = property(lambda s: s[s.OFS_TIMESTAMP])
     idx            = property(lambda s: s[s.OFS_IDX])
+    data_type      = property(lambda s: s.TYPE_MAP.get(s[s.OFS_DATA_TYPE], s.TYPE_EMAIL))
     pointers       = property(lambda s: [Metadata.PTR(*p) for p in sorted(s[s.OFS_POINTERS])])
     parent_id      = property(
                          lambda s: s[s.OFS_PARENT_ID] or s[s.OFS_IDX],
@@ -162,13 +171,37 @@ class Metadata(list):
             self._parsed = {
                 'ts': self.timestamp,
                 'idx': self.idx,
-                'parent_id': self.parent_id,
-                'thread_id': self.thread_id,
+                'data_type': self.data_type,
                 'ptrs': self.pointers,
+                'raw_headers': self.headers,
                 'uuid': self.uuid_asc}
+            if self._parsed['data_type'] == self.TYPE_EMAIL:
+                self._parsed.update({
+                    'parent_id': self.parent_id,
+                    'thread_id': self.thread_id})
             self._parsed.update(parse_header(self.headers))
             self._parsed.update(self.more)
+            self._parsed['_MORE'] = list(self.more.keys())
         return self._parsed
+
+    def get_dkim_status(self):
+        """
+        Returns a Unix timestamp for when signatures were validated, and
+        an array of booleans, each corrosponding to whether the nth DKIM
+        signature validated. Returns (None, []) if no info is available.
+        """
+        stats, ts = (self.get('dkim') or ':').split(':')
+        if stats:
+            return int(ts, 16), [
+                True if (t == 't') else False
+                for t in self.more.get('dkim', '')]
+        else:
+            return None, []
+
+    def set_dkim_status(self, status, ts=None):
+        ts = int(ts or time.time())
+        sl = ''.join('t' if t else 'f' for t in status)
+        self.set('dkim', '%x:%s' % (ts, sl))
 
 
 if __name__ == "__main__":

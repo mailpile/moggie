@@ -10,7 +10,7 @@ import time
 # SMTP server sees on the wire.
 _GSH_IPADDR = re.compile(
     # FIXME: Hande IPv4-as-IPv6 syntax?
-    r'\s+[\[\(](\d+\.\d+\.\d+\.\d+|[\da-fA-F:]+:[\da-fA-F:]+)[\]\)]')
+    r'[\s]+[\[\(]+(\d+\.\d+\.\d+\.\d+|[\da-fA-F:]+:[\da-fA-F:]+)[\]\)]')
 
 
 async def validate_smtp_hops(parsed_email, check_dns=True):

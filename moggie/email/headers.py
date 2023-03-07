@@ -61,6 +61,8 @@ HEADERS_WITH_PARAMS = (
 
 HEADERS_ONLY_PARAMS = (
     'dkim-signature',
+    'domainkey-signature',
+    'x-google-dkim-signature',
     'arc-seal',
     'arc-message-signature')
 
@@ -187,16 +189,16 @@ def parse_received(header_value):
         fields, date = [f.strip() for f in header_value.rsplit(';', 1)]
         try:
             tt = parsedate_tz(date)
-            ts = int(time.mktime(tt[:9])) - tt[9]
+            tz = tt[9]
+            ts = int(time.mktime(tt[:9])) - tz
         except ValueError:
-            ts = None
+            ts = tz = None
     except ValueError:
         fields = header_value.strip()
-        date = None
-        ts = None
+        date = ts = tz = None
 
     fields = [f.strip() for f in RECEIVED_TOKENS_RE.split(fields)]
-    fdict = {'date': date, 'timestamp': ts}
+    fdict = {'date': date, 'timestamp': ts, 'tz': tz}
     while fields and not fields[0]:
         fields.pop(0)
 
@@ -205,7 +207,7 @@ def parse_received(header_value):
             fdict[fields[0]] = fields[1]
             fields = fields[2:]
         else:
-            fields['_'] = fields.get('_', '') + fields.pop(0) + ' '
+            fdict['_'] = fdict.get('_', '') + fields.pop(0) + ' '
 
     return fdict
 
@@ -274,9 +276,11 @@ def parse_header(raw_header):
             if hdr == 'date':
                 try:
                     tt = parsedate_tz(val)
-                    ts = int(time.mktime(tt[:9])) - tt[9]
+                    tz = tt[9]
+                    ts = int(time.mktime(tt[:9])) - tz
                     if ts > 0:
                         headers['_DATE_TS'] = ts
+                        headers['_DATE_TZ'] = tz
                 except ValueError:
                     pass
 

@@ -91,9 +91,8 @@ def HeaderPrintMTADetails(parsed_message):
             'x-google-dkim-signature'):
         if h in parsed_message:
             for dkim in (parsed_message.get(h) or []):
-                attrs = [HP_MUA_ID_SPACE.sub('', HP_MUA_ID_IGNORE.sub('x', a))
-                         for a in dkim.split(';')
-                         if a.strip() and a.strip()[:1] in 'vacd']
+                attrs = ['%s=%s' % (k, v)
+                    for k, v in dkim.items() if k[:1] in 'vacd']
                 details.extend([h, '; '.join(sorted(attrs))])
 
     # Is this a remailing that replaces headers with X-Originals ?
@@ -107,7 +106,7 @@ def HeaderPrintMTADetails(parsed_message):
         # Is the org using its own mail servers? That's noteworthy.
         if from_domain:
             for rcvd in parsed_message.get('received') or []:
-                if from_domain in rcvd.split(' for ')[0]:
+                if from_domain in rcvd.get('for', ''):
                     details.append('from-domain-in-received')
                     break
 
@@ -127,9 +126,8 @@ def HeaderPrintMTADetails(parsed_message):
                 and ' mapi id ' not in rcvd
                 and '127.0.0' not in rcvd
                 and '[::1]' not in rcvd):
-            parsed = HP_RECVD_PARSE.search(rcvd)
-            if parsed:
-                by = parsed.group(1) + parsed.group(2)
+            if 'SMTP' in rcvd.get('with', ''):
+                by = rcvd.get('by', '')
                 by = HP_MUA_ID_SPACE.sub(' ', HP_MUA_ID_IGNORE.sub('x', by))
                 details.append('Received ' + by)
                 break

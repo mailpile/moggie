@@ -102,10 +102,12 @@ class MessagePart(dict):
         self['_PARTS'] = parts = []
 
         ct, ctp = (self.get('content-type') or ('text/plain', {}))
+        cd, cdp = (self.get('content-disposition') or ('inline', {}))
         body_beg = self.hend + 2*len(self.eol)
         body_end = len(self.msg_bin[buf_idx])
         parts.append({
             'content-transfer-encoding': self.get('content-transfer-encoding', '8bit'),
+            'content-disposition': [cd, cdp],
             'content-type': [ct, ctp],
             '_BUF': buf_idx,
             '_BYTES': [0, body_beg, body_end],
@@ -247,7 +249,8 @@ class MessagePart(dict):
         for part in self['_PARTS']:
             ct, ctp = part['content-type']
             if ct in ('text/plain', 'text/html'):
-                part['_TEXT'] = self._text(part)
+                if '_TEXT' not in part:
+                    part['_TEXT'] = self._text(part)
         return self
 
     def with_data(self, multipart=False, text=False, recurse=True, only=None):
@@ -262,7 +265,8 @@ class MessagePart(dict):
                 part['_DATA'] = str(self._base64(part), 'latin-1')
             else:
                 ct, ctp = part.get('content-type', ['', {}])
-                if ((multipart or not ct.startswith('multipart/')) and
+                if ('_DATA' not in part and
+                        (multipart or not ct.startswith('multipart/')) and
                         (text or not ct in ('text/plain', 'text/html'))):
                     part['_DATA'] = str(self._base64(part), 'latin-1')
         return self
@@ -329,35 +333,53 @@ class MessagePart(dict):
             if skip and (i <= skip):
                 continue
             ct, ctp = part.get('content-type', ['', {}])
+            cd, cdp = part.get('content-disposition', ['', {}])
             first = ':first' if (non_mime < 1) else ''
+
+            candidates = decryptors.get(ct+first) or decryptors.get(ct, [])
             if not (ct.startswith('multipart/') or ct == 'text/x-mime-preamble'):
                 non_mime += 1
-            for decryptor in decryptors.get(ct+first, decryptors.get(ct, [])):
+                filename = ctp.get('name') or cdp.get('filename')
+                if filename and '.' in filename:
+                    ext = filename.rsplit('.', 1)[-1]
+                    candidates.extend(
+                        decryptors.get(ext+first) or decryptors.get(ext, []))
+
+            errors = []
+            decrypted = None
+            for decryptor in candidates:
                 try:
                     decrypted = decryptor(self._bytes(part), i, part, self)
-                except:
-                    import traceback
-                    traceback.print_exc()
-                    decrypted = None
-                if decrypted is not None:
-                    replace, info, cleartext = decrypted
-                    self.msg_bin.append(cleartext)
-                    info['_BUF'] = len(self.msg_bin) - 1
-                    info['_BYTES'] = [0, 0, len(cleartext)]
-                    info['_DEPTH'] = part['_DEPTH']
-                    info['content-transfer-encoding'] = '8bit'
-                    new_parts.append((replace, info))
-                    changed += 1
-                    break
+                    if decrypted is not None:
+                        replace, parts = decrypted
+                        infos = []
+                        for info, cleartext in parts:
+                            self.msg_bin.append(cleartext)
+                            info['_BUF'] = len(self.msg_bin) - 1
+                            info['_BYTES'] = [0, 0, len(cleartext)]
+                            info['_DEPTH'] = (
+                                info.get('_DEPTH', 0) + part['_DEPTH'])
+                            info['content-transfer-encoding'] = '8bit'
+                            infos.append(info)
+                            changed += 1
+                        new_parts.append((replace, infos))
+                        break
+                except Exception as e:
+                    errors.append(str(e))
+
+            if errors:
+                part['_DECRYPT_FAILED'] = errors
+
         if not skip:
             part['_LAST'] = True
         processed = i
 
-        for b_e, part in new_parts:
-            if b_e and part:
+        for b_e, parts in new_parts:
+            if b_e and parts and parts[0]:
                 b, e = b_e
-                parts = [part]
-                if part.get('content-type', [''])[0].startswith('multipart/'):
+                part = parts[0]
+                if (part.get('content-type', [''])[0].startswith('multipart/')
+                        and len(parts) == 1):
                     sub = MessagePart(self._raw(part)).with_structure(True)
                     for p in sub['_PARTS']:
                         p['_BUF'] = part['_BUF']
@@ -383,6 +405,96 @@ class MessagePart(dict):
                 max_passes=(max_passes - 1))
         else:
             return self
+
+    MAGIC_MIMEINFO = {
+        'README.txt': (1, 0, None, None),
+        'message-body.txt': (5, 1, 'text/plain', 'inline'),
+        'message-body.html': (5, 1, 'text/html', 'inline')}
+    EXT_MIMETYPES = {
+        'txt': 'text/plain',
+        'html': 'text/html'}
+
+    def with_archive_contents(self,
+            moggie_archives=True,
+            zip_archives=True,
+            zip_passwords=[]):
+        """
+        This will examine the contents of recognize archive types and
+        add their contents to the list of message parts.
+        """
+
+        def _decrypt_zip_archive(part_bin, p_idx, part, parent):
+            from io import BytesIO
+            if zip_passwords:
+                from pyzipper import AESZipFile as zfc
+            else:
+                from zipfile import ZipFile as zfc
+
+            parts = []
+            mimetype = part.get('content-type', [''])[0]
+            magic = (mimetype in ('x-mailpile/zip', 'x-moggie/zip'))
+
+            with zfc(BytesIO(part_bin), mode='r') as zf:
+                if magic:
+                    names = zf.namelist()
+                    if ('message-body.txt' in names
+                            or 'message-body.html' in names):
+                        parts.append(({
+                                '_ZIP': 'extracted',
+                                'content-type': ['multipart/alternative', {}]
+                            }, b''))
+
+                for i, zi in enumerate(zf.infolist()):
+                    depth = 0
+                    dispo = 'attachment'
+                    ext = (zi.filename or '').rsplit('.', 1)[-1]
+                    mimetype = (self.EXT_MIMETYPES.get(ext)
+                        or 'application/octet-stream')
+
+                    if magic:
+                        i_n_m_d = self.MAGIC_MIMEINFO.get(zi.filename)
+                        if i_n_m_d:
+                            max_i, n, m, d = i_n_m_d
+                            if i < max_i:
+                                if not (m and d):
+                                    continue
+                                depth, mimetype, dispo = n, m, d
+
+                    unhappy = False
+                    for pw in zip_passwords + ['']:
+                        if zip_passwords:
+                            zf.setpassword(bytes(pw, 'utf-8'))
+                        try:
+                            what = 'decrypted' if pw else 'extracted'
+                            with zf.open(zi.filename, 'r') as fd:
+                                info = {
+                                    '_ZIP': what,
+                                    '_DEPTH': depth,
+                                    'content-type': [
+                                        mimetype, {'name': zi.filename}],
+                                    'content-disposition': [dispo, {}]}
+                                parts.append((info, fd.read()))
+                                unhappy = False
+                                break
+                        except RuntimeError as e:
+                            unhappy = str(e)
+                if unhappy:
+                    raise PermissionError(unhappy)
+
+            return (p_idx, p_idx+1), parts
+
+        decryptors = {}
+        if zip_archives:
+            decryptors['zip'] = [_decrypt_zip_archive]
+        elif moggie_archives:
+            decryptors['x-mailpile/zip'] = [_decrypt_zip_archive]
+            decryptors['x-moggie/zip'] = [_decrypt_zip_archive]
+
+        # FIXME: We could support more archive types, if we wanted.
+        #        Not sure there is any justification though!
+
+        if decryptors:
+            return self.decrypt(decryptors, max_passes=1)
 
 
 def parse_message(msg_bin, fix_mbox_from=False):
@@ -454,13 +566,16 @@ EE:--eeee--
 Trailing garbage!
 """
     def decrypt_substitution(part_bin, p_idx, part, parent):
+        import copy
         new_data = part_bin.replace(b' are ', b' were ')
         if new_data == part_bin:
             return None
         new_part = {
             'content-decrypted': ['substitution'] + part['content-type'],
             'content-type': ['text/plain', {'charset': 'utf-8'}]}
-        return (p_idx, p_idx+1), new_part, new_data
+        return (p_idx, p_idx+1), [
+#           (copy.copy(new_part), copy.copy(new_data)),
+            (new_part, new_data)]
 
     def decrypt_multipart_encrypted(part_bin, p_idx, part, parent):
         if part['content-type'][1].get('protocol') != 'fake':
@@ -479,7 +594,7 @@ Trailing garbage!
             'content-decrypted': ['multipart-enc'] + part['content-type'],
             'content-type': ['multipart/mixed', {}]}
 
-        return (p_idx, p_idx+3), new_part, data
+        return (p_idx, p_idx+3), [(new_part, data)]
 
     p = parse_message(msg, fix_mbox_from=True).with_structure()
     assert(list(p.iter_parts(p)) == list(p.iter_parts(p, full=True)))
@@ -488,6 +603,9 @@ Trailing garbage!
     p.decrypt({
         'multipart/encrypted': [decrypt_multipart_encrypted],
         'text/plain:first': [decrypt_substitution]})
+#   for i, part in enumerate(p['_PARTS']):
+#       p['_PARTS'][i]['_'] = i
+#   print(json.dumps(list(p.iter_parts(p)), indent=1))
     assert(len(list(p.iter_parts(p))) == 9)  # Version: 1 disappears
 
     assert(p.get('_DECRYPTED') == 4)
