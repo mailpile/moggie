@@ -1,6 +1,6 @@
 # Relatively low level commands for generating or parsing/displaying e-mail.
 #
-# FIXMEs:
+# FIXMEs for generation:
 #   - message templates
 #   - accept a JSON data structure instead of arguments?
 #      - Can this be done in a generic way in the CLICommand class
@@ -16,8 +16,14 @@
 #   - implement PGP/MIME signatures
 #   - implement DKIM signatures
 #
+# FIXMEs for parsing:
+#
+#   - implement PGP/MIME encryption, autocrypt
+#   - implement PGP/MIME signatures
+#
 import base64
 import io
+import logging
 import os
 import sys
 import time
@@ -79,12 +85,12 @@ class CommandEmail(CLICommand):
         moggie email --format=json --subject="hello" --to=...
 
         # Use an alternate context for loading from, signature etc.
-        moggie email --context='Work' --subject='meeting times' ... 
+        moggie email --context='Work' --subject='meeting times' ...
 
         # Send a message via SMTP to root@localhost
         moggie email [...] \\
             --send-via=smtp://localhost:25 \\
-            --send-to=root@localhost 
+            --send-to=root@localhost
 
         # Send a message using /usr/bin/sendmail
         moggie email [...] \\
@@ -402,12 +408,12 @@ class CommandEmail(CLICommand):
             raise Nonsense('Unknown args: %s' % args)
         return args
 
-    def text_part(self, text, mimetype='text/plain'):
+    def text_part(self, text, mimetype='text/plain', no_enc=False):
         try:
             data = str(bytes(text, 'us-ascii'), 'us-ascii')
             enc = '7bit'
         except UnicodeEncodeError:
-            if self.options['--8bit']:
+            if no_enc or self.options['--8bit']:
                 enc = '8bit'
                 data = text
             else:
@@ -464,7 +470,7 @@ class CommandEmail(CLICommand):
         from moggie.storage.exporters.maildir import ZipWriter
         import io, base64
 
-        mimetype = 'application/octet-stream'
+        mimetype = 'x-mailpile/zip'
         filename = 'message.zip' if text_parts else 'attachments.zip'
         encryptor, ext = self.get_encryptor()
 
@@ -478,12 +484,12 @@ class CommandEmail(CLICommand):
         fd = io.BytesIO()
         zw = ZipWriter(fd, password=passphrase)
         if text_parts:
-            for headers, b64data in text_parts:
+            for headers, text_data in text_parts:
                 if headers['content-type'][0] == 'text/html':
-                    fn = 'message.html'
+                    fn = 'message-body.html'
                 else:
-                    fn = 'message.txt'
-                zw.add_file(fn, now, base64.b64decode(b64data))
+                    fn = 'message-body.txt'
+                zw.add_file(fn, now, bytes(text_data, 'utf-8'))
         for _unused, fn, data in self.attachments:
             zw.add_file(fn, now, data)
         zw.close()
@@ -753,6 +759,8 @@ class CommandEmail(CLICommand):
             text_opt, html_opt = self.generate_text_parts(want_text, want_html)
 
         # FIXME: Is this where we fork, on what the output format is?
+        encryption = (self.options.get('--encrypt=') or ['N'])[-1].lower()
+        raw_text = (encryption == 'all' and not self.options['--encrypt-to='])
 
         parts = []
         for i, msg in enumerate(self.forwarding):
@@ -761,16 +769,16 @@ class CommandEmail(CLICommand):
         text_opt = [t for t in text_opt if t not in ('', 'Y')]
         if want_text and text_opt:
             parts.append(self.text_part(
-                '\r\n\r\n'.join(t.strip() for t in text_opt)))
+                '\r\n\r\n'.join(t.strip() for t in text_opt),
+                no_enc=raw_text))
 
         html_opt = [t for t in html_opt if t not in ('', 'Y')]
         if want_html and html_opt:
             parts.append(
                 self.text_part(
                     '\r\n\r\n'.join(html_opt),
-                    mimetype='text/html'))
+                    mimetype='text/html', no_enc=raw_text))
 
-        encryption = (self.options.get('--encrypt=') or ['N'])[-1].lower()
         if encryption == 'all' and not self.options['--encrypt-to=']:
             # Create an encrypted .ZIP with entire message content
             parts = [self.attach_encrypted_attachments(text_parts=parts)]
@@ -820,7 +828,7 @@ class CommandEmail(CLICommand):
         def _fwd(s):
             w1 = (s.split()[0] if s else '').lower()
             return s if (w1 == 'fwd:') else 'Fwd: %s' % s
-        
+
         subjects = []
         for msg in self.replying_to:
             subj = msg.get('subject')
@@ -848,7 +856,7 @@ class CommandEmail(CLICommand):
         for _id in (ids[i] for i in ctx.identities):
             if _id.address in senders:
                 self.options['--from='] = [_id.as_address_info()]
-                return 
+                return
         for _id in (ids[i] for i in ctx.identities):
             if _id.address in recipients:
                 self.options['--from='] = [_id.as_address_info()]
@@ -857,7 +865,7 @@ class CommandEmail(CLICommand):
         # Default to our first identity (falls through if there are none)
         for _id in (ids[i] for i in ctx.identities):
             self.options['--from='] = [_id.as_address_info()]
-            return 
+            return
 
         raise Nonsense('No from address, aborting')
 
@@ -917,7 +925,7 @@ class CommandEmail(CLICommand):
         via = (self.options.get('--send-via=') or [None])[-1]
         if not via:
             raise Nonsense('FIXME: Get via from config')
-        
+
         transcript = []
         def _progress(happy, code, details, message):
             transcript.append((happy, code, details, message))
@@ -983,7 +991,7 @@ class CommandEmail(CLICommand):
                 self.gather_subject()
 
             if (self.options.get('--send-to=')
-                    or self.options.get('--send-at=')): 
+                    or self.options.get('--send-at=')):
                 await self.do_send()
             else:
                 self.render_result()
@@ -995,8 +1003,9 @@ class CommandParse(CLICommand):
     This command will load and parse e-mails matching the search terms,
     provided as files or standard input.
 
-    The output is either a human readable report, or a JSON data structure
-    explaining the contents and technical characteristics of the e-mail.
+    The output is either a human readable report (text or HTML), or a
+    JSON data structure explaining the contents, structure and technical
+    characteristics of the e-mail.
 
     ### Options
 
@@ -1016,7 +1025,7 @@ class CommandParse(CLICommand):
     OPTIONS = [[
         (None, None, 'moggie'),
         ('--context=', ['default'], 'Context to use for default settings'),
-        ('--format=',     ['text'], 'X=(text*|json|sexp)'),
+        ('--format=',     ['text'], 'X=(text*|html|json|sexp)'),
         ('--stdin=',            [], None), # Allow lots to send stdin (internal)
         ('--input=',            [], 'Load e-mail from file X, "-" for stdin'),
         ('--allow-network',     [False], 'Allow outgoing network requests'),
@@ -1024,26 +1033,29 @@ class CommandParse(CLICommand):
         ('--write-back',        [False], 'Write parse results to search index'),
     ],[
         (None, None, 'features'),
-        ('--with-metadata=',    ['Y'], 'X=(Y*|N), include message metadata'),
+        ('--with-metadata=',    ['N'], 'X=(Y|N*), include moggie metadata'),
         ('--with-headers=',     ['Y'], 'X=(Y*|N), include parsed message headers'),
-        ('--with-structure=',   ['N'], 'X=(Y|N*), include message structure'),
+        ('--with-path-info=',   ['Y'], 'X=(Y*|N), include path through network'),
+        ('--with-structure=',   ['Y'], 'X=(Y*|N), include message structure'),
         ('--with-text=',        ['Y'], 'X=(Y*|N), include message text parts'),
+        ('--with-html=',        ['N'], 'X=(Y|N*), include raw message HTML'),
         ('--with-html-clean=',  ['N'], 'X=(Y|N*), include sanitized message HTML'),
         ('--with-html-text=',   ['Y'], 'X=(Y*|N), include text extracted from HTML'),
         ('--with-data=',        ['N'], 'X=(Y|N*), include attachment data'),
         ('--with-headprints=',  ['N'], 'X=(Y|N*), include header fingerprints'),
         ('--with-keywords=',    ['N'], 'X=(Y|N*), include search-engine keywords'),
-        ('--scan-archives=',    ['N'], 'X=(Y|N*), scan ZIP archives for attachments'),
-        ('--decrypt=',          ['N'], 'X=(Y|N*), attempt to decrypt contents'),
-        ('--verify-pgp=',       ['N'], 'X=(Y|N*), attempt to verify PGP signatures'),
-        ('--verify-dkim=',      ['N'], 'X=(Y|N*), attempt to verify DKIM signatures'),
+        ('--scan-moggie-zips=', ['Y'], 'X=(Y*|N), scan moggie-specific archives'),
+        ('--scan-archives=',    ['N'], 'X=(Y|N*), scan all archives for attachments'),
+        ('--zip-password=',        [], 'Password to use for ZIP decryption'),
+        ('--decrypt=',          ['N'], '? X=(Y|N*), attempt to decrypt contents'),
+        ('--verify-pgp=',       ['N'], '? X=(Y|N*), attempt to verify PGP signatures'),
+        ('--use-gnupg=',        ['N'], '? X=(Y|N*), Use GnuPG to parse OpenPGP content'),
+        ('--verify-dates=',     ['Y'], 'X=(Y*|N), attempt to validate message dates'),
+        ('--verify-dkim=',      ['Y'], 'X=(Y*|N), attempt to verify DKIM signatures'),
+        ('--dkim-max-age=',     [180], 'X=Max age (days, default=180) for DKIM validation'),
         ('--with-nothing=',     ['N'], 'X=(Y|N*), parse nothing by default'),
         ('--with-everything=',  ['N'], 'X=(Y|N*), try to parse everything!'),
         ('--ignore-index=',     ['N'], 'X=(Y|N*), Ignore contents of search index'),
-    ],[
-        (None, None, 'encryption'),
-        ('--use-gnupg',         [False], 'Use GnuPG to parse OpenPGP content'),
-        ('--zip-password=',     [], 'Password to use for ZIP decryption'),
     ]]
 
     class Settings:
@@ -1054,23 +1066,41 @@ class CommandParse(CLICommand):
                     if defaults:
                         val = defaults[-1]
                 elif isinstance(val, list):
-                    if defaults or len(val) > 1:
+                    if len(val) > (1 if defaults else 0):
                         val = val[-1]
+                    elif defaults:
+                        val = defaults[-1]
+                    else:
+                        val = False
                 if val in (True, 'Y', 'y', 'true', 'True', 'TRUE'):
                     return True
-                return False
+                if val in (False, 'N', 'n', 'false', 'False', 'FALSE', None):
+                    return False
+                return val
 
             w_none = _opt('--with-nothing=', 'with_nothing', None)
             w_all = _opt('--with-everything=', 'with_everything', None)
             for key, defaults, comment in CommandParse.OPTIONS[1]:
                 if w_none:
-                    defaults = None
+                    defaults = [False]
+                elif w_all and key not in (
+                        '--ignore-index=', '--use-gnupg=',
+                        '--dkim-max-age=',
+                        '--with-nothing=', '--with-everything='):
+                    defaults = [True]
                 if key:
                     attr = key[2:-1].replace('-', '_')
-                    self.__setattr__(attr, w_all or _opt(key, attr, defaults))
+                    if False and w_all and key not in (
+                            '--ignore-index=', '--use-gnupg=',
+                            '--dkim-max-age=',
+                            '--with-nothing=', '--with-everything='):
+                        self.__setattr__(attr, True)
+                    self.__setattr__(attr, _opt(key, attr, defaults))
 
     @classmethod
-    async def Parse(cls, data, settings=None, **kwargs):
+    async def Parse(cls, data, settings=None, allow_network=False):
+        t0 = time.time()
+
         if settings is None:
             settings = cls.Settings(**kwargs)
 
@@ -1082,20 +1112,38 @@ class CommandParse(CLICommand):
         data = result.get('data')
 
         md = result.get('metadata')
-        html_magic = settings.with_html_text or settings.with_html_clean
+        html_magic = (settings.with_html
+            or settings.with_html_text or settings.with_html_clean)
         if data:
+            from moggie.email.util import make_ts_and_Metadata, quick_msgparse
             from moggie.email.parsemime import parse_message
+            header_end, header_summary = quick_msgparse(data, 0)
             p = parse_message(data, fix_mbox_from=(data[:5] == b'From '))
+            p['_HEADER_BYTES'] = header_end
             result['parsed'] = p
 
             if (md is None) or settings.ignore_index:
-                from moggie.email.util import make_ts_and_Metadata, quick_msgparse
-                hend, hdrs = quick_msgparse(data, 0)
-                ts, md = make_ts_and_Metadata(time.time(), 0, hdrs, [], hdrs)
+                ignored_ts, md = make_ts_and_Metadata(
+                    time.time(), 0, header_summary, [], header_summary)
                 result['metadata'] = md
 
+            if settings.with_path_info:
+                from moggie.security.headers import validate_smtp_hops
+                p['_PATH_INFO'] = await validate_smtp_hops(p,
+                    check_dns=allow_network)
+            if settings.with_headers:
+                p['_RAW_HEADERS'] = str(data[:header_end], 'utf-8').rstrip()
+            if settings.verify_dates:
+                from moggie.security.headers import validate_dates
+                p['_DATE_VALIDITY'] = validate_dates(md.timestamp, p)
             if settings.with_structure:
                 p.with_structure()
+            if settings.scan_moggie_zips or settings.scan_archives:
+                p.with_archive_contents(
+                    moggie_archives=settings.scan_moggie_zips,
+                    zip_archives=settings.scan_archives,
+                    zip_passwords=settings.zip_password)
+
             if settings.with_text or html_magic or settings.with_keywords:
                 p.with_text()
             if settings.with_data:
@@ -1106,7 +1154,12 @@ class CommandParse(CLICommand):
                     if part.get('content-type', [None])[0] == 'text/html':
                         html = part['_TEXT']
                         if settings.with_html_clean:
-                            pass  # FIXME
+                            from moggie.security.html import clean_email_html
+                            part['_HTML_CLEAN'] = clean_email_html(md, p, part,
+                                # FIXME: Make these configurable
+                                inline_images=True,
+                                remote_images=True,
+                                target_blank=True)
 
                         if settings.with_html_text:
                             from moggie.security.html import html_to_markdown
@@ -1116,6 +1169,35 @@ class CommandParse(CLICommand):
                 from moggie.search.headerprint import HeaderPrints
                 p['_HEADPRINTS'] = HeaderPrints(p)
 
+            if settings.verify_dkim:
+                from moggie.security.dkim import verify_all_async
+                hcount = len(p.get('dkim-signature', []))
+                verifications = []
+                if not settings.ignore_index:
+                    ts, verifications = md.get_dkim_status()
+                if not verifications and p.get('dkim-signature'):
+                    now = time.time()
+                    maxage = 24 * 3600 * int(settings.dkim_max_age)
+                    if (md.timestamp >= now - maxage) and allow_network:
+                        verifications = await verify_all_async(
+                            hcount, data, logger=logging)
+                        if verifications:
+                            md.set_dkim_status(verifications, ts=now)
+                    else:
+                        for dkim in p['dkim-signature']:
+                            dkim['_DKIM_TOO_OLD'] = True
+                            dkim['_DKIM_VERIFIED'] = False
+                            dkim['_DKIM_PARTIAL'] = False
+                for i, ok in enumerate(verifications):
+                    dkim = p['dkim-signature'][i]
+                    dkim['_DKIM_VERIFIED'] = ok
+                    dkim['_DKIM_PARTIAL'] = False
+                    if dkim.get('l'):
+                        if int(dkim['l']) < (len(data) - header_end):
+                            dkim['_DKIM_PARTIAL'] = True
+
+            # Important: This must come last, it checks for the output of
+            #            the above sections!
             if settings.with_keywords:
                 from moggie.search.extractor import KeywordExtractor
                 kwe = KeywordExtractor()
@@ -1128,10 +1210,14 @@ class CommandParse(CLICommand):
             removing = []
             if not settings.with_headers:
                 removing.extend(k for k in p if not k[:1] == '_')
+                if settings.verify_dkim and 'dkim-signature' in removing:
+                    removing.remove('dkim-signature')
                 removing.append('_DATE_TS')
+                removing.append('_RAW_HEADERS')
                 removing.append('_mbox_separator')
-            if not (settings.with_structure and settings.with_headers):
                 removing.append('_ORDER')
+            if not settings.with_structure:
+                removing.append('_HEADER_BYTES')
             if not (settings.with_structure
                     or settings.with_text
                     or settings.with_data
@@ -1140,6 +1226,11 @@ class CommandParse(CLICommand):
             for hdr in removing:
                 if hdr in p:
                     del p[hdr]
+
+            if settings.with_metadata:
+                result['metadata'] = result['metadata'].parsed()
+            else:
+                del result['metadata']
 
             if not settings.with_structure and '_PARTS' in p:
                 parts = p['_PARTS']
@@ -1164,6 +1255,7 @@ class CommandParse(CLICommand):
         if 'data' in result:
             del result['data']
 
+        result['_PARSE_TIME_MS'] = int(1000 * (time.time() - t0))
         return result
 
     def __init__(self, *args, **kwargs):
@@ -1181,10 +1273,14 @@ class CommandParse(CLICommand):
         self.allow_fs = not self.options['--forbid-filesystem'][-1]
         self.allow_network = self.options['--allow-network'][-1]
         self.write_back = self.options['--write-back'][-1]
-        self.use_gnupg = self.options['--use-gnupg'][-1]
-        self.zip_passwords = self.options['--zip-password=']
 
         self.settings = self.Settings(**self.options)
+        self.settings.zip_password = self.options['--zip-password=']
+
+        if not self.allow_network:
+            self.settings.verify_dkim = False
+            if len(self.options['--verify-dkim=']) > 1:
+                raise Nonsense('Cannot verify DKIM without network access')
 
         def _load(t, target):
             if t[:1] == '-':
@@ -1234,17 +1330,22 @@ class CommandParse(CLICommand):
         return self.configure2(args)
 
     def configure2(self, args):
-        self.searches.append(' '.join(args))
+        if args:
+            self.searches.append(' '.join(args))
         self.searches.extend(self.options['--input='])
-        self.options['--input='] = [] 
+        self.options['--input='] = []
         return []
 
-    def emit_text(self, parsed):
-        if parsed is None:
-            return
+    def generate_markdown(self, parsed):
+        def _indent(blob, indent='    ', code=False):
+            if code:
+                lines = ['```'] + blob.splitlines() + ['```']
+            else:
+                lines = blob.splitlines()
+            return '\n'.join(indent+l for l in lines)
 
         def _wrap(words, maxlen=72, indent=''):
-            lines = ['']
+            lines = [indent]
             if isinstance(words, str):
                 words = words.split()
             for word in words:
@@ -1252,8 +1353,8 @@ class CommandParse(CLICommand):
                     lines[-1] += word + ' '
                 else:
                     lines[-1] = lines[-1].rstrip()
-                    lines.append(word + ' ')
-            return ('\n'+indent).join(lines)
+                    lines.append(indent + word + ' ')
+            return '\n'.join(lines)
 
         report = []
         if parsed.get('stdin'):
@@ -1266,33 +1367,96 @@ class CommandParse(CLICommand):
             if not md:
                 report.append("""## Metadata unavailable""")
             else:
-                if md.idx:
+                if md['idx']:
                     msg = 'This is the metadata stored in the search index'
                 else:
                     msg = 'This is the message metadata'
                 report.append("""## Metadata\n\n%s:\n\n%s\n
+    data_type=%s
+    uuid=%s
     ts=%d, id=%s, parent=%s, thread=%s, pointers=%s
     extras=%s""" % (msg,
-                    '\n'.join('    %s' % h for h in md.headers.splitlines()),
-                    md.timestamp,
-                    md.idx,
-                    md.parent_id,
-                    md.thread_id,
-                    len(md.pointers),
-                    md.more))
+                    '\n'.join('    %s' % h for h in md['raw_headers'].splitlines()),
+                    md['data_type'],
+                    md['uuid'],
+                    md['ts'],
+                    md['idx'],
+                    md.get('parent_id', '(none)'),
+                    md.get('thread_id', '(none)'),
+                    len(md['ptrs']),
+                    dict((k, md[k]) for k in md['_MORE'])))
 
         if 'error' in parsed:
             report.append('Error loading message: %s' % parsed['error'])
+
         elif 'parsed' in parsed:
-            parsed = parsed['parsed']        
+            parsed = parsed['parsed']
 
-            if self.settings.with_headers:
-                seen = sorted([k for k in parsed if not k[:1] == '_'])
-                report.append("## Message headers\n\n"
-                    + _wrap('All seen: ' + ', '.join(seen)))
+            if self.settings.with_structure:
+                atts = 0
+                hlen = parsed['_HEADER_BYTES']
+                structure = [
+                   '## Message structure\n',
+                   '   * Message header (%s bytes)' % hlen]
+                errors = []
+                for i, p in enumerate(parsed.iter_parts(parsed)):
+                    plen = p['_BYTES'][2] - p['_BYTES'][1]
+                    disp = p.get('content-disposition') or [None, {}]
+                    filename = (p['content-type'][1].get('name')
+                        or disp[1].get('filename'))
+                    error = p.get('_DECRYPT_FAILED')
+                    if error:
+                        error = 'Decrypt failed: ' + ', '.join(error)
+                    structure.append('   %s* Part %d: %s (%d bytes%s)%s' % (
+                        '   ' * p['_DEPTH'], i+1,
+                        p['content-type'][0],
+                        plen, ', %s' % filename if filename else '',
+                        ' !!' if error else ''))
+                    if error:
+                        errors.append((i, error))
+                    if filename:
+                        atts += 1
+                if errors:
+                    structure.append('\nErrors:\n')
+                    structure.extend('   * Part %d: %s' % (i, err)
+                       for i, err in errors)
+                if atts:
+                    structure.append("""
+Note: attachment sizes include the MIME encoding overhead, once decoded
+      the files will be about 25% smaller.""")
+                report.append('\n'.join(structure))
 
-            # FIXME: The header section is a bit anemic. And we are
-            #        still missing some things. But it's a start!
+            if self.settings.verify_dates:
+                from email.utils import formatdate
+                dv = parsed['_DATE_VALIDITY']
+                d0 = dv['timestamps'][0]
+                dn = dv['timestamps'][-1]
+                hints = ''
+                if dv.get('time_went_backwards'):
+                    hints = """\n
+The header dates are not in the expected order, or appear to be from the
+future. One or more machines involved in creating or delivering the message
+probably has an incorrect clock."""
+                elif dv.get('delta_large'):
+                    hints = """\n
+Large deltas may indicate that an old message has been resent, or that
+one or more machines involved in creating or delivering the message have
+incorrect clocks."""
+                elif dv.get('delta_tzbug'):
+                    hints = """\n
+Deltas that are a multiple of 3600 seconds (1 hour) may be indicative of
+incorrect time zones on one or more machines involved in processing the
+message."""
+
+                report.append("""\
+## Dates and times
+
+Dates and times in header span %d seconds from %d time zones.
+
+   * Earliest: %s
+   * Latest: %s%s\
+""" % (         dv['delta'], len(dv['timezones']),
+                formatdate(d0), formatdate(dn), hints))
 
             if self.settings.with_headprints:
                 report.append('## Header fingerprints\n\n'
@@ -1300,20 +1464,83 @@ class CommandParse(CLICommand):
                         for hp, val
                         in sorted(list(parsed['_HEADPRINTS'].items()))))
 
-            if self.settings.with_structure:
-                report.append('## Message structure')
+            if self.settings.with_path_info:
+                hops = parsed.get('_PATH_INFO', {}).get('hops')
+                if not hops:
+                    status = 'No network path information found.\n'
+                else:
+                    status = 'Hops:\n\n'
+                    for hop in reversed(hops):
+                        status += '   * %s at %s\n' % (
+                            hop.get('from_ip', '(unknown)'),
+                            formatdate(hop['received_ts']))
+
+                # FIXME: Any anomalies? Report DNS info?
+
+                report.append('## Network path information\n\n%s'
+                    % status.rstrip())
+
+            if self.settings.verify_dkim:
+                if not parsed.get('dkim-signature'):
+                    status = 'No DKIM signatures found in header.\n'
+                else:
+                    status = ''
+                    for dkim in parsed['dkim-signature']:
+                        who = dkim.get('i', '')
+                        if not who.endswith(dkim['d']):
+                            who += ('/' if who else '') + dkim['d']
+
+                        if dkim.get('_DKIM_TOO_OLD'):
+                            summary = 'Too old'
+                        elif dkim['_DKIM_VERIFIED']:
+                            summary = 'Good'
+                        else:
+                            summary = 'Invalid'
+
+                        status += '   * %s: v%s signature from %s%s\n' % (
+                            summary, dkim['v'], who,
+                            ' (partial body)' if dkim['_DKIM_PARTIAL'] else '')
+
+                        status += '     (using %s %s with %s at %s)\n' % (
+                            dkim['c'], dkim['a'], dkim['s'],
+                            dkim.get('t', 'unspecified time'))
+
+                report.append('## DKIM verification\n\n%s' % status.rstrip())
+
+            if self.settings.with_headers:
+                from moggie.email.headers import ADDRESS_HEADERS, SINGLETONS
+
+                seen = sorted([k for k in parsed if not k[:1] == '_'])
+                report.append("## Message headers\n\n%s"
+                    % _indent(parsed['_RAW_HEADERS'], code=True))
 
             if self.settings.with_text:
                 report.append('## Message text')
                 for part in parsed['_PARTS']:
                     if part['content-type'][0] == 'text/plain':
-                        report[-1] += '\n\n```\n' + part['_TEXT'] + '\n```'
+                        report[-1] += ('\n\n'
+                            + _indent(part['_TEXT'].strip(), code=True))
 
             if self.settings.with_html_text:
                 report.append('## Message text (from HTML)')
                 for part in parsed['_PARTS']:
                     if part['content-type'][0] == 'text/html':
-                        report[-1] += '\n\n```\n' + part['_HTML_TEXT'] + '\n```'
+                        report[-1] += ('\n\n'
+                            + _indent(part['_HTML_TEXT'].strip(), code=True))
+
+            if self.settings.with_html:
+                report.append('## Message HTML')
+                for part in parsed['_PARTS']:
+                    if part['content-type'][0] == 'text/html':
+                        report[-1] += ('\n\n'
+                            + _indent(part['_TEXT'].strip(), code=True))
+
+            if self.settings.with_html_clean:
+                report.append('## Message HTML, sanitized')
+                for part in parsed['_PARTS']:
+                    if part['content-type'][0] == 'text/html':
+                        report[-1] += ('\n\n'
+                            + _indent(part['_HTML_CLEAN'].strip(), code=True))
 
             if self.settings.with_keywords:
                 kw = parsed.get('_KEYWORDS')
@@ -1331,8 +1558,17 @@ These are the %d searchable keywords for this message:
                         _wrap(', '.join(special)),
                         _wrap(', '.join(others))))
 
-        self.print('\n\n'.join(report) + '\n\n')
- 
+        return '\n\n'.join(report) + '\n\n'
+
+    def emit_html(self, parsed):
+        if parsed is not None:
+            import markdown
+            self.print(markdown.markdown(self.generate_markdown(parsed)))
+
+    def emit_text(self, parsed):
+        if parsed is not None:
+            self.print(self.generate_markdown(parsed))
+
     def emit_sexp(self, parsed):
         if not self.emitted:
             self.print('(', nl='')
@@ -1356,8 +1592,8 @@ These are the %d searchable keywords for this message:
             self.emitted += 1
 
     async def gather_emails(self):
-        worker = self.connect()
         for search in self.searches:
+            worker = self.connect()
             request = RequestSearch(context=self.context, terms=search)
             result = await self.worker.async_jmap(self.access, request)
             if result and 'emails' in result:
@@ -1383,6 +1619,8 @@ These are the %d searchable keywords for this message:
     def get_emitter(self):
         if self.options['--format='][-1] == 'sexp':
             return self.emit_sexp
+        if self.options['--format='][-1] == 'html':
+            return self.emit_html
         if self.options['--format='][-1] == 'text':
             return self.emit_text
         else:
@@ -1393,10 +1631,12 @@ These are the %d searchable keywords for this message:
 
         if self.searches:
             async for message in self.gather_emails():
-                emitter(await self.Parse(message, self.settings))
+                emitter(await self.Parse(message, self.settings,
+                    allow_network=self.allow_network))
 
         if self.messages:
             for message in self.messages:
-                emitter(await self.Parse(message, self.settings))
+                emitter(await self.Parse(message, self.settings,
+                    allow_network=self.allow_network))
 
         emitter(None)
