@@ -4,7 +4,6 @@ import traceback
 import pgpdump
 import pgpdump.packet
 from pgpdump.utils import PgpdumpException, get_int4
-from mailpile.util import dict_merge
 
 
 # Patch pgpdump so it stops crashing on weird public keys #####################
@@ -36,7 +35,9 @@ monkey_patch_pgpdump()
 
 class ustr(str):
     def __new__(cls, content):
-        return super(ustr, cls).__new__(cls, content.upper())
+        return super(ustr, cls).__new__(cls,
+            (content if isinstance(content, str) else str(content, 'utf-8')
+            ).upper())
 
 
 class RestrictedDict(dict):
@@ -213,39 +214,19 @@ class KeyInfo(RestrictedDict):
             if cap.lower() not in keyinfo.capabilities:
                 keyinfo.expires = min(subkey.expires, keyinfo.expires)
 
-    @classmethod
-    def FromGPGI(cls, gpgi_keyinfo):
-        mki = cls(
-            created=int(gpgi_keyinfo.get("creation_date_ts",
-                                         gpgi_keyinfo.get('created_ts', 0))),
-            expires=int(gpgi_keyinfo.get("expiration_date_ts", 0)),
-            capabilities=gpgi_keyinfo.get("capabilities", ""),
-            have_secret=gpgi_keyinfo.get("secret", False))
-        for k in ('fingerprint', 'validity', 'keytype_name'):
-            mki[k] = str(gpgi_keyinfo[k])
-        for k in ('keysize', ):
-            mki[k] = int(gpgi_keyinfo[k])
-        for uid in gpgi_keyinfo.get('uids', []):
-            mki.uids.append(KeyUID(
-                name=uid.get("name", ""),
-                email=uid.get("email", ""),
-                comment=uid.get("comment", "")))
-        mki.capabilities = ''.join(sorted([c for c in mki.capabilities]))
-        return mki
-
 
 class MailpileKeyInfo(KeyInfo):
-    KEYS = dict_merge(KeyInfo.KEYS, {
-        'vcards':       (dict, None),
-        'origins':      (list, None),
-        'is_autocrypt': (bool, False),
-        'is_gossip':    (bool, False),
-        'is_preferred': (bool, False),
-        'is_pinned':    (bool, False),
-        'scores':       (dict, None),
-        'score_stars':  (int, 0),
-        'score_reason': (str, None),
-        'score':        (int, 0)})
+    KEYS = dict((k, v) for k, v in list(KeyInfo.KEYS.items()) + [
+        ('vcards',       (dict, None)),
+        ('origins',      (list, None)),
+        ('is_autocrypt', (bool, False)),
+        ('is_gossip',    (bool, False)),
+        ('is_preferred', (bool, False)),
+        ('is_pinned',    (bool, False)),
+        ('scores',       (dict, None)),
+        ('score_stars',  (int, 0)),
+        ('score_reason', (str, None)),
+        ('score',        (int, 0))])
 
 
 KeyUID.prep_properties()
@@ -263,7 +244,9 @@ def get_keyinfo(data, autocrypt_header=None,
     Note: Signatures are not validated, this code only parses the data.
     """
     try:
-        if "-----BEGIN" in data:
+        if isinstance(data, str):
+            data = bytes(data, 'utf-8')
+        if b"-----BEGIN" in data:
             ak = pgpdump.AsciiData(data)
         else:
             ak = pgpdump.BinaryData(data)
@@ -290,7 +273,7 @@ def get_keyinfo(data, autocrypt_header=None,
                 last_pubkeypacket = m
                 last_key = key_info_class(
                     key_source=key_source,
-                    fingerprint=m.fingerprint,
+                    fingerprint=str(m.fingerprint, 'utf-8'),
                     keytype_name=m.pub_algorithm or '',
                     keytype_code=m.raw_pub_algorithm,
                     keysize=size)
@@ -304,7 +287,7 @@ def get_keyinfo(data, autocrypt_header=None,
                 # Older pgpdumps may fail here and cause traceback noise, but
                 # the loop will limp onwards.
                 last_key.created = _unixtime(m)
-                if m.raw_days_valid > 0:
+                if m.raw_days_valid and m.raw_days_valid > 0:
                     last_key.expires = _unixtime(m, days=m.raw_days_valid)
                     if last_key.expires == last_key.created:
                         last_key.expires = 0
@@ -356,6 +339,8 @@ if __name__ == "__main__":
     import sys
 
     for f in sys.argv[1:]:
+        if f == '-':
+            f = 0
         with open(f, 'r') as fd:
             keyinfo = get_keyinfo(fd.read())[0]
             print('%s' % keyinfo)
