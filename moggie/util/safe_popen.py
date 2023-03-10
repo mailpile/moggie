@@ -175,7 +175,8 @@ class Safe_Popen(Unsafe_Popen):
                         keep_open[i] = keep_open[i].fileno()
                 close_fds = False
             else:
-                close_fds = True  # 1.
+                close_fds = False
+                keep_open = [0, 1, 2]
 
             def pre_exec_magic():
                 try:
@@ -202,7 +203,7 @@ class Safe_Popen(Unsafe_Popen):
                                   stdout=stdout,
                                   stderr=stderr,
                                   preexec_fn=preexec_fn,
-                                  close_fds=close_fds,
+                                  pass_fds=set(keep_open or []),
                                   shell=shell,
                                   cwd=cwd,
                                   env=env,
