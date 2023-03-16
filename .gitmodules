@@ -23,3 +23,6 @@
 [submodule "submodules/pyzipper"]
 	path = submodules/pyzipper
 	url = https://github.com/BjarniRunar/pyzipper
+[submodule "submodules/python-sop"]
+	path = submodules/python-sop
+	url = https://gitlab.com/dkg/python-sop.git
