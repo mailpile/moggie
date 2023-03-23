@@ -22,6 +22,9 @@ except ImportError:
 
 from ..crypto.aes_utils import make_aes_key
 from ..crypto.passphrases import stretch_with_scrypt, generate_passcode
+from ..crypto.openpgp.keystore.registry import DEFAULT_LOCAL_KEYSTORES
+from ..crypto.openpgp.keystore.registry import DEFAULT_KEYSTORES
+from ..crypto.openpgp.sop import DEFAULT_SOP_CONFIG
 from ..util.dumbcode import dumb_decode, dumb_encode_asc
 from ..email.addresses import AddressInfo
 from .helpers import cfg_bool, ListItemProxy, EncodingListItemProxy
@@ -483,6 +486,8 @@ class AppConfig(ConfigParser):
     INITIAL_SETTINGS = [
        (GENERAL, 'config_backups', '10'),
        (GENERAL, 'default_cli_context', 'Context 0'),
+       (GENERAL, 'openpgp_sop_client', DEFAULT_SOP_CONFIG),
+       (GENERAL, 'openpgp_key_sources', DEFAULT_KEYSTORES),
        (GENERAL, 'log_level', '40')]
 
     PREAMBLE = """\

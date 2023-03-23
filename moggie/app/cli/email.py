@@ -29,6 +29,7 @@ import sys
 import time
 
 from .command import Nonsense, CLICommand, AccessConfig
+from .openpgp import CommandOpenPGP
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
@@ -197,8 +198,8 @@ class CommandEmail(CLICommand):
 
         # Sign using both OpenPGP and DKIM identities
         moggie email [...] \\
-            --sign-as=PGP:61A015763D28D410A87B197328191D9B3B4199B4 \\
-            --sign-as=DKIM:/path/to/secret-key
+            --sign-with=PGP:61A015763D28D410A87B197328191D9B3B4199B4 \\
+            --sign-with=DKIM:/path/to/secret-key
 
         # Put the attachments in an encrypted ZIP file
         moggie email [...] \\
@@ -275,12 +276,12 @@ class CommandEmail(CLICommand):
         ('--quoting=',        [], 'X=(html*|text|trim*|below), many allowed'),
     ],[
         (None, None, 'encryption'),
-        ('--sign-as=',      [], 'X=(N|auto|Key-ID), DKIM or PGP signing'),
+        ('--sign-with=',    [], 'X=(N|auto|Key-ID), DKIM or PGP signing'),
         ('--decrypt=',      [], 'X=(N|auto|false|true)'),
         ('--encrypt=',      [], 'X=(N|all|attachments)'),
-        ('--encrypt-to=',   [], 'X=(auto|Key-IDs), for PGP encryption'),
-        ('--zip-password=', [], 'Password to use for ZIP encryption'),
-    ]]
+        ('--zip-password=', [], 'Password to use for ZIP encryption')]
+        + CommandOpenPGP.OPTIONS_ENCRYPTING
+        + CommandOpenPGP.OPTIONS_PGP_SETTINGS]
 
     DEFAULT_QUOTING = ['html', 'trim']
     DEFAULT_FORWARDING = ['html', 'inline']
@@ -389,6 +390,10 @@ class CommandEmail(CLICommand):
                         raise Nonsense('Failed to parse %s' % opt)
                 self.options[opt] = new_opt
 
+        CommandOpenPGP.configure_keys(self)
+        CommandOpenPGP.configure_passwords(self,
+            which=('--pgp-password=', '--zip-password='))
+
         return self.configure2(args)
 
     def _get_terms(self, args):
@@ -426,7 +431,7 @@ class CommandEmail(CLICommand):
                 'content-transfer-encoding': enc
             }, data)
 
-    def multi_part(self, mtype, parts):
+    def multi_part(self, mtype, parts, attrs=None):
         from moggie.email.headers import format_headers
         from moggie.util.mailpile import b64c, sha1b64
         import os
@@ -437,9 +442,11 @@ class CommandEmail(CLICommand):
                 body
             ) for headers, body in parts]
         bounded.append('\r\n--%s--' % boundary)
+        ctype = ['multipart/%s' % mtype, ('boundary', boundary)]
+        if attrs:
+            ctype.extend(attrs)
         return ({
-                'content-type': [
-                    'multipart/%s' % mtype, ('boundary', boundary)],
+                'content-type': ctype,
                 'content-transfer-encoding': '7bit'
             }, '\r\n'.join(bounded).strip())
 
@@ -455,28 +462,59 @@ class CommandEmail(CLICommand):
                 'content-transfer-encoding': 'base64'
             }, b64.body_encode(data).strip())
 
-    def get_encryptor(self):
-        # FIXME: Implement this!
-        return None, ''
-
-    def get_passphrase(self):
-        if self.options.get('--zip-password='):
-            return bytes(self.options['--zip-password='][-1], 'utf-8')
+    def get_zip_password(self):
         # FIXME: Generate a password? How do we tell the user?
-        raise Nonsense('FIXME: need a password')
-        return None
+        #        Only do this if --zip-password=auto ?
 
-    def attach_encrypted_attachments(self, text_parts=None):
+        zip_pw = self.options.get('--zip-password=')
+        if zip_pw:
+            zip_pw = bytes(zip_pw[-1], 'utf-8')
+            return zip_pw
+
+        raise Nonsense('FIXME: need a password')
+
+    async def encrypt_to_recipients(self, headers, body):
+        from moggie.email.headers import format_headers
+
+        encryptor, how, ext, emt = CommandOpenPGP.get_encryptor(self)
+        if not encryptor:
+            raise Nonsense('Unable to encrypt')
+
+        ciphertext = await encryptor(format_headers(headers) + body)
+        fn = '%s-encrypted-message.%s' % (how, ext)
+        parts = [
+            ({'content-type': [emt]}, 'Version: 1'),
+            ({
+                'content-type': ['appliction/octet-stream', ('name', fn)],
+                'content-disposition': ['inline', ('filename', fn)],
+             }, ciphertext)]
+
+        mp = self.multi_part('encrypted', parts, attrs=[('protocol', emt)])
+
+        return await self.sign_message(*mp, openpgp=False, dkim=True)
+
+    async def sign_message(self, headers, body, openpgp=True, dkim=True):
+        ids = CommandOpenPGP.get_signing_ids_and_keys(self)
+
+        if openpgp and ids['PGP']:
+            pass
+
+        if dkim and ids['DKIM']:
+            pass
+
+        return (headers, body)
+
+    async def attach_encrypted_attachments(self, text_parts=None):
         from moggie.storage.exporters.maildir import ZipWriter
         import io, base64
 
         mimetype = 'x-mailpile/zip'
         filename = 'message.zip' if text_parts else 'attachments.zip'
-        encryptor, ext = self.get_encryptor()
+        encryptor, how, ext, emt = self.get_encryptor()
 
         passphrase = None
         if not encryptor or self.options.get('--zip-password'):
-            passphrase = self.get_passphrase()
+            passphrase = self.get_zip_password()
         if passphrase in (b'', b'NONE'):
             passphrase = None
 
@@ -497,9 +535,9 @@ class CommandEmail(CLICommand):
 
         # If we are PGP or AGE encrypting the file, that transformation
         # happens here.
-        if encryptor:
+        if encryptor is not None:
             filename += '.%s' % ext
-            data = encryptor(data)
+            data = await encryptor(data)
 
         return self.attach_part(mimetype, filename, data)
 
@@ -701,7 +739,7 @@ class CommandEmail(CLICommand):
                     ts.year, ts.month, ts.day, ts.hour, ts.minute, subject),
                 decode(msg['_RAW']))
 
-    def render(self):
+    async def render(self):
         from moggie.email.headers import HEADER_CASEMAP, format_headers
 
         for hdr_val in self.options['--header=']:
@@ -781,7 +819,7 @@ class CommandEmail(CLICommand):
 
         if encryption == 'all' and not self.options['--encrypt-to=']:
             # Create an encrypted .ZIP with entire message content
-            parts = [self.attach_encrypted_attachments(text_parts=parts)]
+            parts = [await self.attach_encrypted_attachments(text_parts=parts)]
         else:
             if len(parts) > 1:
                 parts = [self.multi_part('alternative', parts)]
@@ -797,8 +835,14 @@ class CommandEmail(CLICommand):
             parts = [self.multi_part('mixed', parts)]
 
         if encryption == 'all' and self.options['--encrypt-to=']:
-            # Encrypt to someone: a PGP or AGE key
-            parts = [self.encrypt_to_recipient(parts)]
+            # Encrypt to someone: a PGP or AGE key - note this also
+            # takes care of signing if necessary, as we prefer combined
+            # encryption+signatures whenever possible.
+            parts = [await self.encrypt_to_recipients(*parts[0])]
+
+        elif self.options['--sign-with=']:
+            # Sign entire message
+            parts = [await self.sign_message(*parts[0])]
 
         if parts:
             self.headers.update(parts[0][0])
@@ -905,8 +949,8 @@ class CommandEmail(CLICommand):
             raise Nonsense('FIXME: Searching for attachments does not yet work')
         return atts
 
-    def render_result(self):
-        self.print(self.render())
+    async def render_result(self):
+        self.print(await self.render())
 
     def gather_recipients(self):
         recipients = []
@@ -920,7 +964,7 @@ class CommandEmail(CLICommand):
     async def do_send(self, render=None, recipients=None):
         recipients = recipients or self.gather_recipients()
         if render is None:
-            render = self.render()
+            render = await self.render()
 
         via = (self.options.get('--send-via=') or [None])[-1]
         if not via:
@@ -994,7 +1038,7 @@ class CommandEmail(CLICommand):
                     or self.options.get('--send-at=')):
                 await self.do_send()
             else:
-                self.render_result()
+                await self.render_result()
 
 
 class CommandParse(CLICommand):

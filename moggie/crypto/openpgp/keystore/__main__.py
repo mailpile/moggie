@@ -1,0 +1,146 @@
+##[ Tests ]##################################################################
+
+if __name__ == '__main__':
+    import asyncio
+    import os
+    import sys
+    import hashlib
+
+    from . import *
+
+    with_network = ('--with-network' in sys.argv)
+
+    class MockOpenPGPKeyStore(OpenPGPKeyStore):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            c = b'-----BEGIN PGP PUBLIC KEY-----\n'
+            p = b'-----BEGIN PGP PRIVATE KEY BLOCK-----\n'
+            self.c = {'test': c, self._fpr(c): c}
+            self.p = {'test': p, self._fpr(p): p}
+        def _fpr(self, data):
+            return hashlib.sha1(data).hexdigest()
+        def get_cert(self, fpr):
+            if fpr not in self.c:
+                raise NotFoundError(fpr)
+            return self.c[fpr]
+        def get_private_key(self, fpr):
+            if fpr not in self.p:
+                raise NotFoundError(fpr)
+            return self.p[fpr]
+        def find_certs(self, search_terms):
+            try:
+                yield self.get_cert(search_terms)
+            except NotFoundError:
+                pass
+        def find_private_keys(self, search_terms):
+            try:
+                yield self.get_private_key(search_terms)
+            except NotFoundError:
+                pass
+        def with_info(self, iterator):
+            for key in iterator:
+                yield ({'fingerprint': self._fpr(key)}, key)
+        def save_cert(self, cert):
+            self.c[self._fpr(cert)] = cert
+            return True
+        def save_private_key(self, pkey):
+            self.p[self._fpr(pkey)] = pkey
+            return True
+        def delete_cert(self, fpr):
+            if fpr not in self.c:
+                raise NotFoundError(fpr)
+            del self.c[fpr]
+            return True
+        def delete_private_key(self, fpr):
+            if fpr not in self.p:
+                raise NotFoundError(fpr)
+            del self.p[fpr]
+            return True
+
+    async def _al(async_iterator):
+        output = []
+        async for item in async_iterator:
+            output.append(item)
+        return output
+
+    async def tests():
+
+        pgpks = OpenPGPKeyStore() 
+        try:
+            pgpks.get_cert('FINGERPRINT')
+            assert(not 'reached')
+        except NotFoundError:
+            pass
+
+        try:
+            for cert in pgpks.find_certs('bjarni'):
+                assert(not 'reached')
+        except NotImplementedError:
+            pass
+
+        progress = []
+        cks = PrioritizedKeyStores(
+            DEFAULT_KEYSTORES if with_network else DEFAULT_LOCAL_KEYSTORES,
+            progress_callback=progress.append,
+            read_only=False)
+
+        # Make sure our mock tests don't have side effects elsewhere.
+        for _, store in cks.keystores:
+            store.set_read_only()
+
+        mks = MockOpenPGPKeyStore()
+        cks.add_keystore('testing', mks)
+
+        tcert = mks.get_cert('test')
+        tfpr = mks._fpr(tcert)
+        assert(tcert.startswith(b'-----BEGIN'))
+        assert((cks.get_private_key('test')).startswith(b'-----BEGIN'))
+
+        assert(1 == len(list(cks.find_certs(tfpr))))
+        assert(0 == len(list(cks.find_certs('test-not-found'))))
+        assert(1 <= len(list(cks.find_private_keys('test'))))
+        assert(0 == len(list(cks.find_private_keys('test-not-found'))))
+
+        try:
+            cks.delete_cert(tfpr)  # Need which=cks.ALL
+            assert(not 'reached')
+        except PermissionError:
+            pass
+        assert(cks.delete_cert(tfpr, which=cks.ALL))
+        assert(not (cks.delete_cert(tfpr, which=cks.ALL)))
+        assert(cks.save_cert(tcert, which='testing'))
+        assert(cks.delete_cert(tfpr, which=cks.ALL))
+
+        cks.set_read_only()
+
+        def _check(e):
+            assert('GnuPG:shared' in e)
+            assert('email' in e)
+            assert(('WKD' in e) == with_network)
+            assert(('KOO' in e) == with_network)
+        for method in (cks.get_cert, cks.get_private_key):
+            try:
+                cert = method('no-such-cert')
+                assert(not 'reached')
+            except NotFoundError as e:
+                _check(str(e))
+            _check(progress)
+            progress[:] = []
+
+        for method in (
+                cks.save_cert, cks.save_private_key,
+                cks.delete_cert, cks.delete_private_key):
+            try:
+                progress[:] = []
+                method('foobar')
+                assert(not 'reached')
+            except PermissionError:
+                assert(not progress)
+
+        if os.getlogin() == 'bre':
+            assert(len(list(cks.find_certs('bjarni'))) >= 4)
+            print('Tests passed OK')
+        else:
+            print('Tests passed OK (not bre, skipped GnuPG tests)')
+
+    asyncio.run(tests())

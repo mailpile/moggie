@@ -110,6 +110,66 @@ class BaseWorker(Process):
         self._background_threads = {}
         self._background_job_lock = threading.Lock()
 
+    def expose_object(self, obj,
+            prefix='', allow_local=True, arg_filter=None, exclude=[]):
+        def _utf8(v):
+            if isinstance(v, str):
+                return v
+            if isinstance(v, bytes):
+                return str(v, 'utf-8')
+            if isinstance(v, dict):
+                return dict((_utf8(k), _utf8(i)) for k, i in v.items())
+            if hasattr(v, '__iter__'):
+                return list(_utf8(i) for i in v)
+            raise ValueError('Cannot handle %s' % type(v))
+
+        for attr in dir(obj):
+            method = getattr(obj, attr)
+            if (attr[:1] == '_') or 'method' not in str(type(method)):
+                continue
+            if attr in exclude:
+                continue
+
+            def mk_wrappers(name, meth):
+                def dict_wrap(*args, **kwargs):
+                    try:
+                        if arg_filter is not None:
+                            args = arg_filter(args)
+                            kwargs = arg_filter(kwargs)
+                        return {
+                            'method': name,
+                            'result': _utf8(meth(*args, **kwargs))}
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as e:
+                        return {
+                            'method': name,
+                            'error': str(e),
+                            'details': traceback.format_exc()}
+
+                def api_wrap(*args, method=None, **kwargs):
+                    return self.reply_json(dict_wrap(*args, **kwargs))
+
+                def wrap(*args, **kwargs):
+                    if self.url or not allow_local:
+                        return self.call(prefix + name, *args, qs=kwargs)
+                    else:
+                        return dict_wrap(*args, **kwargs)
+
+                async def async_wrap(*args, **kwargs):
+                    if self.url or not allow_local:
+                        return await self.async_call(
+                            prefix + name, *args, **kwargs)
+                    else:
+                        return dict_wrap(*args, **kwargs)
+
+                return async_wrap, wrap, api_wrap
+
+            async_wrap, wrap, api_wrap = mk_wrappers(attr, method)
+            self.functions[bytes(prefix + attr, 'utf-8')] = (True, api_wrap)
+            setattr(self, prefix + attr, wrap)
+            setattr(self, prefix + 'async_' + attr, async_wrap)
+
     def log_more(self, *ignored_args):
         if self._log_level <= logging.DEBUG:
             return

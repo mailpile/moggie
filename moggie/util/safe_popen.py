@@ -26,6 +26,8 @@ import os
 import subprocess
 import sys
 import threading
+import traceback
+import asyncio.subprocess
 
 import moggie.platforms
 
@@ -52,7 +54,7 @@ def PresetSafePopenArgs(**kwargs):
         THREAD_LOCAL.preset_args = [kwargs]
 
 
-class Safe_Pipe(object):
+class Safe_Pipe:
     """
     Creates a pipe consisting of two Python file objects.
 
@@ -241,6 +243,40 @@ class Safe_Popen(Unsafe_Popen):
         if Unsafe_Popen is not None:
             Unsafe_Popen.__del__(self)
         self._SAFE_POPEN_unlock()
+
+
+class ExternalProcRunner:
+    def __init__(self, binary):
+        self.binary = binary
+
+    def make_pipe(self, we_read=False):
+        pipe_obj = Safe_Pipe()
+        fno = (pipe_obj.write_end if we_read else pipe_obj.read_end).fileno()
+        return fno, pipe_obj
+
+    def popen(self, *arguments, binary=None, keep_open=[]):
+        command = [binary or self.binary] + list(arguments)
+        #print('RUNNING: %s, keep_open=%s' % (command, keep_open))
+        return Safe_Popen(command,
+            stdin=PIPE, stdout=PIPE, stderr=PIPE,
+            keep_open=keep_open)
+
+    def run(self, *arguments, input_data=b'', keep_open=[], timeout=60):
+        try:
+            if isinstance(input_data, str):
+                input_data = bytes(input_data, 'utf-8')
+            child = self.popen(*arguments, keep_open=list(keep_open))
+            so, se = child.communicate(input=input_data, timeout=timeout)
+            #print('RETURNED: %s / %s / %s' % (child.returncode, so, se))
+            return child.returncode, so, se
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:
+            return -1, b'', bytes(traceback.format_exc(), 'utf-8')
+
+    async def async_run(self, *args, **kwargs):
+        # FIXME: Make this properly async, using asyncio.subprocess
+        return self.run(*args, **kwargs)
 
 
 # This is a vain attempt to monkeypatch, whether it works or not will
