@@ -9,6 +9,11 @@ DEFAULT_KEYSTORES = 'GnuPG:shared, email, WKD, KOO'
 
 ##[ Stubs and registry for lazy-loading ]####################################
 
+def _DemoKeyStore(*args, **kwargs):
+    from .demo import DemoKeyStore
+    return DemoKeyStore(*args, **kwargs)
+
+
 def _GnuPGKeyStore(*args, **kwargs):
     from .gnupg import GnuPGKeyStore
     return GnuPGKeyStore(*args, **kwargs)
@@ -30,6 +35,7 @@ def _WKDKeyStore(*args, **kwargs):
 
 
 KEYSTORE_REGISTRY = {
+    'demo': _DemoKeyStore,
     'gnupg': _GnuPGKeyStore,
     'email': _EmailSearchKeyStore,
     'koo':   _KooKeyStore,
