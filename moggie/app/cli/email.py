@@ -473,6 +473,15 @@ class CommandEmail(CLICommand):
 
         raise Nonsense('FIXME: need a password')
 
+    def protect_headers(self, headers):
+        # FIXME: Is this optional? Configurable?
+        for h in self.headers:
+            if (h not in headers
+                    and h not in ('mime-version')
+                    and not h.startswith('content-')):
+                headers[h] = self.headers[h]
+        return headers
+
     async def encrypt_to_recipients(self, headers, body):
         from moggie.email.headers import format_headers
 
@@ -480,6 +489,17 @@ class CommandEmail(CLICommand):
         if not encryptor:
             raise Nonsense('Unable to encrypt')
 
+        # FIXME: Check prefs? Skip this if user always wants PGP/MIME
+        if headers['content-type'][0] == 'text/plain':
+            # If the text was base64 encoded, undo that. PGP is armor.
+            if headers.get('content-transfer-encoding', ['']) == 'base64':
+                headers['content-transfer-encoding'] = ['7bit']
+                body = str(base64.b64decode(body), 'utf-8')
+            ciphertext = await encryptor(body)
+            return await self.sign_message(
+                headers, ciphertext, openpgp=False, dkim=True)
+
+        self.protect_headers(headers)
         ciphertext = await encryptor(format_headers(headers) + body)
         fn = '%s-encrypted-message.%s' % (how, ext)
         parts = [
@@ -489,15 +509,27 @@ class CommandEmail(CLICommand):
                 'content-disposition': ['inline', ('filename', fn)],
              }, ciphertext)]
 
-        mp = self.multi_part('encrypted', parts, attrs=[('protocol', emt)])
-
-        return await self.sign_message(*mp, openpgp=False, dkim=True)
+        h, b = self.multi_part('encrypted', parts, attrs=[('protocol', emt)])
+        return await self.sign_message(h, b, openpgp=False, dkim=True)
 
     async def sign_message(self, headers, body, openpgp=True, dkim=True):
+        from moggie.email.headers import format_headers
+
         ids = CommandOpenPGP.get_signing_ids_and_keys(self)
 
         if openpgp and ids['PGP']:
-            pass
+            signer, how, ext, smt = CommandOpenPGP.get_signer(self, html=True)
+            fn = '%s-digital-signature.%s' % (how, ext)
+            self.protect_headers(headers)
+            signature, micalg = await signer(format_headers(headers) + body)
+            parts = [
+                (headers, body),
+                ({
+                    'content-type': [smt, ('name', fn)],
+                    'content-disposition': ['attachment', ('filename', fn)],
+                }, signature)]
+            headers, body = self.multi_part('signed', parts,
+                attrs=[('protocol', smt), ('micalg', micalg)])
 
         if dkim and ids['DKIM']:
             pass
