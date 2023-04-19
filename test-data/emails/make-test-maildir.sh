@@ -1,6 +1,8 @@
 #!/bin/bash
 mkdir -p new cur tmp
 
+SOP=${SOP:-pgpy}
+
 FN='cur/00000001.mailpile:2,S'
 [ -e "$FN" ] || moggie email --subject='Simple plain-text e-mail' \
     --message='This is a test, I hope you like it' \
@@ -38,7 +40,7 @@ FN='cur/00000005.mailpile:2,S'
     --html=N \
     --from='Alice Lövelace <alice@openpgp.example>' \
     --to='Alice Lovelace <alice@openpgp.example>' \
-    --pgp-key-sources=demo --pgp-sop=pgpy \
+    --pgp-key-sources=demo --pgp-sop=$SOP \
     --sign-with=PGP:@PKEY:alice@openpgp.example \
     2>/dev/null |sed -e 's/\r//' >$FN && ls -l "$FN"
 
@@ -48,7 +50,7 @@ FN='cur/00000006.mailpile:2,S'
     --attach="$0" \
     --from='Alice Lövelace <alice@openpgp.example>' \
     --to='Alice Lovelace <alice@openpgp.example>' \
-    --pgp-key-sources=demo --pgp-sop=pgpy \
+    --pgp-key-sources=demo --pgp-sop=$SOP \
     --sign-with=PGP:@PKEY:alice@openpgp.example \
     2>/dev/null |sed -e 's/\r//' >$FN && ls -l "$FN"
 
@@ -58,7 +60,7 @@ FN='cur/00000007.mailpile:2,S'
     --html=N \
     --from='Alice Lövelace <alice@openpgp.example>' \
     --to='Alice Lovelace <alice@openpgp.example>' \
-    --pgp-key-sources=demo --pgp-sop=pgpy \
+    --pgp-key-sources=demo --pgp-sop=$SOP \
     --sign-with=PGP:@PKEY:alice@openpgp.example \
     --encrypt=all \
     --encrypt-to=PGP:@CERT:alice@openpgp.example \
@@ -70,7 +72,7 @@ FN='cur/00000008.mailpile:2,S'
     --attach="$0" \
     --from='Alice Lövelace <alice@openpgp.example>' \
     --to='Alice Lovelace <alice@openpgp.example>' \
-    --pgp-key-sources=demo --pgp-sop=pgpy \
+    --pgp-key-sources=demo --pgp-sop=$SOP \
     --sign-with=PGP:@PKEY:alice@openpgp.example \
     --encrypt=all \
     --encrypt-to=PGP:@CERT:alice@openpgp.example \
@@ -82,7 +84,7 @@ FN='cur/00000009.mailpile:2,S'
     --html=N \
     --from='Alice Lövelace <alice@openpgp.example>' \
     --to='Alice Lovelace <alice@openpgp.example>' \
-    --pgp-key-sources=demo --pgp-sop=pgpy \
+    --pgp-key-sources=demo --pgp-sop=$SOP \
     --pgp-headers=sign \
     --sign-with=PGP:@PKEY:alice@openpgp.example \
     2>/dev/null |sed -e 's/\r//' >$FN && ls -l "$FN"
@@ -93,7 +95,7 @@ FN='cur/00000010.mailpile:2,S'
     --html=N \
     --from='Alice Lövelace <alice@openpgp.example>' \
     --to='Alice Lovelace <alice@openpgp.example>' \
-    --pgp-key-sources=demo --pgp-sop=pgpy \
+    --pgp-key-sources=demo --pgp-sop=$SOP \
     --pgp-headers=all \
     --sign-with=PGP:@PKEY:alice@openpgp.example \
     --encrypt=all \

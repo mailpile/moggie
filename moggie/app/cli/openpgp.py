@@ -151,8 +151,9 @@ signatures.
         sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj)
 
         async def encryptor(data):
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
             encrypt_args = {
-                'data': bytes(data, 'utf-8'),
+                'data': data,
                 'recipients': dict(enumerate(rcpt_ids['PGP']))}
             if pgp_signing_ids:
                 encrypt_args['signers'] = dict(enumerate(pgp_signing_ids))
@@ -169,8 +170,9 @@ signatures.
         sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj)
 
         async def signer(data):
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
             sign_args = {
-                'data': bytes(data, 'utf-8'),
+                'data': data,
                 'wantmicalg': True,
                 'signers': dict(enumerate(pgp_signing_ids))}
             if cli_obj.options['--pgp-password=']:
@@ -183,7 +185,7 @@ signatures.
             return signature, micalg
 
         ext = 'html' if html else 'asc'
-        return signer, 'OpenPGP', ext, 'application/pgp-signed'
+        return signer, 'OpenPGP', ext, 'application/pgp-signature'
 
     @classmethod
     def get_async_sop_and_keystore(cls, cli_obj):

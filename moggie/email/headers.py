@@ -85,7 +85,7 @@ HEADER_ORDER = {
     'references': 99,
     'list-id': 20,
     'list-help': 20,
-    'message-id': 16,
+    'message-id': 20,
     'mime-version': 16,
     'content-id': 17,
     'content-length': 17,
@@ -296,7 +296,8 @@ def parse_header(raw_header):
 
 
 def format_header(hname, data,
-        as_timestamp=None, intfmt='%d', floatfmt='%.2f'):
+        as_timestamp=None, intfmt='%d', floatfmt='%.2f',
+        text_quote=rfc2074_quote, normalizer=None):
     hname = HEADER_CASEMAP.get(hname.lower(), hname)
     values = []
     sep = (
@@ -313,9 +314,7 @@ def format_header(hname, data,
 
     ll = [None, 70 - len(hname), 72]
     def _quote_space(txt):
-        if ' ' in txt or '\t' in txt:
-            return '"%s"' % (txt.replace('"', '\\"'))
-        return txt
+        return '"%s"' % (txt.replace('"', '\\"'))
     def _encode(item):
         if isinstance(item, list):
             rv = []
@@ -323,7 +322,10 @@ def format_header(hname, data,
                 rv.extend(_encode(i))
             return rv
         elif hasattr(item, 'normalized'):
-            return [item.normalized()]
+            if normalizer is None:
+                return [item.normalized()]
+            else:
+                return [normalizer(item)]
         elif isinstance(item, tuple):
             k, v = item
             return ['%s=%s' % (k, _quote_space(_encode(v)[0]))]
@@ -346,9 +348,9 @@ def format_header(hname, data,
             else:
                 return [floatfmt % item]
         elif isinstance(item, str):
-            return [rfc2074_quote(item, linelengths=ll)]
+            return [text_quote(item, linelengths=ll)]
         elif isinstance(item, bytes):
-            return [rfc2074_quote(str(item, 'utf-8'), linelengths=ll)]
+            return [text_quote(str(item, 'utf-8'), linelengths=ll)]
     for item in data:
         values.extend(_encode(item))
 

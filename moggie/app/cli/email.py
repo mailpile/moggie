@@ -22,6 +22,7 @@
 #   - implement PGP/MIME signatures
 #
 import base64
+import copy
 import io
 import logging
 import os
@@ -281,7 +282,8 @@ class CommandEmail(CLICommand):
         ('--encrypt=',      [], 'X=(N|all|attachments)'),
         ('--zip-password=', [], 'Password to use for ZIP encryption')]
         + CommandOpenPGP.OPTIONS_ENCRYPTING
-        + CommandOpenPGP.OPTIONS_PGP_SETTINGS]
+        + CommandOpenPGP.OPTIONS_PGP_SETTINGS + [
+        ('--pgp-headers=',  [], 'X=(N|auto|sign|subject|all)')]]
 
     DEFAULT_QUOTING = ['html', 'trim']
     DEFAULT_FORWARDING = ['html', 'inline']
@@ -394,6 +396,10 @@ class CommandEmail(CLICommand):
         CommandOpenPGP.configure_passwords(self,
             which=('--pgp-password=', '--zip-password='))
 
+        if not self.options['--pgp-headers=']:
+            # FIXME: Check user preferences
+            self.options['--pgp-headers='] = ['N']
+
         return self.configure2(args)
 
     def _get_terms(self, args):
@@ -413,7 +419,7 @@ class CommandEmail(CLICommand):
             raise Nonsense('Unknown args: %s' % args)
         return args
 
-    def text_part(self, text, mimetype='text/plain', no_enc=False):
+    def text_part(self, text, mimetype='text/plain', ctattrs=[], no_enc=False):
         try:
             data = str(bytes(text, 'us-ascii'), 'us-ascii')
             enc = '7bit'
@@ -425,11 +431,12 @@ class CommandEmail(CLICommand):
                 import email.base64mime as b64
                 data = b64.body_encode(bytes(text, 'utf-8'))
                 enc = 'base64'
+        data = data.replace('\r', '').replace('\n', '\r\n')
         return ({
-                'content-type': [mimetype, ('charset', 'utf-8')],
+                'content-type': [mimetype, ('charset', 'utf-8')] + ctattrs,
                 'content-disposition': 'inline',
                 'content-transfer-encoding': enc
-            }, data)
+            }, data.strip() + '\r\n')
 
     def multi_part(self, mtype, parts, attrs=None):
         from moggie.email.headers import format_headers
@@ -439,7 +446,7 @@ class CommandEmail(CLICommand):
         bounded = ['\r\n--%s\r\n%s%s' % (
                 boundary,
                 format_headers(headers),
-                body
+                body.strip()
             ) for headers, body in parts]
         bounded.append('\r\n--%s--' % boundary)
         ctype = ['multipart/%s' % mtype, ('boundary', boundary)]
@@ -456,11 +463,13 @@ class CommandEmail(CLICommand):
         disp = ['attachment']
         if filename:
             disp.append(('filename', filename))
+        data = b64.body_encode(data).strip()
+        data = data.replace('\r', '').replace('\n', '\r\n')
         return ({
                 'content-type': ctyp,
                 'content-disposition': disp,
                 'content-transfer-encoding': 'base64'
-            }, b64.body_encode(data).strip())
+            }, data)
 
     def get_zip_password(self):
         # FIXME: Generate a password? How do we tell the user?
@@ -473,14 +482,74 @@ class CommandEmail(CLICommand):
 
         raise Nonsense('FIXME: need a password')
 
-    def protect_headers(self, headers):
-        # FIXME: Is this optional? Configurable?
-        for h in self.headers:
-            if (h not in headers
-                    and h not in ('mime-version')
-                    and not h.startswith('content-')):
-                headers[h] = self.headers[h]
-        return headers
+    def protect_headers(self, headers, body, obscure=False):
+        # FIXME: Sometimes obscure=['subject', 'to', 'cc', 'from'] ??
+        """
+        Copy and/or obscure specific headers for, as per:
+        https://www.ietf.org/archive/id/draft-autocrypt-lamps-protected-headers-02.html
+        """
+        # Check user preferences
+        prefs = self.options['--pgp-headers='][-1]
+        if prefs == 'N':
+            return headers, body 
+        if obscure:
+            if prefs == 'sign':
+                obscure = False
+            elif prefs == 'subject':
+                obscure = ['subject']
+            elif prefs == 'all':
+                obscure = ['subject', 'to', 'cc', 'from']
+
+        outer_headers = copy.copy(self.headers)
+        obscured = []
+
+        if isinstance(obscure, list):
+            # FIXME: This needs work and research
+            for h in obscure:
+                obscured.append(h)
+                if h == 'subject':
+                    self.headers['subject'] = ['...']
+                elif h == 'to':
+                    self.headers['to'] = ['undisclosed-recipients:;']
+                elif h == 'from':
+                    self.headers['from'] = ['undisclosed-sender:;']
+                elif h in self.headers:
+                    del self.headers[h]
+        elif obscure:
+            obscured.append('subject')
+            self.headers['subject'] = ['...']
+
+        if obscured:
+            from moggie.email.headers import format_header
+
+            # This generates the legacy display part, which is for human
+            # consumption - so we use the format_header() function but
+            # stub out and disable most of the quoting that would normally
+            # take place.
+            display = []
+            def null_quote(t, **kwargs):
+                return t
+            def null_norm(ah):
+                try:
+                    return '%s <%s>' % (ah.fn, ah.address)
+                except AttributeError:
+                    return ah.normalized()
+            for h in (oh for oh in outer_headers if oh in obscured):
+                display.append(format_header(h, outer_headers[h],
+                    text_quote=null_quote,
+                    normalizer=null_norm))
+
+            headers, body = self.multi_part('mixed', [
+                self.text_part('\n'.join(display) + '\n', 'text/plain',
+                    ctattrs=[('protected-headers', 'v1')]),
+                (headers, body)])
+
+        for h in outer_headers:
+            if (h not in ('mime-version',)
+                   and not h.startswith('content-')):
+                headers[h] = outer_headers[h]
+
+        return headers, body
 
     async def encrypt_to_recipients(self, headers, body):
         from moggie.email.headers import format_headers
@@ -490,7 +559,8 @@ class CommandEmail(CLICommand):
             raise Nonsense('Unable to encrypt')
 
         # FIXME: Check prefs? Skip this if user always wants PGP/MIME
-        if headers['content-type'][0] == 'text/plain':
+        simplify = self.options['--pgp-headers='][-1] in ('N', 'auto')
+        if simplify and (headers['content-type'][0] == 'text/plain'):
             # If the text was base64 encoded, undo that. PGP is armor.
             if headers.get('content-transfer-encoding', ['']) == 'base64':
                 headers['content-transfer-encoding'] = ['7bit']
@@ -499,13 +569,13 @@ class CommandEmail(CLICommand):
             return await self.sign_message(
                 headers, ciphertext, openpgp=False, dkim=True)
 
-        self.protect_headers(headers)
+        headers, body = self.protect_headers(headers, body, obscure=True)
         ciphertext = await encryptor(format_headers(headers) + body)
         fn = '%s-encrypted-message.%s' % (how, ext)
         parts = [
             ({'content-type': [emt]}, 'Version: 1'),
             ({
-                'content-type': ['appliction/octet-stream', ('name', fn)],
+                'content-type': ['application/octet-stream', ('name', fn)],
                 'content-disposition': ['inline', ('filename', fn)],
              }, ciphertext)]
 
@@ -520,8 +590,10 @@ class CommandEmail(CLICommand):
         if openpgp and ids['PGP']:
             signer, how, ext, smt = CommandOpenPGP.get_signer(self, html=True)
             fn = '%s-digital-signature.%s' % (how, ext)
-            self.protect_headers(headers)
-            signature, micalg = await signer(format_headers(headers) + body)
+            headers, body = self.protect_headers(headers, body)
+            body = body.strip()
+            signature, micalg = await signer(
+                format_headers(headers) + body + '\r\n')
             parts = [
                 (headers, body),
                 ({
@@ -542,7 +614,7 @@ class CommandEmail(CLICommand):
 
         mimetype = 'x-mailpile/zip'
         filename = 'message.zip' if text_parts else 'attachments.zip'
-        encryptor, how, ext, emt = self.get_encryptor()
+        encryptor, how, ext, emt = CommandOpenPGP.get_encryptor(self)
 
         passphrase = None
         if not encryptor or self.options.get('--zip-password'):
@@ -550,6 +622,7 @@ class CommandEmail(CLICommand):
         if passphrase in (b'', b'NONE'):
             passphrase = None
 
+        added = 0
         now = time.time()
         fd = io.BytesIO()
         zw = ZipWriter(fd, password=passphrase)
@@ -560,16 +633,21 @@ class CommandEmail(CLICommand):
                 else:
                     fn = 'message-body.txt'
                 zw.add_file(fn, now, bytes(text_data, 'utf-8'))
+                added += 1
         for _unused, fn, data in self.attachments:
             zw.add_file(fn, now, data)
+            added += 1
         zw.close()
         data = fd.getvalue()
+
+        if not added:
+            return None
 
         # If we are PGP or AGE encrypting the file, that transformation
         # happens here.
         if encryptor is not None:
             filename += '.%s' % ext
-            data = await encryptor(data)
+            data = bytes(await encryptor(data), 'utf-8')
 
         return self.attach_part(mimetype, filename, data)
 
@@ -851,37 +929,38 @@ class CommandEmail(CLICommand):
 
         if encryption == 'all' and not self.options['--encrypt-to=']:
             # Create an encrypted .ZIP with entire message content
-            parts = [await self.attach_encrypted_attachments(text_parts=parts)]
+            _zp = await self.attach_encrypted_attachments(text_parts=parts)
+            if _zp:
+                parts = [_zp]
         else:
             if len(parts) > 1:
                 parts = [self.multi_part('alternative', parts)]
 
-            if encryption == 'attachments':
+            if (encryption == 'attachments') and self.attachments:
                 # This will create an encrypted .ZIP with our attachments only
-                parts.append(self.attach_encrypted_attachments())
+                parts.append(await self.attach_encrypted_attachments())
             else:
                 for mimetype, filename, data in self.attachments:
                     parts.append(self.attach_part(mimetype, filename, data))
 
         if len(parts) > 1:
-            parts = [self.multi_part('mixed', parts)]
+            header, body = self.multi_part('mixed', parts)
+        elif parts:
+            header, body = parts[0]
+        else:
+            header, body = {}, ''
 
         if encryption == 'all' and self.options['--encrypt-to=']:
             # Encrypt to someone: a PGP or AGE key - note this also
             # takes care of signing if necessary, as we prefer combined
             # encryption+signatures whenever possible.
-            parts = [await self.encrypt_to_recipients(*parts[0])]
+            header, body = await self.encrypt_to_recipients(header, body)
 
         elif self.options['--sign-with=']:
             # Sign entire message
-            parts = [await self.sign_message(*parts[0])]
+            header, body = await self.sign_message(header, body)
 
-        if parts:
-            self.headers.update(parts[0][0])
-            body = parts[0][1]
-        else:
-            body = ''
-
+        self.headers.update(header)
         return ''.join([format_headers(self.headers), body])
 
     def _reply_addresses(self):
