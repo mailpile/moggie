@@ -1,5 +1,7 @@
 websockets
+setproctitle
 cryptography
+pycryptodomex
 pycrypto
 numpy
 urwid
