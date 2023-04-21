@@ -36,6 +36,17 @@ class RequestSearch(RequestBase):
         }, req_id=req_id)
 
 
+class RequestOpenPGP(RequestBase):
+    def __init__(self, context='', op='', args=[], kwargs={}, req_id=None):
+        self.update({
+            'prototype': 'openpgp',
+            'context': context,
+            'op': op,
+            'args': args,
+            'kwargs': kwargs
+        }, req_id=req_id)
+
+
 class RequestCounts(RequestBase):
     def __init__(self, context='', terms_list=[], req_id=None):
         self.update({
@@ -203,6 +214,7 @@ def to_jmap_request(_input):
          'config_set': RequestConfigSet,
          'config_get': RequestConfigGet,
          'add_to_index': RequestAddToIndex,
+         'openpgp': RequestOpenPGP,
          'unlock': RequestUnlock,
          'change_passphrase': RequestChangePassphrase,
          }.get(_input.get('prototype', ''))

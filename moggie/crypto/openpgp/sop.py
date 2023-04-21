@@ -7,6 +7,7 @@
 #
 import datetime
 import os
+import logging
 import threading
 
 from typing import List, Optional, Dict, Sequence, MutableMapping
@@ -345,15 +346,18 @@ def GetSOPClient(sop_config):
         if pref.lower() == 'pgpy':
             try:
                 from sopgpy import SOPGPy
+                logging.info('GetSOPCLient(): Using SOPGPy')
                 return SOPGPy()
             except ImportError:
                 pass
 
         elif pref.lower() == 'demo':
             from moggie.crypto.openpgp.sopdemo import DemoStatelessOpenPGPClient
+            logging.info('GetSOPCLient(): Using demo client')
             return DemoStatelessOpenPGPClient()
 
         elif os.path.exists(pref):
+            logging.info('GetSOPCLient(): Using %s' % pref)
             return StatelessOpenPGPClient(pref)
 
     raise ImportError('No SOP client found')

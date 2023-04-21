@@ -11,7 +11,40 @@ from .command import Nonsense, CLICommand, AccessConfig
 
 class WorkerEncryptionWrapper:
     def __init__(self, cli_obj):
-        pass
+        from moggie.jmap.requests import RequestOpenPGP
+        self.cli_obj = co = cli_obj
+        for op in (
+                'get_cert',
+                'find_certs',
+                'list_certs',
+                'get_private_key',
+                'find_private_keys',
+                'list_private_keys',
+                'save_cert',
+                'save_private_key',
+                'delete_cert',
+                'delete_private_key',
+                'process_email',
+                'list_profiles',
+                'generate_key',
+                'sign',
+                'verify',
+                'encrypt',
+                'decrypt'):
+            def mk_req(_op):
+                async def _request(*args, **kwargs):
+                    request = RequestOpenPGP(
+                        context=co.context,
+                        op=_op,
+                        args=args,
+                        kwargs=kwargs)
+                    result = await co.worker.async_jmap(co.access, request)
+                    if result.get('error'):
+                        logging.error('%s(...): %s' % (_op, result['error']))
+                        raise Exception(result['error'])
+                    return result['result']
+                return _request
+            setattr(self, op, mk_req(op))
 
 
 class CommandOpenPGP(CLICommand):
@@ -165,7 +198,9 @@ signatures.
                 if cli_obj.options['--pgp-password=']:
                     encrypt_args['keypasswords'] = dict(
                         enumerate(cli_obj.options['--pgp-password=']))
-            return str(await sopc.encrypt(**encrypt_args), 'utf-8')
+
+            ctxt = await sopc.encrypt(**encrypt_args)
+            return ctxt if isinstance(ctxt, str) else str(ctxt, 'utf-8')
 
         return encryptor, 'OpenPGP', 'asc', 'application/pgp-encrypted'
 
@@ -228,8 +263,8 @@ signatures.
             if cli_obj.options['--pgp-password=']:
                 sign_args['keypasswords'] = dict(
                     enumerate(cli_obj.options['--pgp-password=']))
-            signature, micalg = await sopc.sign(**sign_args)
-            signature = str(signature, 'utf-8')
+            sig, micalg = await sopc.sign(**sign_args)
+            signature = sig if isinstance(sig, str) else str(sig, 'utf-8')
             if html:
                 signature = cls.HTML_SIG_WRAPPER % signature
             return signature, micalg
@@ -255,7 +290,7 @@ signatures.
                 AsyncProxyObject(ks))
 
         elif cli_obj.worker:
-            we = WorkerEncryptionWrapper(worker)
+            we = WorkerEncryptionWrapper(cli_obj)
             return we, we
 
         else:

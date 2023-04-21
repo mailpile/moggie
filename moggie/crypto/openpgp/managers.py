@@ -1,3 +1,5 @@
+import logging
+
 class CachingKeyManager:
     def __init__(self, sop, keys):
         self.sop = sop
@@ -19,6 +21,7 @@ class CachingKeyManager:
                 pkeys = list(set(
                     self.keys.find_private_keys(fpr, keypasswords)))
                 if len(pkeys) == 1:
+                    logging.debug('Cached private key for %s' % fpr)
                     self.pkey_cache[fpr] = pkeys[0]
             else:
                 self.pkey_cache[fpr] = (
@@ -32,6 +35,7 @@ class CachingKeyManager:
                 #        searches?
                 certs = list(set(self.keys.find_certs(fpr)))
                 if len(certs) == 1:
+                    logging.debug('Cached certificate for %s' % fpr)
                     self.cert_cache[fpr] = certs[0]
             else:
                 self.cert_cache[fpr] = self.keys.get_cert(fpr)

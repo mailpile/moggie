@@ -1,5 +1,4 @@
 # A module for accessing GnuPG keyrings
-
 from moggie.util import NotFoundError
 from moggie.util.safe_popen import ExternalProcRunner
 
