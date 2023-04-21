@@ -70,6 +70,11 @@ class CommandOpenPGP(CLICommand):
         (None, None, 'decrypting'),
         ('--decrypt-with=',     [], 'Keys or fingerprints to decrypt with'),
     ]
+    OPTIONS_AUTOCRYPT = [
+        (None, None, 'autocrypt'),
+        ('--autocrypt-with=',   [], 'Keys/fingerprints to share/decrypt with'),
+        ('--autocrypt=',        [], 'X=(N|auto|/path/to/autocrypt/DB)'),
+    ]
     OPTIONS = [OPTIONS_COMMON + OPTIONS_PGP_SETTINGS]
 
     HTML_SIG_WRAPPER = """\
@@ -163,6 +168,51 @@ signatures.
             return str(await sopc.encrypt(**encrypt_args), 'utf-8')
 
         return encryptor, 'OpenPGP', 'asc', 'application/pgp-encrypted'
+
+    @classmethod
+    async def get_autocrypt_header(cls, cli_obj, addr, prefer_encrypt=None):
+        try:
+            ac_key = cli_obj.options['--autocrypt-with='][-1]
+        except IndexError:
+            return None
+
+        if ac_key.startswith('mutual'):
+            ac_key = ac_key[8:]
+            if prefer_encrypt is None:
+                prefer_encrypt=True
+
+        if not ac_key.startswith('-----PGP'):
+            sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj)
+            for key in await keys.find_certs(ac_key):
+                ac_key = key
+                break
+
+        import pgpdump
+        try:
+            key_data = pgpdump.AsciiData(ac_key).data
+        except TypeError:
+            return None
+
+        import base64
+        key_data = str(base64.b64encode(key_data), 'utf-8').strip()
+        if len(key_data) > 10000:
+            # Key too large, Autocrypt specifies a 10KiB limit!
+            return None
+
+        attrs = [('addr', addr), ('keydata', key_data)]
+        if prefer_encrypt:
+            attrs[1:1] = [('prefer-encrypt', 'mutual')]
+
+        return ('autocrypt', attrs)
+
+    @classmethod
+    async def autocrypt(cls, cli_obj, sender, recipients):
+        if cli_obj.options['--encrypt-to=']:
+            return None
+
+        ac_config = cli_obj.options.get('--autocrypt=') or []
+        if (not ac_config or ac_config[-1] == 'N'):
+            return None
 
     @classmethod
     def get_signer(cls, cli_obj, html=False):

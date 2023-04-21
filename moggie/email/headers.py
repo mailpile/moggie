@@ -35,6 +35,8 @@ SINGLETONS = (
     'user-agent',
     'x-mailer')
 
+EMIT_MULTIPLE = ('HP-Obscured',)
+
 TEXT_HEADERS = ('subject',)
 
 ADDRESS_HEADERS = (
@@ -60,6 +62,7 @@ HEADERS_WITH_PARAMS = (
     'content-disposition')
 
 HEADERS_ONLY_PARAMS = (
+    'autocrypt',
     'dkim-signature',
     'domainkey-signature',
     'x-google-dkim-signature',
@@ -83,9 +86,12 @@ HEADER_ORDER = {
     #'resent-cc': 94,
     'in-reply-to': 99,
     'references': 99,
-    'list-id': 20,
-    'list-help': 20,
-    'message-id': 20,
+    'autocrypt': 20,
+    'hp-obscured': 20,
+    'hp-removed': 20,
+    'list-id': 25,
+    'list-help': 25,
+    'message-id': 25,
     'mime-version': 16,
     'content-id': 17,
     'content-length': 17,
@@ -94,6 +100,9 @@ HEADER_ORDER = {
     'content-transfer-encoding': 19}
 
 HEADER_CASEMAP = {
+    'autocrypt': 'Autocrypt',
+    'hp-removed': 'HP-Removed',
+    'hp-obscured': 'HP-Obscured',
     'message-id': 'Message-ID',
     'mime-version': 'MIME-Version',
     'content-type': 'Content-Type',
@@ -297,7 +306,7 @@ def parse_header(raw_header):
 
 def format_header(hname, data,
         as_timestamp=None, intfmt='%d', floatfmt='%.2f',
-        text_quote=rfc2074_quote, normalizer=None):
+        text_quote=rfc2074_quote, eol='\r\n', normalizer=None):
     hname = HEADER_CASEMAP.get(hname.lower(), hname)
     values = []
     sep = (
@@ -371,7 +380,11 @@ def format_header(hname, data,
 
         return ''.join(folds)
 
-    return _fold('%s: %s' % (hname, sep.join(values)))
+    if hname in EMIT_MULTIPLE:
+        return eol.join(
+            _fold('%s: %s' % (hname, value)) for value in values)
+    else:
+        return _fold('%s: %s' % (hname, sep.join(values)))
 
 
 def format_headers(header_dict, eol='\r\n'):
@@ -379,7 +392,7 @@ def format_headers(header_dict, eol='\r\n'):
     header_items.sort(key=lambda k:
         (HEADER_ORDER.get(k[0].lower(), 0), k[0], k[1]))
     return (
-        eol.join(format_header(k, v) for k, v in header_items)
+        eol.join(format_header(k, v, eol=eol) for k, v in header_items)
         + eol + eol)
 
 

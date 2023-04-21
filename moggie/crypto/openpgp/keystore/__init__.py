@@ -52,13 +52,16 @@ class OpenPGPKeyStore:
         raise NotImplementedError('find_certs not implemented by %s' % self)
         yield 'not-reached'
 
+    def get_keyinfo(self, key):
+        return get_keyinfo(key)
+
     def with_info(self, iterator):
         """
         Accepts an iterator which emits keys, generating tuples of
         (keyinfo, key).
         """
         for key in iterator:
-            yield (get_keyinfo(key), key)
+            yield (self.get_keyinfo(key), key)
 
     def list_certs(self, search_terms):
         """
@@ -149,6 +152,10 @@ class OpenPGPKeyStore:
     def _read_only_error(self, *args, **kwargs):
         raise PermissionError('%s is read-only' % self)
 
+    def process_email(self, parsed_msg):
+        raise NotImplementedError(
+            'process_email not implemented by %s' % self)
+
 
 class PrioritizedKeyStores(OpenPGPKeyStore):
     """
@@ -175,8 +182,14 @@ class PrioritizedKeyStores(OpenPGPKeyStore):
             else:
                 k, which = name, None
             cls = KEYSTORE_REGISTRY[k.lower()]
-            obj = cls(which=which, resources=self.resources)
+            obj = cls(which=which, **self.resources)
             self.add_keystore(name, obj)
+
+    def get_keystore(self, name):
+        for n, obj in self.keystores:
+            if n == name:
+                return obj
+        return None
 
     def add_keystore(self, name, obj, first=False):
         """
@@ -282,3 +295,10 @@ class PrioritizedKeyStores(OpenPGPKeyStore):
             return self._do('delete_private_key', private_key, 0, True)
         else:
             return self._choose(which).delete_private_key(private_key)
+
+    def process_email(self, parsed_msg, which=None):
+        if which == self.ALL:
+            return self._do('process_email', parsed_msg, 0, True)
+        else:
+            return self._choose(which).process_email(parsed_msg)
+

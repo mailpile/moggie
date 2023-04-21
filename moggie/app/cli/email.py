@@ -13,7 +13,6 @@
 #   - get send-via settings from config/context/...
 #
 #   - implement PGP/MIME encryption, autocrypt
-#   - implement PGP/MIME signatures
 #   - implement DKIM signatures
 #
 # FIXMEs for parsing:
@@ -283,7 +282,8 @@ class CommandEmail(CLICommand):
         ('--zip-password=', [], 'Password to use for ZIP encryption')]
         + CommandOpenPGP.OPTIONS_ENCRYPTING
         + CommandOpenPGP.OPTIONS_PGP_SETTINGS + [
-        ('--pgp-headers=',  [], 'X=(N|auto|sign|subject|all)')]]
+        ('--pgp-headers=',    [], 'X=(N|auto|sign|subject|all)')]
+        + CommandOpenPGP.OPTIONS_AUTOCRYPT]
 
     DEFAULT_QUOTING = ['html', 'trim']
     DEFAULT_FORWARDING = ['html', 'inline']
@@ -486,7 +486,7 @@ class CommandEmail(CLICommand):
         # FIXME: Sometimes obscure=['subject', 'to', 'cc', 'from'] ??
         """
         Copy and/or obscure specific headers for, as per:
-        https://www.ietf.org/archive/id/draft-autocrypt-lamps-protected-headers-02.html
+        https://datatracker.ietf.org/doc/draft-ietf-lamps-header-protection/
         """
         # Check user preferences
         prefs = self.options['--pgp-headers='][-1]
@@ -498,28 +498,38 @@ class CommandEmail(CLICommand):
             elif prefs == 'subject':
                 obscure = ['subject']
             elif prefs == 'all':
-                obscure = ['subject', 'to', 'cc', 'from']
+                obscure = [
+                    h for h in self.headers
+                    if h[:8] not in ('mime-ver', 'content-', 'date')]
 
         outer_headers = copy.copy(self.headers)
         obscured = []
+        removed = []
 
         if isinstance(obscure, list):
             # FIXME: This needs work and research
             for h in obscure:
                 obscured.append(h)
                 if h == 'subject':
-                    self.headers['subject'] = ['...']
+                    self.headers['subject'] = ['[...]']
                 elif h == 'to':
                     self.headers['to'] = ['undisclosed-recipients:;']
                 elif h == 'from':
                     self.headers['from'] = ['undisclosed-sender:;']
+                elif h == 'message-id':
+                    self.headers['message-id'] = _make_message_id()
                 elif h in self.headers:
+                    removed.append(h)
                     del self.headers[h]
         elif obscure:
             obscured.append('subject')
             self.headers['subject'] = ['...']
 
+        # FIXME: That draft also suggests writing directly into the message
+        #        text/plain or text/html parts, instead of adding a part.
+        #        Do we want to move to that?
         if obscured:
+            from moggie.email.headers import HEADER_ORDER, HEADER_CASEMAP
             from moggie.email.headers import format_header
 
             # This generates the legacy display part, which is for human
@@ -534,20 +544,42 @@ class CommandEmail(CLICommand):
                     return '%s <%s>' % (ah.fn, ah.address)
                 except AttributeError:
                     return ah.normalized()
-            for h in (oh for oh in outer_headers if oh in obscured):
+            displaying = [oh for oh in outer_headers if oh in obscured]
+            displaying.sort(key=lambda k: (HEADER_ORDER.get(k.lower(), 0), k))
+            for h in displaying:
                 display.append(format_header(h, outer_headers[h],
                     text_quote=null_quote,
                     normalizer=null_norm))
 
+            display = '\n'.join(display) + '\n'
+            display_html = (
+                '<div class="header-protection-legacy-display"><pre>\n' +
+                display.replace('<', '&lt;').replace('>', '&gt;') +
+                '</pre></div>')
+
+            # FIXME: We should be editing the text/plain and text/html
+            #        parts here, not adding a new layer and new parts.
+            #        This will take some refactoring.
             headers, body = self.multi_part('mixed', [
-                self.text_part('\n'.join(display) + '\n', 'text/plain',
-                    ctattrs=[('protected-headers', 'v1')]),
+                self.text_part(display, 'text/plain',
+                               ctattrs=[('hp-legacy-display', '1')]),
                 (headers, body)])
 
+        headers['content-type'].append(('protected-headers', 'v1'))
         for h in outer_headers:
-            if (h not in ('mime-version',)
+            # FIXME: Is omitting Autocrypt the right thing here?
+            if (h not in ('mime-version', 'autocrypt')
                    and not h.startswith('content-')):
                 headers[h] = outer_headers[h]
+
+        if removed:
+            headers['HP-Removed'] = [', '.join(
+                HEADER_CASEMAP.get(h, h) for h in removed)]
+        if obscured:
+            headers['HP-Obscured'] = []
+            for hdr in (o for o in obscured if o not in removed):
+                headers['HP-Obscured'].append(
+                    format_header(hdr, self.headers[hdr]))
 
         return headers, body
 
@@ -570,6 +602,10 @@ class CommandEmail(CLICommand):
                 headers, ciphertext, openpgp=False, dkim=True)
 
         headers, body = self.protect_headers(headers, body, obscure=True)
+
+        # FIXME: If this is a draft or first-in-thread, add Autocrypt Gossip
+        #        headers here?
+
         ciphertext = await encryptor(format_headers(headers) + body)
         fn = '%s-encrypted-message.%s' % (how, ext)
         parts = [
@@ -886,6 +922,11 @@ class CommandEmail(CLICommand):
             raise Nonsense('There must be exactly one From address!')
         if len(self.headers.get('date', [])) > 1:
             raise Nonsense('There can only be one Date!')
+
+        ac_header = await CommandOpenPGP.get_autocrypt_header(
+            self, self.headers['from'][0].address)
+        if ac_header is not None:
+            self.headers[ac_header[0]] = ac_header[1]
 
         msg_opt = self.options['--message=']
         text_opt = self.options['--text=']

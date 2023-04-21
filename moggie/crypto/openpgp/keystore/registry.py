@@ -1,10 +1,10 @@
 # Which keystores do we actually support?
 
 ## These are the default without networking enabled
-DEFAULT_LOCAL_KEYSTORES = 'GnuPG:shared, email'
+DEFAULT_LOCAL_KEYSTORES = 'GnuPG:shared, autocrypt, email'
 
 ## These are the defaults with networking
-DEFAULT_KEYSTORES = 'GnuPG:shared, email, WKD, KOO'
+DEFAULT_KEYSTORES = 'GnuPG:shared, autocrypt, email, WKD, KOO'
 
 
 ##[ Stubs and registry for lazy-loading ]####################################
@@ -24,6 +24,11 @@ def _EmailSearchKeyStore(*args, **kwargs):
     return EmailSearchKeyStore(*args, **kwargs)
 
 
+def _AutocryptKeyStore(*args, **kwargs):
+    from .autocrypt import AutocryptKeyStore
+    return AutocryptKeyStore(*args, **kwargs)
+
+
 def _KooKeyStore(*args, **kwargs):
     from .koo import KooKeyStore
     return KooKeyStore(*args, **kwargs)
@@ -36,6 +41,7 @@ def _WKDKeyStore(*args, **kwargs):
 
 KEYSTORE_REGISTRY = {
     'demo': _DemoKeyStore,
+    'autocrypt': _AutocryptKeyStore,
     'gnupg': _GnuPGKeyStore,
     'email': _EmailSearchKeyStore,
     'koo':   _KooKeyStore,

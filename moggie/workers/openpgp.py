@@ -27,6 +27,7 @@
 # sequence. Or not even that. Just use same search engine code and the same
 # namespaces. We have options!
 #
+import base64
 import json
 import logging
 import time
@@ -37,6 +38,7 @@ from ..util.dumbcode import *
 from ..crypto.openpgp.managers import CachingKeyManager
 from ..crypto.openpgp.keystore import PrioritizedKeyStores, DEFAULT_KEYSTORES
 from ..crypto.openpgp.sop import GetSOPClient, SOPError
+from ..crypto.aes_utils import make_aes_key
 
 from .base import BaseWorker
 
@@ -47,7 +49,7 @@ class OpenPGPWorker(BaseWorker):
     PEEK_BYTES = 8192
     BLOCK = 8192
 
-    def __init__(self, status_dir, backend,
+    def __init__(self, status_dir, data_directory, encryption_keys,
             name=KIND, notify=None, log_level=logging.ERROR,
             keystore_config=DEFAULT_KEYSTORES,
             sop_config=None,
@@ -58,11 +60,23 @@ class OpenPGPWorker(BaseWorker):
         BaseWorker.__init__(self, status_dir,
             name=name, notify=notify, log_level=log_level)
 
+        # We derive our AES key(s) from those provided, instead of using
+        # directly. This reduces the odds of collisions (IV reuse etc.)
+        # between different storage files using the same master key.
+        if encryption_keys:
+            nbytes = bytes(name, 'utf-8')
+            encryption_keys = [
+                base64.b64encode(make_aes_key(nbytes, key)).strip()
+                for key in encryption_keys]
+
         # Directly expose the KeyStore methods
         self.keystore = PrioritizedKeyStores(keystore_config,
-            search=search,
+            encryption_keys=encryption_keys,
+            data_directory=data_directory,
+            file_namespace=name,
             tag_namespace=tag_namespace,
-            metadata=metadata)
+            metadata=metadata,
+            search=search)
         self.expose_object(self.keystore)
 
         # Directly expose the SOP methods, but filter the arguments to
@@ -70,7 +84,7 @@ class OpenPGPWorker(BaseWorker):
         self.sop = GetSOPClient(sop_config)
         self.key_cache = CachingKeyManager(self.sop, self.keystore)
         self.expose_object(self.sop,
-           arg_filter=self.key_cache.filter_key_args)
+            arg_filter=self.key_cache.filter_key_args)
 
         self.functions.update({
             b'drop_caches':  (True, self.api_drop_caches)})
@@ -85,8 +99,12 @@ class OpenPGPWorker(BaseWorker):
         return self.drop_caches(remote=False)
 
     def _main_httpd_loop(self):
-        # Setup our storage?
-        return super()._main_httpd_loop()
+        autocrypt = self.keystore.get_keystore('autocrypt')
+        if autocrypt:
+            autocrypt.db.start_background_saver()
+        super()._main_httpd_loop()
+        if autocrypt:
+            autocrypt.db.close()
 
 
 if __name__ == '__main__':

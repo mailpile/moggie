@@ -95,10 +95,24 @@ FN='cur/00000010.mailpile:2,S'
     --html=N \
     --from='Alice Lövelace <alice@openpgp.example>' \
     --to='Alice Lovelace <alice@openpgp.example>' \
+    --cc='Alice Two <alice2@openpgp.example>' \
     --pgp-key-sources=demo --pgp-sop=$SOP \
     --pgp-headers=all \
     --sign-with=PGP:@PKEY:alice@openpgp.example \
     --encrypt=all \
     --encrypt-to=PGP:@CERT:alice@openpgp.example \
     2>/dev/null |sed -e 's/\r//' >$FN && ls -l "$FN"
+
+FN='cur/00000011.mailpile:2,S'
+[ -e "$FN" ] || moggie email --subject='Signed e-mail w/ Autocrypt' \
+    --message='Thís ís a test, I hope you lææææk it' \
+    --html=N \
+    --from='Alice Lövelace <alice@openpgp.example>' \
+    --to='Alice Lovelace <alice@openpgp.example>' \
+    --pgp-key-sources=demo --pgp-sop=$SOP \
+    --pgp-headers=sign \
+    --sign-with=PGP:@PKEY:alice@openpgp.example \
+    --autocrypt-with=mutual:alice@openpgp.example \
+    2>/dev/null |sed -e 's/\r//' >$FN && ls -l "$FN"
+
 

@@ -122,6 +122,7 @@ class KeyInfo(RestrictedDict):
         'key_source':   (str, None),
         'uids':         (list, None),
         'subkeys':      (list, None),
+        'autocrypt':    (dict, None),
         'is_subkey':    (bool, False),
         'have_secret':  (bool, False),
         'on_keychain':  (bool, False),
