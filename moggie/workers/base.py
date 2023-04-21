@@ -85,9 +85,10 @@ class BaseWorker(Process):
             'requests_ignored': 0,
             'requests_failed': 0}
         self.functions = {
-            b'quit':   (True,  self.api_quit),
-            b'noop':   (True,  self.api_noop),
-            b'status': (False, self.api_status)}
+            b'quit':      (True,  self.api_quit),
+            b'noop':      (True,  self.api_noop),
+            b'functions': (True,  self.api_functions),
+            b'status':    (False, self.api_status)}
 
         self._log_level = log_level
         self._notify = notify
@@ -295,6 +296,9 @@ class BaseWorker(Process):
 
     def api_noop(self, *args, **kwargs):
         self.reply_json({'noop': True})
+
+    def api_functions(self, *args, **kwargs):
+        self.reply_json([str(fn, 'utf-8') for fn in self.functions])
 
     def api_status(self, *args, **kwargs):
         if args and args[0] == 'as.text':
