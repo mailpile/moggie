@@ -23,6 +23,7 @@ from __future__ import print_function
 # convenience functions and properties to make piping code more readable.
 #
 import os
+import logging
 import subprocess
 import sys
 import threading
@@ -256,7 +257,7 @@ class ExternalProcRunner:
 
     def popen(self, *arguments, binary=None, keep_open=[]):
         command = [binary or self.binary] + list(arguments)
-        #print('RUNNING: %s, keep_open=%s' % (command, keep_open))
+        logging.debug('%s.popen: %s' % (self, command))
         return Safe_Popen(command,
             stdin=PIPE, stdout=PIPE, stderr=PIPE,
             keep_open=keep_open)

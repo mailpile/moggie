@@ -42,15 +42,22 @@ def dumb_encode_bin(v,
 
     if hasattr(v, 'dumb_encode_bin'): return v.dumb_encode_bin()
 
-    if isinstance(v, (dict, list, set, tuple)):
-        if isinstance(v, set):
-            pfx, v = b's', list(v)
-        elif isinstance(v, tuple):
-            pfx, v = b't', list(v)
-        else:
-            pfx = b'j'
-        j = json.dumps(v, separators=(',',':'), ensure_ascii=False)
-        return (pfx + j.encode('utf-8'))
+    if isinstance(v, (list, tuple, set)):
+        items = [
+            b'L' if isinstance(v, list) else (
+            b'T' if isinstance(v, tuple) else b'S')]
+        for elem in v:
+            e = dumb_encode_bin(elem)
+            items.append(b'%x,%s' % (len(e), e))
+        return b''.join(items)
+
+    if isinstance(v, dict):
+        items = [b'D']
+        for key, val in v.items():
+            key = dumb_encode_bin(key)
+            val = dumb_encode_bin(val)
+            items.append(b'%x,%x,%s%s' % (len(key), len(val), key, val))
+        return b''.join(items)
 
     raise ValueError('Unsupported type: <%s> = %s' % (type(v), v))
 
@@ -87,17 +94,47 @@ def dumb_encode_asc(v,
 
     if hasattr(v, 'dumb_encode_asc'): return v.dumb_encode_asc()
 
-    if isinstance(v, (list, dict, set, tuple)):
-        if isinstance(v, set):
-            pfx, v = 'S', list(v)
-        elif isinstance(v, tuple):
-            pfx, v = 'T', list(v)
-        else:
-            pfx = 'J'
-        j = json.dumps(v, separators=(',',':'), ensure_ascii=False)
-        return (pfx + quote(j, safe='').replace('.', '%2E'))
+    if isinstance(v, (list, tuple, set)):
+        items = [
+            'L' if isinstance(v, list) else (
+            'T' if isinstance(v, tuple) else 'S')]
+        for elem in v:
+            e = dumb_encode_asc(elem)
+            items.append('%x,%s' % (len(e), e))
+        return ''.join(items)
+
+    if isinstance(v, dict):
+        items = ['D']
+        for key, val in v.items():
+            key = dumb_encode_asc(key)
+            val = dumb_encode_asc(val)
+            items.append('%x,%x,%s%s' % (len(key), len(val), key, val))
+        return ''.join(items)
 
     raise ValueError('Unsupported type: <%s> = %s' % (type(v), v))
+
+
+def dumb_decode_dict(v):
+    dct = {}
+    while v:
+        l1, l2, v = v.split(',', 2)
+        l1 = int(l1, 16)
+        l2 = int(l2, 16)
+        key = dumb_decode(v[:l1])
+        val = dumb_decode(v[l1:l1+l2])
+        dct[key] = val
+        v = v[l1+l2:]
+    return dct
+
+
+def dumb_decode_list(v):
+    lst = []
+    while v:
+        l1, v = v.split(',', 1)
+        l1 = int(l1, 16)
+        lst.append(dumb_decode(v[:l1]))
+        v = v[l1:]
+    return lst
 
 
 def dumb_decode(v,
@@ -128,10 +165,14 @@ def dumb_decode(v,
 
     if v[:1] in ('j', b'j'): return json.loads(v[1:])
     if v[:1] in ('J', b'J'): return json.loads(unquote_to_bytes(v[1:]))
-    if v[:1] in ('s', b's'): return set(json.loads(v[1:]))
-    if v[:1] in ('S', b'S'): return set(json.loads(unquote_to_bytes(v[1:])))
-    if v[:1] in ('t', b't'): return tuple(json.loads(v[1:]))
-    if v[:1] in ('T', b'T'): return tuple(json.loads(unquote_to_bytes(v[1:])))
+    if v[:1] == 'D': return dumb_decode_dict(v[1:])
+    if v[:1] == b'D': return dumb_decode_dict(str(v[1:], 'latin-1'))
+    if v[:1] == 'L': return dumb_decode_list(v[1:])
+    if v[:1] == b'L': return dumb_decode_list(str(v[1:], 'latin-1'))
+    if v[:1] == 'S': return set(dumb_decode_list(v[1:]))
+    if v[:1] == b'S': return set(dumb_decode_list(str(v[1:], 'latin-1')))
+    if v[:1] == 'T': return tuple(dumb_decode_list(v[1:]))
+    if v[:1] == b'T': return tuple(dumb_decode_list(str(v[1:], 'latin-1')))
 
     for ms, mb, decomp in ([('Z', b'Z', zlib.decompress)] + decomp_asc):
         if v[:1] in (ms, mb):
@@ -175,11 +216,14 @@ if __name__ == '__main__':
 
     assert(dumb_encode_bin(bytearray(b'1')) == b'b1')
     assert(dumb_encode_bin(None)            == b'-')
-    assert(dumb_encode_bin({'hi':2})        == b'j{"hi":2}')
+    assert(dumb_encode_bin({'hi':2})        == b'D3,2,uhid2')
 
     assert(dumb_encode_asc(bytearray(b'1')) == 'BMQ==')
     assert(dumb_encode_asc(None)            == '-')
-    assert(dumb_encode_asc({'hi':2})        == 'J%7B%22hi%22%3A2%7D')
+    assert(dumb_encode_asc({'hi':2})        == 'D3,2,Uhid2')
+
+    assert(dumb_decode(dumb_encode_bin({b'hi':[3,4]})) == {b'hi':[3,4]})
+    assert(dumb_decode(dumb_encode_asc({b'hi':[3,4]})) == {b'hi':[3,4]})
 
     for i,o in (
         (b'b123\0', b'123\0'),
