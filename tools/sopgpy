@@ -109,7 +109,6 @@ class SOPGPy(sop.StatelessOpenPGP):
         import sys
         keys:Dict[str,pgpy.PGPKey] = {}
         for handle, data in vals.items():
-            sys.stderr.write('data=%s\n' % data)
             key:pgpy.PGPKey
             key, _  = pgpy.PGPKey.from_blob(data)
             if key.is_public:
