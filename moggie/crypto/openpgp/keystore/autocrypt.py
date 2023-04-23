@@ -9,6 +9,8 @@ from ..keystore import OpenPGPKeyStore
 
 
 class AutocryptKeyStore(OpenPGPKeyStore):
+    NAME = 'autocrypt'
+
     def __init__(self, **kwargs):
         self.min_count = kwargs.get('min_count')
         for kk in ('min_count',):
@@ -16,7 +18,7 @@ class AutocryptKeyStore(OpenPGPKeyStore):
                 del kwargs[kk]
 
         OpenPGPKeyStore.__init__(self, **kwargs)
-        self.open_db()
+        self.db = None
 
     COLUMNS = (
         'addr', 'last_seen', 'prefer_encrypt',
@@ -25,6 +27,11 @@ class AutocryptKeyStore(OpenPGPKeyStore):
         'public_key_fingerprint', 'public_key', 'public_key_source',
         'gossip_timestamp',
         'gossip_key_fingerprint', 'gossip_key', 'gossip_key_source')
+
+    def execute(self, *args):
+        if self.db is None:
+            self.open_db()
+        return self.db.execute(*args)
 
     def open_db(self):
         if self.which in (None, ''):
@@ -75,13 +82,13 @@ class AutocryptKeyStore(OpenPGPKeyStore):
     def get_cert(self, fingerprint):
         self.key_cache = {}
         for which in ('public_key_fingerprint', 'gossip_key_fingerprint'):
-            for row in self.db.execute("""\
+            for row in self.execute("""\
                     SELECT public_key, %s
                       FROM autocrypt_peers
                      WHERE %s = ?""" % (', '.join(self.COLUMNS), which),
                     (fingerprint,)):
                 self._cache_row(row[1:])
-                return base64.b64decode(row[0])
+                return str(base64.b64decode(row[0]), 'utf-8')
         raise NotFoundError(fingerprint)
 
     def _select(self, what, search_terms, min_count):
@@ -102,7 +109,7 @@ class AutocryptKeyStore(OpenPGPKeyStore):
         if min_count is not None:
             SQL += " AND autocrypt_count > %d" % int(min_count)
 
-        return self.db.execute(SQL, (search_terms,))
+        return self.execute(SQL, (search_terms,))
 
     def find_certs(self, search_terms, min_count=None):
         self.key_cache = {}
@@ -115,8 +122,7 @@ class AutocryptKeyStore(OpenPGPKeyStore):
                 yield base64.b64decode(row_dict['gossip_key'])
 
     def get_keyinfo(self, key):
-        from ..keyinfo import get_keyinfo
-        key_info = get_keyinfo(key)[0]
+        key_info = super().get_keyinfo(key)
         key_info['autocrypt'] = ac = self.key_cache.get(key_info['fingerprint'])
 
         if ac.get('public_key') or ac.get('gossip_key'):
@@ -180,7 +186,7 @@ class AutocryptKeyStore(OpenPGPKeyStore):
                 fingerprint = key_info[0]['fingerprint']
 
                 if current:
-                    self.db.execute("""\
+                    self.execute("""\
                         UPDATE autocrypt_peers
                            SET autocrypt_count = autocrypt_count + 1,
                                autocrypt_timestamp = ?,
@@ -198,7 +204,7 @@ class AutocryptKeyStore(OpenPGPKeyStore):
                              ac_header.get('prefer-encrypt', None),
                              peer_addr))
                 else:
-                    self.db.execute("""\
+                    self.execute("""\
                         INSERT INTO autocrypt_peers(
                             addr, prefer_encrypt,
                             autocrypt_timestamp, autocrypt_count, last_seen,
@@ -228,7 +234,7 @@ class AutocryptKeyStore(OpenPGPKeyStore):
         if (delete
                 and current_ac['autocrypt_count'] < 1
                 and current_ac['autocrypt_timestamp'] < exp):
-            self.db.execute("""\
+            self.execute("""\
                 DELETE FROM autocrypt_peers
                       WHERE addr = ? """, (peer_addr,))
             return None  # No longer in database!
@@ -236,7 +242,7 @@ class AutocryptKeyStore(OpenPGPKeyStore):
         # If message is new, update our last_seen and decrement
         # autocrypt_count.
         if effective_date > current_ac['last_seen']:
-            self.db.execute("""\
+            self.execute("""\
                 UPDATE autocrypt_peers
                    SET autocrypt_count = autocrypt_count - 1,
                        last_seen = ?

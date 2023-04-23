@@ -6,6 +6,8 @@ from ..keystore import OpenPGPKeyStore
 
 
 class GnuPGKeyStore(OpenPGPKeyStore, ExternalProcRunner):
+    NAME = 'gnupg'
+
     def __init__(self, binary=None, **kwargs):
         if binary is None:
             from moggie.platforms import DetectBinaries
@@ -23,7 +25,7 @@ class GnuPGKeyStore(OpenPGPKeyStore, ExternalProcRunner):
             '--armor', '--export', fingerprint)
         if (rc != 0) or not so.startswith(b'-----BEGIN PGP PUB'):
             raise NotFoundError(fingerprint)
-        return so
+        return str(so, 'utf-8')
 
     def find_certs(self, search_terms):
         for info in self.list_certs(search_terms):
@@ -40,9 +42,13 @@ class GnuPGKeyStore(OpenPGPKeyStore, ExternalProcRunner):
         if (rc != 0) or not so.strip():
             return
         certs = {}
+        so = str(so, 'utf-8')
         for fpr, mbox in (fpr_mbox.split() for fpr_mbox in so.splitlines()):
-            certs[fpr] = certs.get(fpr, {'fingerprint': fpr, 'uids': {}})
-            certs[fpr]['uids'][mbox] = {}
+            certs[fpr] = certs.get(fpr, {
+                'key_source': self.NAME,
+                'fingerprint': fpr,
+                'uids': []})
+            certs[fpr]['uids'].append({'email': mbox})
         for fpr, info in certs.items():
             yield info
 
@@ -73,8 +79,11 @@ class GnuPGKeyStore(OpenPGPKeyStore, ExternalProcRunner):
             return
         certs = {}
         for fpr, mbox in (fpr_mbox.split() for fpr_mbox in so.splitlines()):
-            certs[fpr] = certs.get(fpr, {'fingerprint': fpr, 'uids': {}})
-            certs[fpr]['uids'][mbox] = {}
+            certs[fpr] = certs.get(fpr, {
+                'key_source': self.NAME,
+                'fingerprint': fpr,
+                'uids': []})
+            certs[fpr]['uids'].append({'email': mbox})
         for fpr, info in certs.items():
             yield info
 
@@ -85,7 +94,7 @@ class GnuPGKeyStore(OpenPGPKeyStore, ExternalProcRunner):
         rc, so, se = self.run(*gnupg_args, input_data=pw)
         if (rc != 0) or not so.startswith(b'-----BEGIN PGP PRIVATE'):
             raise NotFoundError(fingerprint)
-        return so
+        return str(so, 'utf-8')
 
 
 if __name__ == '__main__':

@@ -9,6 +9,7 @@ from .registry import DEFAULT_LOCAL_KEYSTORES, DEFAULT_KEYSTORES
 
 class OpenPGPKeyStore:
     ALL = '*'
+    NAME = 'unknown'
 
     def __init__(self, which=None, read_only=False, **kwargs):
         self.which = which
@@ -53,7 +54,9 @@ class OpenPGPKeyStore:
         yield 'not-reached'
 
     def get_keyinfo(self, key):
-        return get_keyinfo(key)
+        info = get_keyinfo(key)[0]
+        info['key_source'] = self.NAME
+        return info
 
     def with_info(self, iterator):
         """
@@ -172,6 +175,8 @@ class PrioritizedKeyStores(OpenPGPKeyStore):
     NotImpementedErrors are silently ignored in most cases, so not all
     keystores have to impement all methods.
     """
+    NAME = 'keystores'
+
     def __init__(self, config_line, progress_callback=None, **kwargs):
         super().__init__(**kwargs)
         self.progress_cb = progress_callback or (lambda msg: None)

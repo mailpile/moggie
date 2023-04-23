@@ -5,11 +5,13 @@ from ..keystore import OpenPGPKeyStore
 
 
 class DemoKeyStore(OpenPGPKeyStore):
+    NAME = 'demo'
+
     def __init__(self, binary=None, **kwargs):
         OpenPGPKeyStore.__init__(self, **kwargs)
 
     def get_cert(self, fingerprint):
-        return b"""\
+        return """\
 -----BEGIN PGP PUBLIC KEY BLOCK-----
 Comment: Alice's OpenPGP certificate
 Comment: https://www.ietf.org/id/draft-bre-openpgp-samples-01.html
@@ -34,7 +36,7 @@ DAAKCRDyMVUMT0fjjlnQAQDFHUs6TIcxrNTtEZFjUFm1M0PJ1Dng/cDW4xN80fsn
         yield self.get_private_key('Alice')
 
     def get_private_key(self, fingerprint, passwords={}):
-        return b"""\
+        return """\
 -----BEGIN PGP PRIVATE KEY BLOCK-----
 Comment: Alice's OpenPGP Transferable Secret Key
 Comment: https://www.ietf.org/id/draft-bre-openpgp-samples-01.html

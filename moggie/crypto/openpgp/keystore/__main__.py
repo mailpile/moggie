@@ -10,14 +10,16 @@ if __name__ == '__main__':
 
     with_network = ('--with-network' in sys.argv)
 
+    TEST_ID = 'mock-test-key-123412341234'
     class MockOpenPGPKeyStore(OpenPGPKeyStore):
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
-            c = b'-----BEGIN PGP PUBLIC KEY-----\n'
-            p = b'-----BEGIN PGP PRIVATE KEY BLOCK-----\n'
-            self.c = {'test': c, self._fpr(c): c}
-            self.p = {'test': p, self._fpr(p): p}
+            c = '-----BEGIN PGP PUBLIC KEY-----\n'
+            p = '-----BEGIN PGP PRIVATE KEY BLOCK-----\n'
+            self.c = {TEST_ID: c, self._fpr(c): c}
+            self.p = {TEST_ID: p, self._fpr(p): p}
         def _fpr(self, data):
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
             return hashlib.sha1(data).hexdigest()
         def get_cert(self, fpr):
             if fpr not in self.c:
@@ -32,7 +34,7 @@ if __name__ == '__main__':
                 yield self.get_cert(search_terms)
             except NotFoundError:
                 pass
-        def find_private_keys(self, search_terms):
+        def find_private_keys(self, search_terms, passwords={}):
             try:
                 yield self.get_private_key(search_terms)
             except NotFoundError:
@@ -81,6 +83,9 @@ if __name__ == '__main__':
         progress = []
         cks = PrioritizedKeyStores(
             DEFAULT_KEYSTORES if with_network else DEFAULT_LOCAL_KEYSTORES,
+            data_directory='/tmp',
+            file_namespace='testing',
+            encryption_keys=[b'1234'],
             progress_callback=progress.append,
             read_only=False)
 
@@ -91,14 +96,14 @@ if __name__ == '__main__':
         mks = MockOpenPGPKeyStore()
         cks.add_keystore('testing', mks)
 
-        tcert = mks.get_cert('test')
+        tcert = mks.get_cert(TEST_ID)
         tfpr = mks._fpr(tcert)
-        assert(tcert.startswith(b'-----BEGIN'))
-        assert((cks.get_private_key('test')).startswith(b'-----BEGIN'))
+        assert(tcert.startswith('-----BEGIN'))
+        assert((cks.get_private_key(TEST_ID)).startswith('-----BEGIN'))
 
         assert(1 == len(list(cks.find_certs(tfpr))))
         assert(0 == len(list(cks.find_certs('test-not-found'))))
-        assert(1 <= len(list(cks.find_private_keys('test'))))
+        assert(1 <= len(list(cks.find_private_keys(TEST_ID))))
         assert(0 == len(list(cks.find_private_keys('test-not-found'))))
 
         try:

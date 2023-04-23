@@ -6,6 +6,8 @@ from ..keystore import OpenPGPKeyStore
 
 
 class KooKeyStore(OpenPGPKeyStore):
+    NAME = 'koo'
+
     def get_cert(self, fingerprint):
         raise NotFoundError()
 

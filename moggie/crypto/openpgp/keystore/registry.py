@@ -1,10 +1,8 @@
-# Which keystores do we actually support?
-
 ## These are the default without networking enabled
 DEFAULT_LOCAL_KEYSTORES = 'GnuPG:shared, autocrypt, email'
 
 ## These are the defaults with networking
-DEFAULT_KEYSTORES = 'GnuPG:shared, autocrypt, email, WKD, KOO'
+DEFAULT_KEYSTORES = DEFAULT_LOCAL_KEYSTORES + ', WKD, KOO'
 
 
 ##[ Stubs and registry for lazy-loading ]####################################
@@ -46,8 +44,3 @@ KEYSTORE_REGISTRY = {
     'email': _EmailSearchKeyStore,
     'koo':   _KooKeyStore,
     'wkd':   _WKDKeyStore}
-
-# FIXME:
-#   - It would be nice to be able to parse Thunderbird's keychain?
-#   - Use the search engine to find keys in mail
-#   - Autocrypt!

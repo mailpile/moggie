@@ -6,6 +6,8 @@ from ..keystore import OpenPGPKeyStore
 
 
 class EmailSearchKeyStore(OpenPGPKeyStore):
+    NAME = 'email'
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.tag_namespace = self.resources.get('tag_namespace')

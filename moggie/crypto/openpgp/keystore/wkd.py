@@ -6,6 +6,8 @@ from ..keystore import OpenPGPKeyStore
 
 
 class WKDKeyStore(OpenPGPKeyStore):
+    NAME = 'wkd'
+
     def find_certs(self, search_terms):
         raise NotImplementedError()
         yield None
