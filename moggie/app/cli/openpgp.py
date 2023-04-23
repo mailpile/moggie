@@ -79,7 +79,7 @@ class CommandOpenPGP(CLICommand):
     OPTIONS_COMMON = [
         (None, None, 'moggie'),
         ('--context=', ['default'], 'Context to use for default settings'),
-        ('--format=',   ['rfc822'], 'X=(rfc822*|text|json|sexp)'),
+        ('--format=',     ['text'], 'X=(text|json|sexp)'),
         ('--stdin=',            [], None), # Allow lots to send stdin (internal)
     ]
     OPTIONS_PGP_SETTINGS = [
@@ -123,6 +123,7 @@ signatures.
 </body></html>"""
 
     def __init__(self, *args, **kwargs):
+        self.args = []
         self.sign_with = []
         self.verify_from = []
         self.encrypt_to = []
@@ -273,7 +274,7 @@ signatures.
         return signer, 'OpenPGP', ext, 'application/pgp-signature'
 
     @classmethod
-    def get_async_sop_and_keystore(cls, cli_obj):
+    def get_async_sop_and_keystore(cls, cli_obj, connect=False):
         sop_cfg = (cli_obj.options.get('--pgp-sop=') or [None])[-1]
         keys_cfg = (cli_obj.options.get('--pgp-key-sources=') or [None])[-1]
         if sop_cfg or keys_cfg:
@@ -289,7 +290,9 @@ signatures.
                 AsyncProxyObject(sc, arg_filter=km.filter_key_args),
                 AsyncProxyObject(ks))
 
-        elif cli_obj.worker:
+        elif cli_obj.worker or connect:
+            if not cli_obj.worker:
+                 cli_obj.connect()
             we = WorkerEncryptionWrapper(cli_obj)
             return we, we
 
@@ -306,8 +309,10 @@ signatures.
         args = self.strip_options(args)
 
         CommandOpenPGP.configure_keys(self)
+        CommandOpenPGP.configure_passwords(self)
 
-        return self.configure2(args)
+        self.args = self.configure2(args)
+        return self.args
 
     def configure2(self, args):
         return args
@@ -328,6 +333,19 @@ signatures.
                             self, v, priv):
                         target.append(key)
 
+    def print_results_as_text(self, results):
+        results = json.dumps(results, indent=2)
+        return self.print(results)
+
+    def print_results(self, results):
+        fmt = self.options['--format='][-1]
+        if fmt == 'json':
+            self.print_json(results)
+        if fmt == 'sexp':
+            self.print_sexp(results)
+        elif fmt == 'text':
+            self.print_results_as_text(results)
+
     async def run(self):
         await self.process_key_args()
 
@@ -337,25 +355,99 @@ signatures.
 class CommandPGPGetKeys(CommandOpenPGP):
     """moggie pgp-get-keys [<options>] <search-terms|fingerprint>
 
+    Search for private keys or public certificates.
+
     %(OPTIONS)s
     """
     NAME = 'pgp-get-keys'
+    OPTIONS = [
+            CommandOpenPGP.OPTIONS_COMMON +
+            CommandOpenPGP.OPTIONS_PGP_SETTINGS
+        ]+[[
+            ('--keystore=',       [], 'Target a specific keystore'),
+            ('--private=',     ['N'], 'X=(Y|N*), search for private keys'),
+            ('--timeout=',        [], 'X=<seconds>, set a deadline'),
+            ('--max-results=',    [], 'X=<limit>, limit number of results'),
+            ('--with-key=',    ['Y'], 'X=(Y*|N), include key material'),
+            ('--with-info=',   ['Y'], 'X=(Y*|N), include metadata')]]
+
+    INFO_FMT = '-----BEGIN PGP INFO----\n\n-----END PGP INFO-----\n'
+
+    def print_results_as_text(self, results):
+        for fpr, r in results.items():
+            info = ''
+            if r['info']:
+                # FIXME: This is lame
+                r['info']['uids'] = ', '.join(
+                    uid['email'] for uid in r['info']['uids'])
+                info = '\n'.join(
+                    '%s: %s' % (k, v) for k, v in r['info'].items()
+                    ) + '\n'
+            else:
+                info = ''
+            key = r.get('key', self.INFO_FMT).replace('\r', '')
+            pre, post = key.split('\n\n', 1)
+            self.print(pre + '\n' + info + '\n' + post)
+
+    async def run(self):
+        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
+
+        kwa = {}
+        if self.options['--keystore=']:
+            kwa['which'] = self.options['--keystore='][-1]
+        if self.options['--timeout=']:
+            deadline = int(self.options['--timeout='][-1])
+            kwa['deadline'] = int(time.time() + 0.5 + deadline)
+        if self.options['--max-results=']:
+            kwa['max_results'] = int(self.options['--max-results='][-1])
+
+        with_info = self.options['--with-info='][-1] in ('Y', 'y', '1')
+        with_keys = self.options['--with-key='][-1] in ('Y', 'y', '1')
+
+        if self.options['--private='][-1] in ('Y', 'y', '1'):
+            if with_keys:
+                logging.error('FIXME: Require elevated privileges!')
+            if self.options['--pgp-password=']:
+                kwa['passwords'] = dict(
+                    enumerate(self.options['--pgp-password=']))
+            list_keys = keys.list_private_keys
+            get_key = keys.get_private_key
+        else:
+            list_keys = keys.list_certs
+            get_key = keys.get_cert
+
+        results = {}
+        for info in await list_keys(' '.join(self.args), **kwa):
+             fpr = info['fingerprint']
+             results[fpr] = r = {}
+             if with_info:
+                 r['info'] = info
+             if with_keys:
+                 r['key'] = await get_key(fpr, **kwa)
+
+        return self.print_results(results)
 
 
-class CommandPGPAddKeys(CommandOpenPGP):
-    """moggie pgp-add-keys [<options>] <ascii-armored-key>
+class CommandPGPAddCerts(CommandOpenPGP):
+    """moggie pgp-add-certs [<options>] <ascii-armored-key>
 
     %(OPTIONS)s
     """
-    NAME = 'pgp-add-keys'
+    NAME = 'pgp-add-certs'
+
+    async def run(self):
+        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
 
 
-class CommandPGPDelKeys(CommandOpenPGP):
-    """moggie pgp-del-keys [<options>] <fingerprints>
+class CommandPGPDelCerts(CommandOpenPGP):
+    """moggie pgp-del-certs [<options>] <fingerprints>
 
     %(OPTIONS)s
     """
-    NAME = 'pgp-del-keys'
+    NAME = 'pgp-del-certs'
+
+    async def run(self):
+        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
 
 
 class CommandPGPSign(CommandOpenPGP):
@@ -369,6 +461,9 @@ class CommandPGPSign(CommandOpenPGP):
             CommandOpenPGP.OPTIONS_PGP_SETTINGS
         ]+[
             CommandOpenPGP.OPTIONS_SIGNING])
+
+    async def run(self):
+        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
 
 
 class CommandPGPEncrypt(CommandOpenPGP):
@@ -384,6 +479,9 @@ class CommandPGPEncrypt(CommandOpenPGP):
             CommandOpenPGP.OPTIONS_SIGNING +
             CommandOpenPGP.OPTIONS_ENCRYPTING])
 
+    async def run(self):
+        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
+
 
 class CommandPGPDecrypt(CommandOpenPGP):
     """moggie pgp-decrypt [<options>]
@@ -397,3 +495,6 @@ class CommandPGPDecrypt(CommandOpenPGP):
         ]+[
             CommandOpenPGP.OPTIONS_VERIFYING +
             CommandOpenPGP.OPTIONS_DECRYPTING])
+
+    async def run(self):
+        sop, keys = self.get_async_sop_and_keystore(self, connect=True)

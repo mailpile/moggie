@@ -101,6 +101,7 @@ class OpenPGPWorker(BaseWorker):
     def _main_httpd_loop(self):
         autocrypt = self.keystore.get_keystore('autocrypt')
         if autocrypt:
+            autocrypt.open_db()
             autocrypt.db.start_background_saver()
         super()._main_httpd_loop()
         if autocrypt:

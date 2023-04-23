@@ -1,4 +1,6 @@
 # Store and retreive OpenPGP key material
+import time
+import logging
 
 from ....util import NotFoundError
 from ..keyinfo import get_keyinfo
@@ -191,8 +193,11 @@ class PrioritizedKeyStores(OpenPGPKeyStore):
             self.add_keystore(name, obj)
 
     def get_keystore(self, name):
-        for n, obj in self.keystores:
+        for sn, n, obj in self.keystores:
             if n == name:
+                return obj
+        for sn, n, obj in self.keystores:
+            if sn == name:
                 return obj
         return None
 
@@ -202,26 +207,41 @@ class PrioritizedKeyStores(OpenPGPKeyStore):
         the lowest priority. Set `first=True` to make this the preferred
         keystore.
         """
+        shortname = name.split(':')[0].lower()
         if first:
-            self.keystores[:0] = [(name, obj)]
+            self.keystores[:0] = [(shortname, name, obj)]
         else:
-            self.keystores.append((name, obj))
+            self.keystores.append((shortname, name, obj))
 
     def _choose(self, which):
-        for name, store in self.keystores:
+        for shortname, name, store in self.keystores:
             if not which or (name.lower() == which):
                 self.progress_cb(name)
                 return store
+        if which:
+            for shortname, name, store in self.keystores:
+                if shortname == which:
+                    self.progress_cb(name)
+                    return store
         raise NotFoundError('Unknown keystore: %s' % which)
 
-    def _do(self, method, fingerprint, deadline, _all):
+    def _do(self, method, fingerprint, deadline, which, _all, *args):
+        if which:
+            if which == self.ALL:
+                which = None
+            else:
+                which = which.lower()
+
         count, tried = 0, []
-        for name, store in self.keystores:
+        for shortname, name, store in self.keystores:
             if deadline and time.time() > deadline:
                 break
+            if which and name.lower() != which and shortname != which:
+                continue
             try:
                 self.progress_cb(name)
-                rv = getattr(store, method)(fingerprint)
+                logging.debug('%s.%s(%s, [%s])' % (name, method, fingerprint, len(args)))
+                rv = getattr(store, method)(fingerprint, *args)
                 if not _all:
                     return rv
                 count += 1
@@ -237,14 +257,23 @@ class PrioritizedKeyStores(OpenPGPKeyStore):
         else:
             raise NotFoundError('Tried keystores: %s' % ', '.join(tried))
 
-    def _get(self, method, fingerprint, deadline):
-        return self._do(method, fingerprint, deadline, False)
+    def _get(self, method, fingerprint, deadline, which, *args):
+        return self._do(method, fingerprint, deadline, which, False, *args)
 
-    def _srch(self, method, search_terms, max_results, deadline, *args):
+    def _srch(self, method, search_terms, max_results, deadline, which, *args):
+        if which:
+            if which == self.ALL:
+                which = None
+            else:
+                which = which.lower()
+
         yielded = 0
-        for name, store in self.keystores:
+        for shortname, name, store in self.keystores:
+            if which and name.lower() != which and shortname != which:
+                continue
             try:
                 self.progress_cb(name)
+                logging.debug('%s.%s(%s, [%s])' % (name, method, search_terms, len(args)))
                 for result in getattr(store, method)(search_terms, *args):
                     yield result
                     yielded += 1
@@ -255,32 +284,37 @@ class PrioritizedKeyStores(OpenPGPKeyStore):
             except (NotImplementedError, PermissionError):
                 pass
 
-    def get_cert(self, fingerprint, deadline=None):
-        return self._get('get_cert', fingerprint, deadline)
+    def get_cert(self, fingerprint,
+            max_results=None, deadline=None, which=None):
+        return self._get('get_cert', fingerprint, deadline, which)
 
-    def list_certs(self, search_terms, max_results=None, deadline=None):
+    def list_certs(self, search_terms,
+            max_results=None, deadline=None, which=None):
         for result in self._srch(
-                 'list_certs', search_terms, max_results, deadline):
-             yield result
+                 'list_certs', search_terms, max_results, deadline, which):
+            yield result
 
-    def find_certs(self, search_terms, max_results=None, deadline=None):
+    def find_certs(self, search_terms,
+            max_results=None, deadline=None, which=None):
         for result in self._srch(
-                 'find_certs', search_terms, max_results, deadline):
-             yield result
+                 'find_certs', search_terms, max_results, deadline, which):
+            yield result
 
-    def get_private_key(self, fingerprint, deadline=None):
-        return self._get('get_private_key', fingerprint, deadline)
+    def get_private_key(self, fingerprint, passwords={},
+            max_results=None, deadline=None, which=None):
+        return self._get(
+            'get_private_key', fingerprint, deadline, which, passwords)
 
     def find_private_keys(self, search_terms,
-            passwords={}, max_results=None, deadline=None):
+            passwords={}, max_results=None, deadline=None, which=None):
         for result in self._srch('find_private_keys',
-                search_terms, max_results, deadline, passwords):
+                search_terms, max_results, deadline, which, passwords):
             yield result
 
     def list_private_keys(self, search_terms,
-            passwords={}, max_results=None, deadline=None):
+            passwords={}, max_results=None, deadline=None, which=None):
         for result in self._srch('list_private_keys',
-                search_terms, max_results, deadline, passwords):
+                search_terms, max_results, deadline, which, passwords):
             yield result
 
     def save_cert(self, cert, which=None):
@@ -291,19 +325,19 @@ class PrioritizedKeyStores(OpenPGPKeyStore):
 
     def delete_cert(self, fingerprint, which=None):
         if which == self.ALL:
-            return self._do('delete_cert', fingerprint, 0, True)
+            return self._do('delete_cert', fingerprint, 0, None, True)
         else:
             return self._choose(which).delete_cert(fingerprint)
 
     def delete_private_key(self, private_key, which=None):
         if which == self.ALL:
-            return self._do('delete_private_key', private_key, 0, True)
+            return self._do('delete_private_key', private_key, 0, None, True)
         else:
             return self._choose(which).delete_private_key(private_key)
 
     def process_email(self, parsed_msg, which=None):
         if which == self.ALL:
-            return self._do('process_email', parsed_msg, 0, True)
+            return self._do('process_email', parsed_msg, 0, None, True)
         else:
             return self._choose(which).process_email(parsed_msg)
 

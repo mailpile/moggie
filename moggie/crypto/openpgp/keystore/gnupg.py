@@ -36,9 +36,12 @@ class GnuPGKeyStore(OpenPGPKeyStore, ExternalProcRunner):
 
     def list_certs(self, search_terms):
         # FIXME: Switch to --with-colons, use parser from gpgi
-        rc, so, se = self.run(*self.gnupg_home_args,
+        gnupg_args = self.gnupg_home_args + [
             '--list-public-keys',
-            '--list-options=show-only-fpr-mbox', search_terms)
+            '--list-options=show-only-fpr-mbox']
+        if search_terms:
+            gnupg_args.append(search_terms)
+        rc, so, se = self.run(*gnupg_args)
         if (rc != 0) or not so.strip():
             return
         certs = {}
@@ -72,8 +75,10 @@ class GnuPGKeyStore(OpenPGPKeyStore, ExternalProcRunner):
         # FIXME: Switch to --with-colons, use parser from gpgi
         pw, gnupg_args = self._pw_and_args(self.gnupg_home_args + [
                 '--list-secret-keys',
-                '--list-options=show-only-fpr-mbox', search_terms],
+                '--list-options=show-only-fpr-mbox'],
             passwords)
+        if search_terms:
+            gnupg_args.append(search_terms)
         rc, so, se = self.run(*gnupg_args, input_data=pw)
         if (rc != 0) or not so.strip():
             return
