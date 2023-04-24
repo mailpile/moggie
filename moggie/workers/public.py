@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import re
@@ -17,6 +16,7 @@ from upagekite.web import process_post, http_require
 from ..config import APPNAME as MAIN_APPNAME
 from ..config import APPURL as MAIN_APPURL
 from ..config import AppConfig
+from ..util.dumbcode import to_json
 
 from .base import BaseWorker
 
@@ -153,7 +153,7 @@ def web_status(req_env):
     return {
         'ttl': 30,
         'mimetype': 'application/json',
-        'body': json.dumps(req_env['worker'].status, indent=1)}
+        'body': to_json(req_env['worker'].status, indent=1)}
 
 
 @async_url('/rpc/*')
@@ -335,7 +335,7 @@ class PublicWorker(BaseWorker):
         kwargs['client_info_tuple'][1] = {
             'ttl': 30,
             'mimetype': 'application/json',
-            'body': json.dumps(data, indent=1) + '\n'}
+            'body': to_json(data, indent=1) + '\n'}
 
     async def handle_web_rpc(self, req_env):
         args = bytes(req_env.request_path, 'latin-1').split(b'/')[3:]

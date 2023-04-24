@@ -1,5 +1,5 @@
 import copy
-import json
+from ..util.dumbcode import to_json
 
 
 class _dict_helper(dict):
@@ -54,4 +54,4 @@ class _dict_helper(dict):
         d[prop_path[-1]] = prop_type(value)
 
     def __str__(self):
-        return json.dumps(self, indent=2)
+        return to_json(self)

@@ -1,6 +1,5 @@
 import asyncio
 import base64
-import json
 import logging
 import os
 import random
@@ -16,7 +15,7 @@ from ..jmap.core import JMAPSessionResource
 from ..jmap.requests import *
 from ..jmap.responses import *
 from ..storage.files import FileStorage
-from ..util.dumbcode import dumb_decode
+from ..util.dumbcode import dumb_decode, to_json, from_json
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorker
@@ -771,11 +770,11 @@ main app worker. Hints:
             return result
 
         if result is not None:
-            code, json_result = 200, json.dumps(result)
+            code, json_result = 200, to_json(result)
         else:
             code = 400
             result = {'error': 'Unknown %s' % type(jmap_request)}
-            json_result = json.dumps(result)
+            json_result = to_json(result)
 
         return {
             'code': code,

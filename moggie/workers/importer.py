@@ -14,7 +14,6 @@
 # https://stackoverflow.com/questions/938733/total-memory-used-by-python-process
 # https://stackoverflow.com/questions/22102999/get-total-physical-memory-in-python
 #
-import json
 import logging
 import os
 import time

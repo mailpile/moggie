@@ -1,5 +1,4 @@
 import inspect
-import json
 import logging
 import os
 import socket
@@ -113,17 +112,6 @@ class BaseWorker(Process):
 
     def expose_object(self, obj,
             prefix='', allow_local=True, arg_filter=None, exclude=[]):
-        def _utf8(v):
-            if isinstance(v, str):
-                return v
-            if isinstance(v, bytes):
-                return str(v, 'utf-8')
-            if isinstance(v, dict):
-                return dict((_utf8(k), _utf8(i)) for k, i in v.items())
-            if hasattr(v, '__iter__'):
-                return list(_utf8(i) for i in v)
-            raise ValueError('Cannot handle %s' % type(v))
-
         for attr in dir(obj):
             method = getattr(obj, attr)
             if (attr[:1] == '_') or 'method' not in str(type(method)):
@@ -132,37 +120,44 @@ class BaseWorker(Process):
                 continue
 
             def mk_wrappers(name, meth):
-                def dict_wrap(*args, **kwargs):
+                def dict_wrap(encode, *args, **kwargs):
+                    result = None
                     try:
                         if arg_filter is not None:
                             args = arg_filter(args)
                             kwargs = arg_filter(kwargs)
+                        result = meth(*args, **kwargs)
                         return {
                             'method': name,
-                            'result': _utf8(meth(*args, **kwargs))}
+                            'result': result}
                     except KeyboardInterrupt:
                         raise
                     except Exception as e:
+                        logging.exception('%s(...) => %s' % (name, result))
                         return {
                             'method': name,
                             'error': str(e),
                             'details': traceback.format_exc()}
 
                 def api_wrap(*args, method=None, **kwargs):
-                    return self.reply_json(dict_wrap(*args, **kwargs))
+                    return self.reply_json(dict_wrap(True, *args, **kwargs))
 
                 def wrap(*args, **kwargs):
                     if self.url or not allow_local:
-                        return self.call(prefix + name, *args, qs=kwargs)
+                        result = self.call(prefix + name, *args, qs=kwargs)
                     else:
-                        return dict_wrap(*args, **kwargs)
+                        result = dict_wrap(False, *args, **kwargs)
+                    logging.debug('result=%s' % result)
+                    return result
 
                 async def async_wrap(*args, **kwargs):
                     if self.url or not allow_local:
-                        return await self.async_call(
+                        result = await self.async_call(
                             prefix + name, *args, **kwargs)
                     else:
-                        return dict_wrap(*args, **kwargs)
+                        result = dict_wrap(False, *args, **kwargs)
+                    logging.debug('result=%s' % result)
+                    return result
 
                 return async_wrap, wrap, api_wrap
 
@@ -522,7 +517,7 @@ class BaseWorker(Process):
                     logging.debug('Read %d bytes' % len(chunk))
                     data += chunk
                 if b'application/json' in hdr:
-                    return json.loads(data)
+                    return from_json(data)
                 else:
                     return (hdr, data)
         else:
@@ -600,7 +595,7 @@ class BaseWorker(Process):
             junk = conn.recv(len(hdr) + 4)
             conn = conn.makefile(mode='rb')
             if b'application/json' in hdr:
-                return json.load(conn)
+                return from_json(conn.read())
             else:
                 return (hdr, conn)
         else:
@@ -656,7 +651,7 @@ class BaseWorker(Process):
             elif self._caller:
                 data['_caller'] = self._caller
         self.reply(self.HTTP_JSON,
-            json.dumps(data, indent=1).encode('utf-8') + b'\n',
+            to_json(data).encode('utf-8') + b'\n',
             client_info_tuple=client_info_tuple)
 
     def parse_header(self, hdr):

@@ -12,7 +12,6 @@
 # communicate with the running app without authenticating every time.
 #
 import base64
-import json
 import logging
 import os
 import sys
@@ -25,6 +24,7 @@ from upagekite.websocket import websocket, ws_broadcast
 
 from ..app.cli import CLI_COMMANDS
 from ..app.core import AppCore
+from ..util.dumbcode import to_json, from_json
 from .public import PublicWorker, RequestTimer
 
 
@@ -167,7 +167,7 @@ async def web_websocket(opcode, msg, conn, ws,
         return {'code': 400, 'body': 'Sorry\n'}
 
     if first:
-        await conn.send(json.dumps({'connected': 1}))  #FIXME
+        await conn.send(to_json({'connected': 1}))  #FIXME
 
     if msg:
         code = 500
@@ -176,14 +176,14 @@ async def web_websocket(opcode, msg, conn, ws,
         conn_uid = conn.uid
         try:
             result = await conn.env['app'].api_jmap(
-                conn_uid, web_access, json.loads(msg))
+                conn_uid, web_access, from_json(msg))
             code = result.get('code', 500)
             if code == 200 and 'body' in result:
                 await conn.send(result['body'])
                 return
         except:
             logging.exception('websocket failed: %s' % (msg,))
-        await conn.send(json.dumps({'error': code, 'result': result}))  #FIXME
+        await conn.send(to_json({'error': code, 'result': result}))  #FIXME
 
 
 @async_url('/.well-known/jmap')
@@ -336,7 +336,7 @@ class AppWorker(PublicWorker):
             ofunc = lambda wss: (wss.uid == only)
         else:
             ofunc = only
-        await ws_broadcast('app', json.dumps(message), only=ofunc)
+        await ws_broadcast('app', to_json(message), only=ofunc)
 
     def _check_access(self, secret, path):
         if (secret == self._secret):

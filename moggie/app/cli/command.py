@@ -1,12 +1,12 @@
 import asyncio
 import copy
-import json
 import logging
 import time
 import sys
 
 from ... import config
 from ...config import AccessConfig
+from ...util.dumbcode import to_json, from_json
 
 
 class NotRunning(Exception):
@@ -193,7 +193,7 @@ class CLICommand:
             'title': title or self.NAME,
             'version': config.CACHE_VERSION,
             'command': self.NAME,
-            'state': json.dumps(state or self.webui_state)}) + html)
+            'state': to_json(state or self.webui_state)}) + html)
 
     def print_html_end(self, html=''):
         self.print(html + (self.HTML_FOOTER % {
@@ -231,7 +231,7 @@ class CLICommand:
             for k in columns if k in row))
 
     def print_json(self, data, nl='\n'):
-        self.write_reply(json.dumps(data) + nl)
+        self.write_reply(to_json(data) + nl)
 
     def print(self, *args, nl='\n'):
         self.write_reply(' '.join(args) + nl)
@@ -249,7 +249,7 @@ class CLICommand:
 
     def link_bridge(self, bridge):
         def _receive_message(bridge_name, raw_message):
-            message = json.loads(raw_message)
+            message = from_json(raw_message)
             if message.get('connected'):
                 self.connected = True
             else:

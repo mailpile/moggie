@@ -1,4 +1,3 @@
-import json
 import logging
 import os
 import time
@@ -332,7 +331,7 @@ class SearchWorker(BaseWorker):
             def _dec_comment(comment):
                 try:
                     comment = str(comment, 'utf-8')
-                    comment = json.loads(comment or "{}")
+                    comment = from_json(comment) if comment else {}
                 except (ValueError, TypeError):
                     pass
                 return comment

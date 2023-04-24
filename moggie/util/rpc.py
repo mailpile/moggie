@@ -6,7 +6,8 @@ import time
 import traceback
 import websockets
 
-from ..util.http import http1x_connect
+from .dumbcode import to_json, from_json
+from .http import http1x_connect
 from ..jmap.requests import RequestPing
 
 
@@ -42,7 +43,7 @@ class JsonRpcClient:
             self.async_call = self.async_http_call
 
     def http_call(self, method, **kwargs):
-        upload = json.dumps(kwargs).encode('latin-1')
+        upload = to_json(kwargs).encode('latin-1')
         conn = http1x_connect(self.host, self.port, self.path_prefix + method,
             method='POST',
             headers=(
@@ -58,7 +59,7 @@ class JsonRpcClient:
             hdr = peeked.split(b'\r\n\r\n', 1)[0]
             junk = conn.recv(len(hdr) + 4)
             with conn.makefile(mode='rb') as cfd:
-                return json.load(cfd)
+                return from_json(cfd.read())
         else:
             # FIXME: Parse the HTTP response code and raise better exceptions
             raise PermissionError(str(peeked[:12], 'latin-1'))
@@ -95,7 +96,7 @@ class BridgeWorker:
         self.pending.append(message)
 
     def send_json(self, data):
-        self.pending.append(json.dumps(data, indent=None, separators=(',',':')))
+        self.pending.append(to_json(data))
 
     async def on_close(self, exc):
         # FIXME: OSError probably means our backend went away and is
@@ -103,7 +104,7 @@ class BridgeWorker:
         #        The app needs to know, and inform the user, with
         #        the option to relaunch if this is a local backend.
         self.broken += 1
-        self.message_sink(self.name, json.dumps({
+        self.message_sink(self.name, to_json({
             'internal_websocket_error': 'Websocket connection unusable',
             'count': self.broken}))
         if self.ws is not None:
@@ -129,7 +130,7 @@ class BridgeWorker:
                             % (self, len(self.pending)))
                         self.pending = []
                     else:
-                        await self.ws.send(json.dumps(RequestPing()))
+                        await self.ws.send(to_json(RequestPing()))
                 except (OSError, websockets.exceptions.ConnectionClosed) as e:
                     await self.on_close(e)
                 except exception as e:

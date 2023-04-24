@@ -2,7 +2,6 @@ import binascii
 import base64
 import copy
 import hashlib
-import json
 import logging
 import math
 import os
@@ -25,7 +24,7 @@ from ..crypto.passphrases import stretch_with_scrypt, generate_passcode
 from ..crypto.openpgp.keystore.registry import DEFAULT_LOCAL_KEYSTORES
 from ..crypto.openpgp.keystore.registry import DEFAULT_KEYSTORES
 from ..crypto.openpgp.sop import DEFAULT_SOP_CONFIG
-from ..util.dumbcode import dumb_decode, dumb_encode_asc
+from ..util.dumbcode import dumb_decode, dumb_encode_asc, to_json, from_json
 from ..email.addresses import AddressInfo
 from .helpers import cfg_bool, ListItemProxy, EncodingListItemProxy
 from .helpers import DictItemProxy, ConfigSectionProxy
@@ -135,7 +134,7 @@ class PasscrowConfig(ConfigSectionProxy):
         if not self.config.aes_key:
             raise PermissionError('Please unlock the app first!')
         _b64str = lambda d: str(base64.b64encode(d), 'utf-8')
-        return json.dumps({
+        return to_json({
             'version': self._RECOVERY_VER,
             'description': self._RECOVERY_DESC,
             'aes_key': _b64str(self.config.aes_key),

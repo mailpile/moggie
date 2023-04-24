@@ -154,17 +154,15 @@ def dumb_decode(v,
         if v[:1] == 'u': return str(v[1:].encode('latin-1'), 'utf-8')
         if v[:1] == 'U': return unquote(v[1:])
 
+    if v[:1] in ('d', b'd'): return int(v[1:])
+    if v[:1] in ('f', b'f'): return float(v[1:])
+    if v     in ('y', b'y'): return True
+    if v     in ('n', b'n'): return False
+    if v     in ('-', b'-'): return None
+
     if v[:1] in DUMB_DECODERS:
         return DUMB_DECODERS[v[:1]](v)
 
-    if v[:1] in ('d', b'd'): return int(v[1:])
-    if v[:1] in ('f', b'f'): return float(v[1:])
-    if v in ('y', b'y'): return True
-    if v in ('n', b'n'): return False
-    if v in ('-', b'-'): return None
-
-    if v[:1] in ('j', b'j'): return json.loads(v[1:])
-    if v[:1] in ('J', b'J'): return json.loads(unquote_to_bytes(v[1:]))
     if v[:1] == 'D': return dumb_decode_dict(v[1:])
     if v[:1] == b'D': return dumb_decode_dict(str(v[1:], 'latin-1'))
     if v[:1] == 'L': return dumb_decode_list(v[1:])
@@ -173,6 +171,9 @@ def dumb_decode(v,
     if v[:1] == b'S': return set(dumb_decode_list(str(v[1:], 'latin-1')))
     if v[:1] == 'T': return tuple(dumb_decode_list(v[1:]))
     if v[:1] == b'T': return tuple(dumb_decode_list(str(v[1:], 'latin-1')))
+
+    if v[:1] in ('j', b'j'): return json.loads(v[1:])
+    if v[:1] in ('J', b'J'): return json.loads(unquote_to_bytes(v[1:]))
 
     for ms, mb, decomp in ([('Z', b'Z', zlib.decompress)] + decomp_asc):
         if v[:1] in (ms, mb):
@@ -202,6 +203,62 @@ def dumb_decode(v,
         logging.exception(
             'BOGUS: %s (decomps=%s/%s)' % (v, decomp_bin, decomp_asc))
         raise
+
+
+def dumb_json_encoder(obj):
+    try:
+        logging.debug('BUG? Encoding %s into JSON' % obj.__class__.__name__)
+        try:
+            # We use this structure to identify our encoded objects:
+            #
+            # List with exactly three items, the first of which is the value
+            # -76, the second is our data encoded as a string, the third is
+            # (length of the encoded string) - 76. This combination of silly
+            # characteristics should be pretty rare in the wild.
+            #
+            # This should make the odds of "accidental" decoding low, but
+            # also makes it harder for attackers to inject malicious data.
+            enc_obj = dumb_encode_asc(obj)
+            return [-76, enc_obj, len(enc_obj) - 76]
+        except ValueError:
+            if hasattr(obj, '__iter__'):
+                return list(obj)
+    except (ValueError, TypeError):
+        raise TypeError('Cannot JSON serialize %s' % obj.__class__.__name__)
+
+
+def dumb_json_decoder(obj):
+    """
+    Recursively iterate through lists and dicts, decoding strings that
+    have our magic marker, but returning other objects unchanged.
+    """
+    if isinstance(obj, dict):
+        for k in obj:
+            obj[k] = dumb_json_decoder(obj[k])
+    elif isinstance(obj, list):
+        # Is it our magic list structure?
+        if ((len(obj) == 3)
+                and (obj[0] == -76)
+                and isinstance(obj[1], str)
+                and (obj[2] == len(obj[1]) - 76)):
+            obj = dumb_decode(obj[1])
+        else:
+            for i, v in enumerate(obj):
+                obj[i] = dumb_json_decoder(v)
+    return obj
+
+
+def to_json(data, indent=None):
+    return json.dumps(data,
+        separators=(',', ':'), indent=indent,
+        default=dumb_json_encoder)
+
+
+def from_json(data, dumb_decode=True):
+    if dumb_decode:
+        return dumb_json_decoder(json.loads(data))
+    else:
+        return json.loads(data)
 
 
 def register_dumb_decoder(char, func):

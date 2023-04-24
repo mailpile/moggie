@@ -6,6 +6,7 @@ import os
 import sys
 import time
 
+from moggie.util.dumbcode import *
 from .command import Nonsense, CLICommand, AccessConfig
 
 
@@ -334,8 +335,7 @@ signatures.
                         target.append(key)
 
     def print_results_as_text(self, results):
-        results = json.dumps(results, indent=2)
-        return self.print(results)
+        return self.print(to_json(results, indent=2))
 
     def print_results(self, results):
         fmt = self.options['--format='][-1]

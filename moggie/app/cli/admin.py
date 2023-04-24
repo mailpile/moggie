@@ -3,7 +3,6 @@
 
 import asyncio
 import datetime
-import json
 import logging
 import os
 import sys
@@ -11,6 +10,7 @@ import time
 import traceback
 
 from ...config import AppConfig, AccessConfig
+from ...util.dumbcode import to_json, from_json
 from .command import Nonsense, CLICommand
 
 
@@ -152,7 +152,7 @@ class CommandContext(CLICommand):
                     'S': ss        if (i == 0) else ''})
 
     def emit_json(self, config):
-        self.print(json.dumps(config))
+        self.print(to_json(config))
 
     async def get_contexts(self):
         from ...jmap.requests import RequestConfigGet
@@ -489,7 +489,7 @@ class CommandGrant(CLICommand):
                     'q': u[i][2]                 if (i < len(u)) else ''})
 
     def emit_json(self, config):
-        self.print(json.dumps(config))
+        self.print(to_json(config))
 
     async def get_roles(self, want_context=True):
         from ...jmap.requests import RequestConfigGet

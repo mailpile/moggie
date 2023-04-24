@@ -33,7 +33,6 @@
 #
 import copy
 import logging
-import json
 import os
 import struct
 import random
@@ -41,7 +40,7 @@ import re
 import threading
 import time
 
-from ..util.dumbcode import dumb_decode, dumb_encode_bin, dumb_encode_asc
+from ..util.dumbcode import *
 from ..util.intset import IntSet
 from ..util.mailpile import msg_id_hash, tag_quote, tag_unquote
 from ..util.wordblob import wordblob_search, create_wordblob, update_wordblob
@@ -633,14 +632,14 @@ class SearchEngine:
                     comment, iset = plb.get(kw, with_comment=True)
 
                     if isinstance(mset, dict):
-                        cdata = json.loads(comment or '{}')
+                        cdata = from_json(comment) if comment else {}
                         if op in (IntSet.Or, '+'):
                             cdata.update(mset)
                         else:
                             for k, v in mset.items():
                                 if k in cdata:
                                     del cdata[k]
-                        plb.set_comment(kw, json.dumps(cdata))
+                        plb.set_comment(kw, to_json(cdata))
                         self.records[idx] = plb.blob
 
                     else:

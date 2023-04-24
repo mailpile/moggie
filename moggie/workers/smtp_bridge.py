@@ -17,7 +17,6 @@ multiplex to save bytes on the network...
 
 """
 import os
-import json
 import logging
 import sys
 import socket

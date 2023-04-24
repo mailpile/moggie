@@ -1,7 +1,8 @@
 # Utilities for sending mail
 import copy
-import json
 import logging
+
+from .dumbcode import to_json, from_json
 
 
 STATUS_CONNECTING = 'connecting'
@@ -26,7 +27,7 @@ def _progress(callback, good, status, details, message=''):
             logging.info(message)
         else:
             logging.warning(message)
-            logging.debug(json.dumps(details))
+            logging.debug(to_json(details))
     return good
 
 
@@ -62,13 +63,13 @@ def parse_partial_url(url,
             password = default_password
     except ValueError:
         username = default_username
-        password = default_password 
+        password = default_password
 
     try:
         url, path = url.split('/', 1)
     except ValueError:
-        path = default_path 
- 
+        path = default_path
+
     try:
         hostname, port = url.split(':')
         port = int(port)
@@ -89,7 +90,7 @@ async def sendmail(message_bytes, via_from_rcpt_tuples,
     The callback should have the following signature:
 
        def sendmail_progress_callback(good, status, details, message):
-           ... 
+           ...
 
     Status will be one of the constants:
 
@@ -326,7 +327,7 @@ async def sendmail_smtp(message_bytes, via, frm, recipients, _id, progress_cb,
         exc_error, exc_msg = (
             STATUS_MESSAGE_SEND_FAILED,
             'Failed to upload message to server: %(error)s')
-        await server.data(message_bytes) 
+        await server.data(message_bytes)
         _progress(progress_cb, True, STATUS_MESSAGE_SEND_OK,
             _update(details, sent_bytes=len(message_bytes)),
             'Message sent (%(sent_bytes)d bytes)')
@@ -361,15 +362,15 @@ if __name__ == '__main__':
 
     _assert(
         parse_partial_url('http://user:pass@host:443/path/to/stuff'),
-        ('http', 'user', 'pass', 'host', 443, 'path/to/stuff')) 
+        ('http', 'user', 'pass', 'host', 443, 'path/to/stuff'))
     _assert(
         parse_partial_url('user@host/path/to/stuff'),
-        ('smtp', 'user', None, 'host', 25, 'path/to/stuff')) 
+        ('smtp', 'user', None, 'host', 25, 'path/to/stuff'))
     _assert(
         parse_partial_url('localhost:125'),
-        ('smtp', None, None, 'localhost', 125, None)) 
+        ('smtp', None, None, 'localhost', 125, None))
     _assert(
         parse_partial_url('user:secret@localhost:125'),
-        ('smtp', 'user', 'secret', 'localhost', 125, None)) 
+        ('smtp', 'user', 'secret', 'localhost', 125, None))
 
     print('Tests pass OK')

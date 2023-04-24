@@ -1,4 +1,3 @@
-import json
 import logging
 import time
 import traceback
@@ -252,7 +251,7 @@ class StorageWorker(BaseWorker):
                         elif isinstance(val, str):
                             nd.append(('"%s"' % val).encode('utf-8'))
                         else:
-                            nd.append(json.dumps(val).encode('utf-8'))
+                            nd.append(to_json(val).encode('utf-8'))
                         nd.append(b',')
                         data.extend(nd)
                     except:

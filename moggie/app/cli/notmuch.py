@@ -26,7 +26,6 @@
 import base64
 import copy
 import datetime
-import json
 import logging
 import io
 import os
@@ -46,7 +45,7 @@ from ...security.css import CSSCleaner
 from ...storage.exporters.mbox import MboxExporter
 from ...storage.exporters.maildir import MaildirExporter, EmlExporter
 from ...util.mailpile import tag_unquote
-from ...util.dumbcode import dumb_decode
+from ...util.dumbcode import dumb_decode, to_json, from_json
 
 
 def _html_quote(t):
@@ -689,13 +688,13 @@ FIXME: Document html and html formats!
             pre, post = '<div class=results>', '</div>'
         if first:
             self.print('{"state": %s, "html": "%s'
-                % (json.dumps(self.webui_state), pre), nl='')
+                % (to_json(self.webui_state), pre), nl='')
         if tabular:
             self.print(
                 self.format_html_tr(result[1], columns=self.HTML_COLUMNS)
                 .replace('"', '\\"'), nl='')
         else:
-            self.print(json.dumps(result[0](result[1]))[1:-1], nl='')
+            self.print(to_json(result[0](result[1]))[1:-1], nl='')
         if last:
             self.print('%s"}' % post)
 
@@ -1483,7 +1482,7 @@ class CommandTag(CLICommand):
                 tagops = tagops.strip().split()
                 self._validate_and_normalize_tagops(tagops)
                 if terms.startswith('META={'):
-                    yield (tagops, json.loads(terms[5:]))
+                    yield (tagops, from_json(terms[5:]))
                 else:
                     yield (tagops, terms.split(' # ')[0].strip())
 
@@ -1527,7 +1526,7 @@ class CommandTag(CLICommand):
 
             terms = ' '.join(terms)
             if terms.startswith('META={'):
-                terms = json.loads(terms[5:])
+                terms = from_json(terms[5:])
             self.tagops = [(tags, terms)]
 
         elif (self.options['--redo='][-1]
