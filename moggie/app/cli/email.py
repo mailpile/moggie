@@ -276,10 +276,10 @@ class CommandEmail(CLICommand):
         ('--quoting=',        [], 'X=(html*|text|trim*|below), many allowed'),
     ],[
         (None, None, 'encryption'),
-        ('--sign-with=',    [], 'X=(N|auto|Key-ID), DKIM or PGP signing'),
         ('--decrypt=',      [], 'X=(N|auto|false|true)'),
         ('--encrypt=',      [], 'X=(N|all|attachments)'),
         ('--zip-password=', [], 'Password to use for ZIP encryption')]
+        + CommandOpenPGP.OPTIONS_SIGNING
         + CommandOpenPGP.OPTIONS_ENCRYPTING
         + CommandOpenPGP.OPTIONS_PGP_SETTINGS + [
         ('--pgp-headers=',    [], 'X=(N|auto|sign|subject|all)')]
