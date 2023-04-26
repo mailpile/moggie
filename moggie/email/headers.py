@@ -200,7 +200,7 @@ def parse_received(header_value):
             tt = parsedate_tz(date)
             tz = tt[9]
             ts = int(time.mktime(tt[:9])) - tz
-        except ValueError:
+        except (ValueError, TypeError):
             ts = tz = None
     except ValueError:
         fields = header_value.strip()
