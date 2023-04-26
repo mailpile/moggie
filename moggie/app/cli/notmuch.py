@@ -2,6 +2,7 @@
 # possible. Because why not? Compatibility is nice.
 #
 # TODO: Look into tabular
+#       Refactor `moggie show` to extend `moggie parse`
 #
 # These are the commands used by the dodo mail client:
 #    notmuch new
@@ -40,8 +41,8 @@ from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
 from ...email.metadata import Metadata
 from ...jmap.requests import RequestSearch, RequestMailbox, RequestEmail
-from ...security.html import HTMLCleaner
-from ...security.css import CSSCleaner
+from ...security.mime import part_filename, magic_part_id
+from ...security.html import clean_email_html
 from ...storage.exporters.mbox import MboxExporter
 from ...storage.exporters.maildir import MaildirExporter, EmlExporter
 from ...util.mailpile import tag_unquote
@@ -307,103 +308,15 @@ FIXME: Document html and html formats!
                     fn_str = str(fn, 'latin-1')
                 yield (fn, fn_str)
 
-    FIX_MIMETYPES = {
-        'image/jpg': 'image/jpeg',
-        'multipart/alternative': 'text/plain',
-        'multipart/related': 'text/plain',
-        'multipart/mixed': 'text/plain'}
-    EVIL_EXTENSIONS = set(['exe', 'dll', 'scr', 'com'])  # FIXME
-    RISKY_MT_CHARS = re.compile(r'[^a-z0-9_\./-]')
-    RISKY_FN_CHARS = re.compile(r'[^a-zA-Z0-9_\.-]')
-
-    def _filename(self, part):
-        filename = ''
-        disp = part.get('content-disposition')
-        ctype = part.get('content-type')
-        for which, attr in ((disp, 'filename'), (ctype, 'name')):
-            if which and attr in which[1]:
-                filename = self.RISKY_FN_CHARS.sub('_', which[1][attr])
-                if filename:
-                    return filename
-        return None
-
-    def _magic_part_id(self, idx, part):
-        mimetype = part.get('content-type', ['application/octet-stream'])[0]
-        mimetype = self.RISKY_MT_CHARS.sub('_', mimetype.lower())
-        mimetype = self.FIX_MIMETYPES.get(mimetype, mimetype)
-
-        filename = self._filename(part) or ''
-        if filename:
-            ext = filename.split('.')[-1]
-            # FIXME: Fix mime-type based on extension? Check for mismatch?
-            if ('..' in filename) or (ext in self.EVIL_EXTENSIONS):
-                return None
-
-        return 'part-%d-%s%s%s' % (
-            idx, mimetype.replace('/', '-'), '/' if filename else '', filename)
-
     def _fix_html(self, metadata, msg, part):
-        show_html_ii = (self.preferences['display_html_inline_images'] == 'yes')
-        show_html_ri = (self.preferences['display_html_remote_images'] == 'yes')
-        target_blank = (self.preferences['display_html_target_blank'] == 'yes')
-
-        email = msg['email']
-        if metadata.idx:
-            signed_id = self.sign_id('id:%s' % metadata.idx)
-            url_prefix = '/cli/show/%s?part=' % signed_id
-        else:
-            url_prefix = 'cid:'
-
-        def _find_by_cid(cid):
-            for i, p in enumerate(email['_PARTS']):
-                if p.get('content-id') == cid:
-                    return (i+1), p
-            return None, None
-
-        def a_fixup(cleaner, tag, attrs, data):
-            if target_blank:
-                # FIXME: Exempt links that are anchors within this document?
-                # FIXME: Forbid relative links!
-                return tag, cleaner._aa(attrs, 'target', '_blank'), data
-            else:
-                return tag, attrs, data
-
-        def img_fixup(cleaner, tag, attrs, data):
-            dropping = []
-            for i, (a, v) in enumerate(attrs):
-                if v and (a == 'data-m-src'):
-                    if v.startswith('cid:'):
-                        idx, part = _find_by_cid(v[4:].strip())
-                        part_id = None
-                        if idx and part:
-                            part_id = self._magic_part_id(idx, part)
-                            if not part_id:
-                                cleaner.saw_danger += 1
-                        if part_id:
-                            an = 'src' if show_html_ii else 'data-m-src'
-                            attrs[i] = (an, url_prefix + part_id)
-                        else:
-                            dropping.append(i)
-                    elif show_html_ri and v.startswith('http'):
-                        pass  # FIXME: Update URL to use our proxy
-            for idx in reversed(dropping):
-                cleaner.dropped_attrs.append((tag, attrs[idx][0], attrs[idx][1]))
-                attrs.pop(idx)
-            return tag, attrs, data
-
-            # FIXME; Do we also want to fixup other URLs?
-            #        3rd party image loading is blocked by our CSP,
-            #        ... so we need a proxy if they are to work at all.
-            #        Attempt to block tracking images?
-            #        Load content over Tor?
-            #        Redirect clicks through some sort of security checker?
-
-        return HTMLCleaner(part['_TEXT'],
-            callbacks={
-                'img': img_fixup,
-                'a': a_fixup
-            },
-            css_cleaner=CSSCleaner()).clean()
+        show_ii = (self.preferences['display_html_inline_images'] == 'yes')
+        show_ri = (self.preferences['display_html_remote_images'] == 'yes')
+        t_blank = (self.preferences['display_html_target_blank'] == 'yes')
+        return clean_email_html(metadata, msg['email'], part,
+             id_signer=self.sign_id,
+             inline_images=show_ii,
+             remote_images=show_ri,
+             target_blank=t_blank)
 
     async def as_emails(self, thread):
         def _textify(r, prefer, esc, part_fmt, msg_fmt, hdr_fmt='%(h)s: %(v)s'):
@@ -568,11 +481,11 @@ FIXME: Document html and html formats!
                             info = {
                                 'id': i+1,
                                 'content-type': _part.get('content-type', ['text/plain'])[0]}
-                            part_id = self._magic_part_id(i+1, _part)
+                            part_id = magic_part_id(i+1, _part)
                             if part_id:
                                 info['magic-id'] = part_id
 
-                            filename = self._filename(_part)
+                            filename = part_filename(_part)
                             if filename:
                                 info['filename'] = filename
 
@@ -869,6 +782,7 @@ FIXME: Document html and html formats!
             prev = result
         await emitter(prev, first=first, last=True)
 
+    # FIXME: This needs upstreaming into a parent class...
     def make_signer(self):
         if (self.access is not True) and self.access._live_token:
             access_id = self.access.config_key[len(AppConfig.ACCESS_PREFIX):]
@@ -1120,6 +1034,7 @@ class CommandShow(CommandSearch):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
+        # FIXME: This needs upstreaming into a parent class...
         if self.RE_SIGNED_ID.match(self.terms):
             # First we just extract the ID and update self.terms so signed IDs
             # can be used by authenticated users.
