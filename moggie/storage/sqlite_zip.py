@@ -37,7 +37,9 @@ class ZipEncryptedSQLite3:
 
     def execute(self, *args, **kwargs):
         with self.db_lock:
-            return self.db.execute(*args, **kwargs)
+            rv = self.db.execute(*args, **kwargs)
+            self.db.commit()
+            return rv
 
     def start_background_saver(self):
         if not self.in_memory or not self.db:
@@ -60,7 +62,7 @@ class ZipEncryptedSQLite3:
                         logging.debug(
                             'sqlite_zip(%s): Background save at %d changes'
                             % (self.db_filepath, self.db.total_changes))
-                        self.save_db()
+                        self.save()
                         self.save_next = int(
                             time.time() + self.save_min_interval)
             finally:
@@ -75,7 +77,7 @@ class ZipEncryptedSQLite3:
         if not self.in_memory:
             return
         with self.db_lock:
-            self.db = sqlite3.connect(':memory:')
+            self.db = sqlite3.connect(':memory:', check_same_thread=False)
             self.saved_at = self.db.total_changes
 
             fn = data = None

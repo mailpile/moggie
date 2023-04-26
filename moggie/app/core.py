@@ -107,6 +107,7 @@ main app worker. Hints:
         self.metadata = None
         self.importer = None
         self.storage = None
+        self.openpgp_workers = {}
         self.stores = {}
         self.search = None
         self.ticker = None
@@ -139,6 +140,27 @@ main app worker. Hints:
                 asyncio.create_task(job)
             await asyncio.sleep(1)
 
+    def _get_openpgp_worker(self, ctx):
+        if ctx not in self.openpgp_workers:
+            from moggie.workers.openpgp import OpenPGPWorker
+            context = self.config.contexts[ctx]
+            ksc, sopc, = context.get_openpgp_settings()
+            log_level = int(self.config.get(
+                self.config.GENERAL, 'log_level', fallback=logging.ERROR))
+            worker = OpenPGPWorker(
+                self.worker.worker_dir, self.worker.profile_dir,
+                self.config.get_aes_keys(),
+                name=OpenPGPWorker.KIND +'-'+ ctx.replace(' ', '_'),
+                keystore_config=ksc,
+                sop_config=sopc,
+                tag_namespace=context.tag_namespace,
+                search=self.search,
+                metadata=self.metadata,
+                log_level=log_level)
+            if worker.connect():
+                self.openpgp_workers[ctx] = worker
+        return self.openpgp_workers[ctx]
+
     def start_encrypting_workers(self):
         try:
             notify_url = self.worker.callback_url('rpc/notify')
@@ -151,16 +173,16 @@ main app worker. Hints:
 
         missing_metadata = self.metadata is None
         if missing_metadata:
-            self.metadata = MetadataWorker(self.worker.worker_dir,
-                self.worker.profile_dir,
+            self.metadata = MetadataWorker(
+                self.worker.worker_dir, self.worker.profile_dir,
                 aes_keys,
                 notify=notify_url,
                 name='metadata',
                 log_level=log_level).connect()
 
         if self.search is None:
-            self.search = SearchWorker(self.worker.worker_dir,
-                self.worker.profile_dir,
+            self.search = SearchWorker(
+                self.worker.worker_dir, self.worker.profile_dir,
                 self.metadata,
                 aes_keys,
                 notify=notify_url,
@@ -171,6 +193,8 @@ main app worker. Hints:
             # Restart workers that want to know about our metadata store
             self.storage.quit()
             self.start_workers(start_encrypted=False)
+
+        self._get_openpgp_worker(self.config.CONTEXT_ZERO)
 
         return True
 
@@ -208,8 +232,6 @@ main app worker. Hints:
             name='fs',
             log_level=log_level).connect()
 
-        # FIXME: For each live account in config, start IMAP worker
-
         if (self.storage and self.search and self.metadata
                 and (self.importer is None)):
             self.importer = ImportWorker(self.worker.worker_dir,
@@ -226,7 +248,9 @@ main app worker. Hints:
     def stop_workers(self):
         # The order here may matter, we ask the "higher level" workers
         # to shut down first, before shutting down low level systems.
-        all_workers = [
+        all_workers = []
+        all_workers += self.openpgp_workers.values()
+        all_workers += [
             self.importer,
             self.storage,   # This one talks to the metadata index!
             self.search,
@@ -245,6 +269,7 @@ main app worker. Hints:
             time.sleep(0.1)
 
         self.importer = self.storage = self.search = self.metadata = None
+        self.openpgp_workers = {}
 
     def startup_tasks(self):
         self.start_workers()
@@ -591,7 +616,6 @@ main app worker. Hints:
         else:
             return ResponsePleaseUnlock(jmap_request)
 
-
     async def api_jmap_email(self, conn_id, access, jmap_request):
         ctx = jmap_request.get('context') or self.config.CONTEXT_ZERO
         # Will raise ValueError or NameError if access denied
@@ -719,6 +743,23 @@ main app worker. Hints:
             result = 'base64:' + str(base64.b64encode(rbuf), 'utf-8')
         return ResponseCLI(jmap_request, mimetype, result)
 
+    async def api_jmap_openpgp(self, conn_id, access, jmap_request):
+        # OpenPGP requests all follow the same pattern; we figure out which
+        # context-worker to use, and forward the request to that one.
+        op = jmap_request['op']
+        args = jmap_request['args']
+        kwargs = jmap_request['kwargs']
+
+        # Will raise ValueError or NameError if access denied
+        ctx = jmap_request['context']
+        roles, tag_ns, scope_s = access.grants(ctx,
+            AccessConfig.GRANT_TAG_RW)  # FIXME: Grants depend on op?
+
+        loop = asyncio.get_event_loop()
+        worker = self._get_openpgp_worker(ctx).with_caller(conn_id)
+        result = await worker.async_call(loop, op, *args, qs=kwargs)
+        return result
+
     async def api_jmap(self, conn_id, access, client_request, internal=False):
         # The JMAP API sends multiple requests in a blob, and wants some magic
         # interpolation as well. Where do we implement that? Is there a lib we
@@ -763,6 +804,8 @@ main app worker. Hints:
             result = await self.api_jmap_changepass(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestSetSecret:
             result = await self.api_jmap_set_secret(conn_id, access, jmap_request)
+        elif type(jmap_request) == RequestOpenPGP:
+            result = await self.api_jmap_openpgp(conn_id, access, jmap_request)
         elif type(jmap_request) == RequestPing:
             result = ResponsePing(jmap_request)
 

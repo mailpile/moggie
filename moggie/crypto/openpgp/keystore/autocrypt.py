@@ -1,9 +1,14 @@
+# FIXME: Handle gossip keys
 import base64
 import logging
 import time
 import sqlite3
-from moggie.util import NotFoundError
+import struct
 
+import pgpdump
+from pgpdump.utils import crc24
+
+from moggie.util import NotFoundError
 from ....storage.sqlite_zip import ZipEncryptedSQLite3
 from ..keystore import OpenPGPKeyStore
 
@@ -18,6 +23,7 @@ class AutocryptKeyStore(OpenPGPKeyStore):
                 del kwargs[kk]
 
         OpenPGPKeyStore.__init__(self, **kwargs)
+        self.key_cache = {}
         self.db = None
 
     COLUMNS = (
@@ -79,16 +85,41 @@ class AutocryptKeyStore(OpenPGPKeyStore):
                 self.key_cache[row_dict[col]] = row_dict
         return row_dict
 
-    def get_cert(self, fingerprint):
+    def as_armor(self, keyb64):
+        keyb64 = keyb64 if isinstance(keyb64, str) else str(keyb64, 'utf-8')
+        keyb64 = keyb64.replace('\r', '').replace('\n', '').replace(' ', '')
+        for i in reversed(range(0, len(keyb64)//64)):
+            pos = (1+i)*64
+            keyb64 = keyb64[:pos] + '\n' + keyb64[pos:]
+
+        crc = crc24(base64.b64decode(keyb64))
+        crc = bytearray([
+            (crc >> 16) & 0xff,
+            (crc >>  8) & 0xff,
+            (crc      ) & 0xff])
+
+        return ("""\
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+%s
+=%s
+-----END PGP PUBLIC KEY BLOCK-----"""
+            ) % (keyb64, str(base64.b64encode(crc), 'utf-8'))
+
+    def get_cert(self, fingerprint, which_source=None):
         self.key_cache = {}
-        for which in ('public_key_fingerprint', 'gossip_key_fingerprint'):
+        for which in ('public', 'gossip'):
+            if which_source is not None:
+                if which != which_source:
+                    continue
             for row in self.execute("""\
-                    SELECT public_key, %s
+                    SELECT %s_key, %s
                       FROM autocrypt_peers
-                     WHERE %s = ?""" % (', '.join(self.COLUMNS), which),
+                     WHERE %s_key_fingerprint = ?""" % (
+                        which, ', '.join(self.COLUMNS), which),
                     (fingerprint,)):
                 self._cache_row(row[1:])
-                return str(base64.b64decode(row[0]), 'utf-8')
+                return self.as_armor(row[0])
         raise NotFoundError(fingerprint)
 
     def _select(self, what, search_terms, min_count):
@@ -117,13 +148,13 @@ class AutocryptKeyStore(OpenPGPKeyStore):
         for row in self._select(want, search_terms, min_count):
             row_dict = self._cache_row(row)
             if row_dict.get('public_key'):
-                yield base64.b64decode(row_dict['public_key'])
+                yield self.as_armor(row_dict['public_key'])
             if row_dict.get('gossip_key'):
-                yield base64.b64decode(row_dict['gossip_key'])
+                yield self.as_armor(row_dict['gossip_key'])
 
     def get_keyinfo(self, key):
         key_info = super().get_keyinfo(key)
-        key_info['autocrypt'] = ac = self.key_cache.get(key_info['fingerprint'])
+        key_info['autocrypt'] = ac = self.key_cache.get(key_info['fingerprint'], {})
 
         if ac.get('public_key') or ac.get('gossip_key'):
             d35 = 35 * 24 * 3600
@@ -136,12 +167,73 @@ class AutocryptKeyStore(OpenPGPKeyStore):
         else:
             recommendation = 'unavailable'
         ac['recommendation'] = recommendation
-        del ac['public_key']
-        del ac['gossip_key']
+        for rm in ('public_key', 'gossip_key'):
+            if rm in ac:
+                del ac[rm]
 
         return key_info
 
     # list_certs is inherited, and combines get_keyinfo with find_certs.
+
+    def delete_cert(self, fingerprint):
+        deleted = 0
+        for which in ('gossip', 'public'):
+            try:
+                self.get_cert(fingerprint, which_source=which)
+                self.execute("""\
+                    UPDATE autocrypt_peers
+                       SET %s_key_fingerprint = NULL,
+                           %s_key = NULL,
+                           %s_key_source = NULL
+                     WHERE %s_key_fingerprint = ?""" % (
+                         which, which, which, which),
+                    (fingerprint,))
+                deleted += 1
+            except NotFoundError:
+                pass
+        if deleted:
+            self.execute("""\
+                DELETE FROM autocrypt_peers
+                      WHERE public_key IS NULL
+                        AND gossip_key IS NULL""")
+            return True
+        raise NotFoundError('Key not found: %s' % fingerprint)
+
+    def save_cert(self, cert, which='public'):
+        key_info = self.get_keyinfo(cert)
+        fpr = key_info['fingerprint']
+
+        now = int(time.time())
+        if key_info['expires'] < now:
+            logging.warning('The key %s has expired!' % fpr)
+
+        bcert = bytes(cert, 'utf-8')
+        key_b64 = base64.b64encode(pgpdump.data.AsciiData(bcert).data)
+
+        for uid in key_info['uids']:
+            email = uid['email']
+            if list(self.find_certs(email)):
+                self.execute("""\
+                    UPDATE autocrypt_peers
+                       SET autocrypt_timestamp = ?,
+                           last_seen = ?,
+                           public_key_fingerprint = ?,
+                           public_key = ?,
+                           public_key_source = NULL
+                     WHERE addr = ?""", (now, now, fpr, key_b64, email))
+                logging.info('Updated key for %s to %s' % (email, fpr))
+            else:
+                self.execute("""\
+                    INSERT INTO autocrypt_peers(
+                        addr, prefer_encrypt,
+                        autocrypt_timestamp, autocrypt_count, last_seen,
+                        public_key_fingerprint, public_key,
+                        public_key_source)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                        (email, None, now, 0, now, fpr, key_b64, None))
+                logging.info('Added key for %s to %s' % (email, fpr))
+
+        return True
 
     def process_email(self, parsed_msg, delete=True, now=None):
         """

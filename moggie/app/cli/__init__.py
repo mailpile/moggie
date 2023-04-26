@@ -4,7 +4,7 @@ from .email import CommandEmail, CommandParse
 from .notmuch import CommandSearch, CommandAddress, CommandShow, CommandCount
 from .notmuch import CommandConfig, CommandTag, CommandReply
 from .help import CommandHelp
-from .openpgp import CommandPGPGetKeys, CommandPGPAddCerts, CommandPGPDelCerts
+from .openpgp import CommandPGPGetKeys, CommandPGPAddKeys, CommandPGPDelKeys
 from .openpgp import CommandPGPSign, CommandPGPEncrypt, CommandPGPDecrypt
 
 CLI_COMMANDS = {
@@ -24,8 +24,8 @@ CLI_COMMANDS = {
     CommandWelcome.NAME: CommandWelcome,
 
     CommandPGPGetKeys.NAME: CommandPGPGetKeys,
-    CommandPGPAddCerts.NAME: CommandPGPAddCerts,
-    CommandPGPDelCerts.NAME: CommandPGPDelCerts,
+    CommandPGPAddKeys.NAME: CommandPGPAddKeys,
+    CommandPGPDelKeys.NAME: CommandPGPDelKeys,
     CommandPGPSign.NAME: CommandPGPSign,
     CommandPGPEncrypt.NAME: CommandPGPEncrypt,
     CommandPGPDecrypt.NAME: CommandPGPDecrypt,

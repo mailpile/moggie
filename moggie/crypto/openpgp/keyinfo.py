@@ -48,7 +48,8 @@ class RestrictedDict(dict):
         def mk_prop(k):
             return property(lambda s: s[k], lambda s, v: s.__setitem__(k, v))
         for k in cls.KEYS:
-            setattr(cls, k, mk_prop(k))
+            if not hasattr(cls, k):
+                setattr(cls, k, mk_prop(k))
 
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
@@ -125,8 +126,12 @@ class KeyInfo(RestrictedDict):
         'autocrypt':    (dict, None),
         'is_subkey':    (bool, False),
         'have_secret':  (bool, False),
-        'on_keychain':  (bool, False),
-        'in_vcards':    (bool, False)}
+        'expired':      (bool, None),
+        'can_encrypt':  (bool, None),
+        'can_sign':     (bool, None),
+        'is_usable':    (bool, None),
+        'rank_reason':  (str, None),
+        'rank':         (int, 0)}
 
     expired = property(lambda k: time.time() > k.expires > 0)
 
@@ -215,24 +220,47 @@ class KeyInfo(RestrictedDict):
             if cap.lower() not in keyinfo.capabilities:
                 keyinfo.expires = min(subkey.expires, keyinfo.expires)
 
+    def calculate_rank_and_properties(self, now=None):
+        """
+        Write back calculated values to the dict, and return rank
+        """
+        now = now or time.time()
+        self['expired'] = self.expired
+        self['can_sign'] = self.can_sign
+        self['can_encrypt'] = self.can_encrypt
+        self['is_usable'] = self.is_usable
 
-class MailpileKeyInfo(KeyInfo):
-    KEYS = dict((k, v) for k, v in list(KeyInfo.KEYS.items()) + [
-        ('vcards',       (dict, None)),
-        ('origins',      (list, None)),
-        ('is_autocrypt', (bool, False)),
-        ('is_gossip',    (bool, False)),
-        ('is_preferred', (bool, False)),
-        ('is_pinned',    (bool, False)),
-        ('scores',       (dict, None)),
-        ('score_stars',  (int, 0)),
-        ('score_reason', (str, None)),
-        ('score',        (int, 0))])
+        reason = 'Key is unusable'
+        rank = max(0, min(64-12, (self.expires - now) // (31*24*3600)))
+        if self.is_usable:
+            keysize = int(self.keysize)
+            if keysize and (keysize < 10 or keysize > 3000):
+                # Rankings: Stronger key is worth 1 extra year of lifetime?
+                reason = 'Key is strong'
+                rank += 12
+            else:
+                reason = 'Key is usable'
 
+            if self.can_sign:
+                rank += 128
+                reason += ', can sign'
 
-KeyUID.prep_properties()
-KeyInfo.prep_properties()
-MailpileKeyInfo.prep_properties()
+            if self.can_encrypt:
+                rank += 256
+                reason += ', can encrypt'
+
+        self['rank_reason'] = reason
+        self['rank'] = rank
+        return self.rank
+
+    def calculate(keyinfo, autocrypt_uid=None, now=None):
+        keyinfo.synthesize_validity(now=now)
+        keyinfo.add_subkey_capabilities(now=now)
+        keyinfo.recalculate_expiration(now=now)
+        keyinfo.calculate_rank_and_properties(now=now)
+        if autocrypt_uid is not None:
+            keyinfo.ensure_autocrypt_uid(autocrypt_uid)
+        return keyinfo
 
 
 def get_keyinfo(data, autocrypt_header=None,
@@ -298,8 +326,9 @@ def get_keyinfo(data, autocrypt_header=None,
                 last_key.uids.append(last_uid)
 
             elif isinstance(m, pgpdump.packet.SignaturePacket) and results:
-                # Note: We don't actually check the signature; we trust
-                #       GnuPG will if we decide to use this key.
+                # FIXME: We don't actually check the signature; we trust our
+                #        OpenPGP backend will if we decide to use this key.
+                #        Is that trust misplaced?
                 if m.key_id == main_key_id:
                     for s in m.subpackets:
                         if s.subtype == 9:
@@ -327,14 +356,13 @@ def get_keyinfo(data, autocrypt_header=None,
 
     now = time.time()
     for keyinfo in results:
-        keyinfo.synthesize_validity(now=now)
-        keyinfo.add_subkey_capabilities(now=now)
-        keyinfo.recalculate_expiration(now=now)
-        if autocrypt_uid is not None:
-            keyinfo.ensure_autocrypt_uid(autocrypt_uid)
+        keyinfo.calculate(autocrypt_uid=autocrypt_uid, now=now)
 
     return results
 
+
+KeyUID.prep_properties()
+KeyInfo.prep_properties()
 
 if __name__ == "__main__":
     import sys
