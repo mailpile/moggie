@@ -1,3 +1,26 @@
+# Methods for serializing/deserializing common Python data formats, as
+# well as moggie-specific things (this is pluggable).
+#
+# The methods dumb_encode_bin will generate a binary representation of
+# the data, dumb_encode_asc will generate an ASCII (7bit) representation.
+# Both can be decoded using dumb_decode.
+#
+# The to_json and from_json will use normal JSON encoding for data types
+# which are natively common to both Python and JSON, and resorts to
+# embedding dumb_encode_asc() output for binary data, sets, tuples and
+# moggie-specific things.
+#
+# Choosing which to use:
+#
+#   - to_json and from_json are mostly compatible with the rest of the world
+#   - to_json and from_json are fastest for common (cleartext) use cases
+#   - dumb_encode_bin is the most compact when storing binary data
+#   - dumb_encode_* support compression and encryption
+#
+# So as a rule of thumb, the dumb_encode_* methods get used internally,
+# but we'll use JSON any time we expect to expose our data to the outside
+# word.
+#
 import binascii
 import json
 import logging
@@ -96,19 +119,24 @@ def dumb_encode_asc(v,
 
     if isinstance(v, (list, tuple, set)):
         items = [
-            'L' if isinstance(v, list) else (
-            'T' if isinstance(v, tuple) else 'S')]
+                'L' if isinstance(v, list) else (
+                'T' if isinstance(v, tuple) else 'S')
+            ] * (len(v)+1)  # Preallocating the list is faster
+        i = 0
         for elem in v:
             e = dumb_encode_asc(elem)
-            items.append('%x,%s' % (len(e), e))
+            i += 1
+            items[i] = ('%x,%s' % (len(e), e))
         return ''.join(items)
 
     if isinstance(v, dict):
-        items = ['D']
+        items = ['D'] * (len(v) + 1)  # Preallocating the list is faster
+        i = 0
         for key, val in v.items():
             key = dumb_encode_asc(key)
             val = dumb_encode_asc(val)
-            items.append('%x,%x,%s%s' % (len(key), len(val), key, val))
+            i += 1
+            items[i] = ('%x,%x,%s%s' % (len(key), len(val), key, val))
         return ''.join(items)
 
     raise ValueError('Unsupported type: <%s> = %s' % (type(v), v))
@@ -119,11 +147,11 @@ def dumb_decode_dict(v):
     while v:
         l1, l2, v = v.split(',', 2)
         l1 = int(l1, 16)
-        l2 = int(l2, 16)
+        l2 = int(l2, 16) + l1
         key = dumb_decode(v[:l1])
-        val = dumb_decode(v[l1:l1+l2])
+        val = dumb_decode(v[l1:l2])
         dct[key] = val
-        v = v[l1+l2:]
+        v = v[l2:]
     return dct
 
 
