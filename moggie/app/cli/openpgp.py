@@ -276,13 +276,14 @@ Hash: %s\
         if not ac_key.startswith('-----PGP'):
             sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj)
             for key in await keys.find_certs(ac_key):
-                ac_key = key
+                ac_key = str(key, 'utf-8') if isinstance(key, bytes) else key
                 break
 
         import pgpdump
         try:
-            key_data = pgpdump.AsciiData(ac_key).data
-        except TypeError:
+            key_data = pgpdump.AsciiData(bytes(ac_key, 'utf-8')).data
+        except TypeError as e:
+            logging.exception('Invalid Autocrypt key data')
             return None
 
         import base64

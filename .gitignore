@@ -12,6 +12,9 @@ mp-virtualenv
 .*deps
 .tox
 .docker-test-wait
+work_dir
+config.rc
+BRE.notes/
 mailpile.egg-info/
 mailpile-tmp.py
 static/default/plugins/
@@ -30,6 +33,9 @@ cover/
 bower_components/
 node_modules/
 testing/
+test-data/emails/cur/
+test-data/emails/new/
+test-data/emails/tmp/
 mailpile.tar.gz
 AUTHORS
 ChangeLog
