@@ -284,7 +284,7 @@ class CommandHelp(CLICommand):
             if arg == 'topics':
                 cmds = ', '.join(sorted(
                     k for k in CLI_COMMANDS.keys()
-                    if CLI_COMMANDS[k].__doc__ or k in TOPICS))
+                    if CLI_COMMANDS.get(k).__doc__ or k in TOPICS))
                 topics = ', '.join(sorted(
                     t for t in TOPICS.keys()
                     if t not in CLI_COMMANDS and not t[:1] == '_'))

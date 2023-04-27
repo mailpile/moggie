@@ -133,21 +133,22 @@ def Main(args):
     from ..config import configure_logging, AppConfig
     wd = DEFAULT_WORKDIR()
 
+    commands = COMMANDS
     command = 'default'
     if len(args) > 0 and args[0][:1] != '-' and '@' not in args[0]:
         command = args.pop(0)
 
-    if command not in COMMANDS:
+    if command not in commands:
         from .cli import CLI_COMMANDS
-        COMMANDS.update(CLI_COMMANDS)
-        CLI_COMMANDS.update(COMMANDS)  # So moggie help can find things
+        CLI_COMMANDS.update(commands)  # So moggie help can find things
+        commands = CLI_COMMANDS
 
     configure_logging(
         profile_dir=wd,
         level=int(AppConfig(wd).get(
             AppConfig.GENERAL, 'log_level', fallback=logging.DEBUG)))
 
-    command = COMMANDS.get(command)
+    command = commands.get(command)
     if command is not None:
         if hasattr(command, 'Command'):
             result = command.Command(wd, args)
