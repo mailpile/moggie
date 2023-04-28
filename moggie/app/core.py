@@ -141,16 +141,21 @@ main app worker. Hints:
             await asyncio.sleep(1)
 
     def _get_openpgp_worker(self, ctx):
-        if ctx not in self.openpgp_workers:
-            from moggie.workers.openpgp import OpenPGPWorker
-            context = self.config.contexts[ctx]
+        from moggie.workers.openpgp import OpenPGPWorker
+
+        context = self.config.contexts[ctx]
+        worker_name = OpenPGPWorker.KIND
+        if context.tag_namespace:
+            worker_name += '-' + context.tag_namespace
+
+        if worker_name not in self.openpgp_workers:
             ksc, sopc, = context.get_openpgp_settings()
             log_level = int(self.config.get(
                 self.config.GENERAL, 'log_level', fallback=logging.ERROR))
             worker = OpenPGPWorker(
                 self.worker.worker_dir, self.worker.profile_dir,
                 self.config.get_aes_keys(),
-                name=OpenPGPWorker.KIND +'-'+ ctx.replace(' ', '_'),
+                name=worker_name,
                 keystore_config=ksc,
                 sop_config=sopc,
                 tag_namespace=context.tag_namespace,
@@ -158,8 +163,9 @@ main app worker. Hints:
                 metadata=self.metadata,
                 log_level=log_level)
             if worker.connect():
-                self.openpgp_workers[ctx] = worker
-        return self.openpgp_workers[ctx]
+                self.openpgp_workers[worker_name] = worker
+
+        return self.openpgp_workers[worker_name]
 
     def start_encrypting_workers(self):
         try:
