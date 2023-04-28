@@ -8,7 +8,7 @@ import websockets
 
 from .dumbcode import to_json, from_json
 from .http import http1x_connect
-from ..jmap.requests import RequestPing
+from ..api.requests import RequestPing
 
 
 class JsonRpcClient:

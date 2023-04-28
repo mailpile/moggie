@@ -175,7 +175,7 @@ async def web_websocket(opcode, msg, conn, ws,
         web_access = conn.env['access']
         conn_uid = conn.uid
         try:
-            result = await conn.env['app'].api_jmap(
+            result = await conn.env['app'].api_request(
                 conn_uid, web_access, from_json(msg))
             code = result.get('code', 500)
             if code == 200 and 'body' in result:
@@ -186,6 +186,8 @@ async def web_websocket(opcode, msg, conn, ws,
         await conn.send(to_json({'error': code, 'result': result}))  #FIXME
 
 
+# WARNING: We don't actually implement JMAP properly yet! This is part of
+#          an un-concluded experiment in that direction.
 @async_url('/.well-known/jmap')
 @http_require(csrf=False)
 @process_post(max_bytes=20480, _async=True)
@@ -206,26 +208,26 @@ async def web_jmap_session(req_env):
         return {'code': code, 'msg': msg, 'body': 'Sorry\n'}
 
 
-@async_url('/jmap')
+@async_url('/api')
 @http_require(csrf=False)
 @process_post(max_bytes=204800, _async=True)
 # FIXME: Should this also be a websocket? How do JMAP websockets work?
-async def web_jmap(req_env):
+async def web_api(req_env):
     code, msg, status = 500, 'Oops', 'err'
-    with RequestTimer('web_jmap', req_env, status='rej') as timer:
+    with RequestTimer('web_api', req_env, status='rej') as timer:
         try:
             access = req_env['worker'].get_auth(req_env, secure_transport=True)
             timer.status = 'ok'
             # FIXME: Do we want more granularity on our timers? If so, we need
             #        to change the timer name to match the method(s) called.
-            #timer.name = 'jmap_foo'
+            #timer.name = 'api_foo'
             if req_env.post_data:
-                return await req_env['app'].api_jmap(
+                return await req_env['app'].api_request(
                     None, access, req_env.post_data)
         except PermissionError as e:
             code, msg, status = 403, str(e), 'rej'
         except:
-            logging.exception('web_jmap failed')
+            logging.exception('web_api failed')
 
         # If we get this far, we had an internal error of some sort.
         timer.status = status
@@ -265,7 +267,7 @@ class AppWorker(PublicWorker):
     """
 
     KIND = 'app'
-    PUBLIC_PATHS = ['/jmap', '/ws', '/', '/favicon.ico']
+    PUBLIC_PATHS = ['/api', '/ws', '/', '/favicon.ico']
     PUBLIC_PREFIXES = ['/pile', '/static/', '/themed/', '/.well-known/',
                        '/cli/help', '/cli/show']
     CONFIG_SECTION = 'App'
@@ -296,22 +298,22 @@ class AppWorker(PublicWorker):
             self.set_rpc_authorization('Bearer %s' % self.auth_token)
         return conn
 
-    async def async_jmap(self, access, request_obj):
+    async def async_api_request(self, access, request_obj):
         if self._sock:
-            return await self.app.api_jmap(
+            return await self.app.api_request(
                 None, access, request_obj, internal=True)
 
         # FIXME: It would be nice if this were async too...
         if (access is True) or (access and
                 access.config_key == self.app.config.ACCESS_ZERO):
-            return self.call('rpc/jmap', request_obj)
+            return self.call('rpc/api', request_obj)
         else:
             raise PermissionError('Access denied')
 
-    def jmap(self, access, request_obj):
+    def api_request(self, access, request_obj):
         if (access is True) or (access and
                 access.config_key == self.app.config.ACCESS_ZERO):
-            return self.call('rpc/jmap', request_obj)
+            return self.call('rpc/api', request_obj)
         else:
             raise PermissionError('Access denied')
 

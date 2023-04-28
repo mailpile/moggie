@@ -33,7 +33,7 @@ from .openpgp import CommandOpenPGP
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
-from ...jmap.requests import RequestSearch, RequestEmail
+from ...api.requests import RequestSearch, RequestEmail
 from ...security.html import HTMLCleaner
 from ...security.css import CSSCleaner
 
@@ -1081,11 +1081,11 @@ class CommandEmail(CLICommand):
         emails = []
         for search in searches:
             worker = self.connect()
-            result = await self.worker.async_jmap(self.access,
+            result = await self.worker.async_api_request(self.access,
                 RequestSearch(context=self.context, terms=search))
             if result and 'emails' in result:
                 for metadata in result['emails']:
-                    msg = await self.worker.async_jmap(self.access,
+                    msg = await self.worker.async_api_request(self.access,
                         RequestEmail(
                             metadata=metadata,
                             text=True,
@@ -1791,11 +1791,11 @@ These are the %d searchable keywords for this message:
         for search in self.searches:
             worker = self.connect()
             request = RequestSearch(context=self.context, terms=search)
-            result = await self.worker.async_jmap(self.access, request)
+            result = await self.worker.async_api_request(self.access, request)
             if result and 'emails' in result:
                 for metadata in result['emails']:
                     req = RequestEmail(metadata=metadata, full_raw=True)
-                    msg = await self.worker.async_jmap(self.access, req)
+                    msg = await self.worker.async_api_request(self.access, req)
                     md = Metadata(*metadata)
                     if msg and 'email' in msg:
                         yield {

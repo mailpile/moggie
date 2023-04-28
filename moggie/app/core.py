@@ -11,9 +11,9 @@ import sys
 
 from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
 from ..config.helpers import DictItemProxy, EncodingListItemProxy
-from ..jmap.core import JMAPSessionResource
-from ..jmap.requests import *
-from ..jmap.responses import *
+from ..api.core import APISessionResource
+from ..api.requests import *
+from ..api.responses import *
 from ..storage.files import FileStorage
 from ..util.dumbcode import dumb_decode, to_json, from_json
 from ..workers.importer import ImportWorker
@@ -52,7 +52,7 @@ def run_async_in_thread(method, *m_args, **m_kwargs):
     return result[0]
 
 
-class AppSessionResource(JMAPSessionResource):
+class AppSessionResource(APISessionResource):
     def __init__(self, app, access):
         super().__init__(self)
         self.app = app
@@ -61,7 +61,7 @@ class AppSessionResource(JMAPSessionResource):
             self.username = access.username
         accounts = {}
         for context, role in access.roles.items():
-            accounts[context] = {}  #FIXME: Present context as JMAP
+            accounts[context] = {}  #FIXME: Present context as JMAP?
         self.accounts = accounts
 
 
@@ -95,7 +95,7 @@ main app worker. Hints:
 
         self.rpc_functions = {
             b'rpc/notify':            (True, self.rpc_notify),
-            b'rpc/jmap':              (True, self.rpc_jmap),
+            b'rpc/api':               (True, self.rpc_api),
             b'rpc/ask_secret':        (True, self.rpc_ask_secret),
             b'rpc/set_secret':        (True, self.rpc_set_secret),
             b'rpc/jmap_session':      (True, self.rpc_session_resource),
@@ -111,8 +111,6 @@ main app worker. Hints:
         self.stores = {}
         self.search = None
         self.ticker = None
-        self.jmap = {
-            'session': self.api_jmap_session}
 
         # FIXME: Make this customizable somehow
         self.theme = {'_unused_body_bg': '#fff'}
@@ -338,12 +336,12 @@ main app worker. Hints:
     async def api_webroot(self, req_env):
         return 'FIXME: Hello world'
 
-    async def api_jmap_config_set(self, conn_id, access, jmap_request):
+    async def api_req_config_set(self, conn_id, access, api_request):
         czero = self.config.CONTEXT_ZERO
 
-        create = jmap_request.get('new') or ''
-        section = jmap_request.get('section') or ''
-        updates = jmap_request.get('updates') or []
+        create = api_request.get('new') or ''
+        section = api_request.get('section') or ''
+        updates = api_request.get('updates') or []
 
         # Sanity and access checks
         #
@@ -441,17 +439,17 @@ main app worker. Hints:
                 errors.append('Unknown op: %s(%s)' % (op, var))
                 logging.info('ConfigSet error: %s' % errors[-1])
 
-        return ResponseConfigSet(jmap_request, result, error=', '.join(errors))
+        return ResponseConfigSet(api_request, result, error=', '.join(errors))
 
-    async def api_jmap_set_secret(self, conn_id, access, jmap_request):
-        ctx = jmap_request.get('context') or self.config.CONTEXT_ZERO
+    async def api_req_set_secret(self, conn_id, access, api_request):
+        ctx = api_request.get('context') or self.config.CONTEXT_ZERO
         # Will raise ValueError or NameError if access denied
         # FIXME: Is this a reasonable permission requirement?
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
 
-        key = jmap_request['key']
-        ttl = int(jmap_request['ttl'] or 0)
-        secret = jmap_request['secret']
+        key = api_request['key']
+        ttl = int(api_request['ttl'] or 0)
+        secret = api_request['secret']
         context = self.config.get_context(ctx)
         if not context:
             raise ValueError('No such context')
@@ -461,12 +459,12 @@ main app worker. Hints:
         with self.config:
             context.set_secret(key, secret, ttl=ttl)
 
-        return ResponseConfigSet(jmap_request, {'set_secret': key, 'ttl': ttl})
+        return ResponseConfigSet(api_request, {'set_secret': key, 'ttl': ttl})
 
-    async def api_jmap_config_get(self, conn_id, access, jmap_request):
+    async def api_req_config_get(self, conn_id, access, api_request):
         result = {}
         czero = self.config.CONTEXT_ZERO
-        which = jmap_request.get('which')
+        which = api_request.get('which')
         error = None
 
         def _fill(name, all_items, context, prefix, roles):
@@ -481,24 +479,24 @@ main app worker. Hints:
             else:
                 error = 'Access denied: %s' % name
 
-        if jmap_request.get('access'):
+        if api_request.get('access'):
             _fill('access', self.config.all_access, czero,
                 self.config.ACCESS_PREFIX, AccessConfig.GRANT_ACCESS)
-        if jmap_request.get('accounts'):
+        if api_request.get('accounts'):
             _fill('accounts', self.config.accounts, czero,
                 self.config.ACCOUNT_PREFIX, AccessConfig.GRANT_ACCESS)
-        if jmap_request.get('identities'):
+        if api_request.get('identities'):
             _fill('identities', self.config.identities, czero,
                 self.config.IDENTITY_PREFIX, AccessConfig.GRANT_ACCESS)
 
-        if jmap_request.get('urls'):
+        if api_request.get('urls'):
             result['urls'] = [self.worker.url.rsplit('/', 1)[0]]
             kite_name = self.config.get(
                 self.config.GENERAL, 'kite_name', fallback=None)
             if kite_name:
                 result['urls'].append('https://%s' % kite_name)
 
-        if jmap_request.get('contexts'):
+        if api_request.get('contexts'):
             contexts = self.config.contexts
             if which and which.startswith(self.config.CONTEXT_PREFIX):
                 if access.grants(which, AccessConfig.GRANT_ACCESS):
@@ -512,10 +510,10 @@ main app worker. Hints:
             else:
                 error = 'Access denied: contexts'
 
-        return ResponseConfigGet(jmap_request, result, error=error)
+        return ResponseConfigGet(api_request, result, error=error)
 
-    async def api_jmap_mailbox(self, conn_id, access, jmap_request):
-        ctx = jmap_request['context']
+    async def api_req_mailbox(self, conn_id, access, api_request):
+        ctx = api_request['context']
         roles, tag_ns, scope_s = access.grants(ctx,
             AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
 
@@ -525,33 +523,33 @@ main app worker. Hints:
             # Note: This might return a "please login" if the mailbox
             #       is encrypted or on a remote server.
             return await self.storage.async_mailbox(loop,
-                jmap_request['mailbox'],
-                username=jmap_request['username'],
-                password=jmap_request['password'],
-                limit=jmap_request['limit'],
-                skip=jmap_request['skip'])
+                api_request['mailbox'],
+                username=api_request['username'],
+                password=api_request['password'],
+                limit=api_request['limit'],
+                skip=api_request['skip'])
         watched = False
         info = await load_mailbox()
-        return ResponseMailbox(jmap_request, info, watched)
+        return ResponseMailbox(api_request, info, watched)
 
-    async def api_jmap_search(self, conn_id, access, jmap_request):
-        ctx = jmap_request['context']
+    async def api_req_search(self, conn_id, access, api_request):
+        ctx = api_request['context']
         # Will raise ValueError or NameError if access denied
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_READ)
 
         loop = asyncio.get_event_loop()
         async def perform_search():
-            terms = jmap_request['terms']
+            terms = api_request['terms']
             if isinstance(terms, list):
                 terms = ' '.join(terms)
             s_result = await self.search.with_caller(conn_id).async_search(
                 loop,
                 terms,
                 tag_namespace=tag_ns,
-                mask_deleted=jmap_request.get('mask_deleted', True),
+                mask_deleted=api_request.get('mask_deleted', True),
                 more_terms=scope_s,
-                with_tags=(not jmap_request.get('only_ids', False)))
-            if jmap_request.get('uncooked'):
+                with_tags=(not api_request.get('only_ids', False)))
+            if api_request.get('uncooked'):
                 return s_result
             s_metadata = (
                 await self.metadata.with_caller(conn_id).async_metadata(
@@ -559,71 +557,71 @@ main app worker. Hints:
                     s_result['hits'],
                     tags=s_result.get('tags'),
                     sort=self.search.SORT_DATE_DEC,  # FIXME: configurable?
-                    only_ids=jmap_request.get('only_ids', False),
-                    threads=jmap_request.get('threads', False),
-                    skip=jmap_request['skip'],
-                    limit=jmap_request['limit'],
+                    only_ids=api_request.get('only_ids', False),
+                    threads=api_request.get('threads', False),
+                    skip=api_request['skip'],
+                    limit=api_request['limit'],
                     raw=True))
             s_metadata['metadata'] = list(s_metadata['metadata'])
             return (s_result, s_metadata)
 
-        jmap_request['skip'] = jmap_request.get('skip') or 0
-        jmap_request['limit'] = jmap_request.get('limit', None)
+        api_request['skip'] = api_request.get('skip') or 0
+        api_request['limit'] = api_request.get('limit', None)
         if self.metadata and self.search:
             results = await perform_search()
-            if jmap_request.get('uncooked'):
-                return ResponseSearch(jmap_request, None, results)
+            if api_request.get('uncooked'):
+                return ResponseSearch(api_request, None, results)
             else:
                 only_metadata = results[1]['metadata']
                 results[0]['total'] = results[1]['total']
-                return ResponseSearch(jmap_request, only_metadata, results[0])
+                return ResponseSearch(api_request, only_metadata, results[0])
         else:
-            return ResponsePleaseUnlock(jmap_request)
+            return ResponsePleaseUnlock(api_request)
 
-    async def api_jmap_counts(self, conn_id, access, jmap_request):
-        ctx = jmap_request['context']
+    async def api_req_counts(self, conn_id, access, api_request):
+        ctx = api_request['context']
         # Will raise ValueError or NameError if access denied
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_READ)
 
         loop = asyncio.get_event_loop()
         async def perform_counts():
             counts = {}
-            for terms in jmap_request['terms_list']:
+            for terms in api_request['terms_list']:
                 result = await self.search.with_caller(conn_id).async_search(
                     loop, terms,
                     tag_namespace=tag_ns,
                     more_terms=scope_s,
-                    mask_deleted=jmap_request.get('mask_deleted', True))
+                    mask_deleted=api_request.get('mask_deleted', True))
                 counts[terms] = dumb_decode(result['hits']).count()
             return counts
 
         if self.search:
-            return ResponseCounts(jmap_request, await perform_counts())
+            return ResponseCounts(api_request, await perform_counts())
         else:
-            return ResponsePleaseUnlock(jmap_request)
+            return ResponsePleaseUnlock(api_request)
 
-    async def api_jmap_tag(self, conn_id, access, jmap_request):
-        ctx = jmap_request['context']
+    async def api_req_tag(self, conn_id, access, api_request):
+        ctx = api_request['context']
         # Will raise ValueError or NameError if access denied
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
 
         if self.search:
             loop = asyncio.get_event_loop()
             results = await self.search.with_caller(conn_id).async_tag(loop,
-                jmap_request.get('tag_ops', []),
+                api_request.get('tag_ops', []),
                 tag_namespace=tag_ns,
                 more_terms=scope_s,
-                tag_undo_id=jmap_request.get('tag_undo_id'),
-                tag_redo_id=jmap_request.get('tag_redo_id'),
-                record_history=jmap_request.get('undoable', 'Tagging'),
-                mask_deleted=jmap_request.get('mask_deleted', True))
+                tag_undo_id=api_request.get('tag_undo_id'),
+                tag_redo_id=api_request.get('tag_redo_id'),
+                record_history=api_request.get('undoable', 'Tagging'),
+                mask_deleted=api_request.get('mask_deleted', True))
 
-            return ResponseTag(jmap_request, results)
+            return ResponseTag(api_request, results)
         else:
-            return ResponsePleaseUnlock(jmap_request)
+            return ResponsePleaseUnlock(api_request)
 
-    async def api_jmap_email(self, conn_id, access, jmap_request):
-        ctx = jmap_request.get('context') or self.config.CONTEXT_ZERO
+    async def api_req_email(self, conn_id, access, api_request):
+        ctx = api_request.get('context') or self.config.CONTEXT_ZERO
         # Will raise ValueError or NameError if access denied
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_READ)
 
@@ -638,31 +636,31 @@ main app worker. Hints:
             # Note: This might return a "please login" if the mailbox
             #       is encrypted or on a remote server.
             return await self.storage.with_caller(conn_id).async_email(loop,
-                jmap_request['metadata'],
-                text=jmap_request.get('text', False),
-                data=jmap_request.get('data', False),
-                parts=jmap_request.get('parts', None),
-                full_raw=jmap_request.get('full_raw', False))
-        return ResponseEmail(jmap_request, await get_email())
+                api_request['metadata'],
+                text=api_request.get('text', False),
+                data=api_request.get('data', False),
+                parts=api_request.get('parts', None),
+                full_raw=api_request.get('full_raw', False))
+        return ResponseEmail(api_request, await get_email())
 
-    async def api_jmap_contexts(self, conn_id, access, jmap_request):
+    async def api_req_contexts(self, conn_id, access, api_request):
         # FIXME: Only return contexts this access level grants use of
         all_contexts = self.config.contexts
         contexts = [all_contexts[k].as_dict() for k in sorted(access.roles)]
-        return ResponseContexts(jmap_request, contexts)
+        return ResponseContexts(api_request, contexts)
 
-    async def api_jmap_unlock(self, conn_id, access, jmap_request):
-        if self._is_locked() and jmap_request.get('passphrase'):
+    async def api_req_unlock(self, conn_id, access, api_request):
+        if self._is_locked() and api_request.get('passphrase'):
             try:
-                self.config.provide_passphrase(jmap_request['passphrase'])
+                self.config.provide_passphrase(api_request['passphrase'])
                 self.start_encrypting_workers()
             except PermissionError:
-                return ResponsePleaseUnlock(jmap_request)
-        return ResponseUnlocked(jmap_request)
+                return ResponsePleaseUnlock(api_request)
+        return ResponseUnlocked(api_request)
 
-    async def api_jmap_changepass(self, conn_id, access, jmap_request):
-        newp = jmap_request.get('new_passphrase')
-        oldp = jmap_request.get('old_passphrase')
+    async def api_req_changepass(self, conn_id, access, api_request):
+        newp = api_request.get('new_passphrase')
+        oldp = api_request.get('old_passphrase')
         if not oldp:
             oldp = self.config.get(
                 self.config.SECRETS, 'passphrase', fallback=None)
@@ -689,14 +687,14 @@ main app worker. Hints:
                 self.start_workers()
         return None
 
-    async def api_jmap_add_to_index(self, conn_id, access, jmap_request):
+    async def api_req_add_to_index(self, conn_id, access, api_request):
         if not (self.metadata and self.search):
-            return ResponsePleaseUnlock(jmap_request)
+            return ResponsePleaseUnlock(api_request)
 
         with self.config:
-            ctx = jmap_request.get('context') or self.config.CONTEXT_ZERO
-            watch = jmap_request.get('watch')
-            acct_id = jmap_request.get('account')
+            ctx = api_request.get('context') or self.config.CONTEXT_ZERO
+            watch = api_request.get('watch')
+            acct_id = api_request.get('account')
             context = self.config.get_context(ctx)
             account = None
 
@@ -716,26 +714,26 @@ main app worker. Hints:
                     account = self.config.get_account(section)
                     if acct_id and '@' in acct_id:
                         account.addresses.append(acct_id)
-                mailbox = jmap_request['search']['mailbox']
+                mailbox = api_request['search']['mailbox']
                 if mailbox not in account.watched:
                     account.watched.append(mailbox)
 
         def import_search():
             return self.importer.with_caller(conn_id).import_search(
-                jmap_request['search'],
-                jmap_request.get('initial_tags', []),
+                api_request['search'],
+                api_request.get('initial_tags', []),
                 tag_namespace=context.tag_namespace,
-                force=jmap_request.get('force', False),
-                full=jmap_request.get('full', False))
+                force=api_request.get('force', False),
+                full=api_request.get('full', False))
 
         result = await async_run_in_thread(import_search)
-        return ResponsePing(jmap_request)  # FIXME
+        return ResponsePing(api_request)  # FIXME
 
-    async def api_jmap_cli(self, conn_id, access, jmap_request):
-        rbuf_cmd = await CLI_COMMANDS[jmap_request['command']].MsgRunnable(
-            self.worker, access, jmap_request['args'])
+    async def api_req_cli(self, conn_id, access, api_request):
+        rbuf_cmd = await CLI_COMMANDS[api_request['command']].MsgRunnable(
+            self.worker, access, api_request['args'])
         if rbuf_cmd is None:
-            return ResponseCLI(jmap_request, 'text/error', 'No such command')
+            return ResponseCLI(api_request, 'text/error', 'No such command')
 
         rbuf, cmd = rbuf_cmd
         await cmd.web_run()
@@ -747,17 +745,17 @@ main app worker. Hints:
             result = str(rbuf, 'utf-8')
         else:
             result = 'base64:' + str(base64.b64encode(rbuf), 'utf-8')
-        return ResponseCLI(jmap_request, mimetype, result)
+        return ResponseCLI(api_request, mimetype, result)
 
-    async def api_jmap_openpgp(self, conn_id, access, jmap_request):
+    async def api_req_openpgp(self, conn_id, access, api_request):
         # OpenPGP requests all follow the same pattern; we figure out which
         # context-worker to use, and forward the request to that one.
-        op = jmap_request['op']
-        args = jmap_request['args']
-        kwargs = jmap_request['kwargs']
+        op = api_request['op']
+        args = api_request['args']
+        kwargs = api_request['kwargs']
 
         # Will raise ValueError or NameError if access denied
-        ctx = jmap_request['context']
+        ctx = api_request['context']
         roles, tag_ns, scope_s = access.grants(ctx,
             AccessConfig.GRANT_TAG_RW)  # FIXME: Grants depend on op?
 
@@ -766,54 +764,46 @@ main app worker. Hints:
         result = await worker.async_call(loop, op, *args, qs=kwargs)
         return result
 
-    async def api_jmap(self, conn_id, access, client_request, internal=False):
-        # The JMAP API sends multiple requests in a blob, and wants some magic
-        # interpolation as well. Where do we implement that? Is there a lib we
-        # should depend upon? DIY?
-        #
-        # results = {}
-        # for jr in jmap_request_iter(jmap_request, results):
-        #     results[jr.id] = await self.jmap[jr.method](access, jr)
-        # return {... results ...}
-        #
+    async def api_request(self, conn_id, access, client_request,
+            internal=False):
         try:
-            jmap_request = to_jmap_request(client_request)
+            api_request = to_api_request(client_request)
         except KeyError as e:
             logging.warning('Invalid request: %s' % e)
             return {'code': 500}
 
-        # FIXME: This is a hack
+        # FIXME: This needs refactoring
         result = None
-        if type(jmap_request) == RequestCLI:
-            result = await self.api_jmap_cli(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestMailbox:
-            result = await self.api_jmap_mailbox(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestSearch:
-            result = await self.api_jmap_search(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestTag:
-            result = await self.api_jmap_tag(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestCounts:
-            result = await self.api_jmap_counts(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestEmail:
-            result = await self.api_jmap_email(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestContexts:
-            result = await self.api_jmap_contexts(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestAddToIndex:
-            result = await self.api_jmap_add_to_index(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestConfigGet:
-            result = await self.api_jmap_config_get(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestConfigSet:
-            result = await self.api_jmap_config_set(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestUnlock:
-            result = await self.api_jmap_unlock(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestChangePassphrase:
-            result = await self.api_jmap_changepass(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestSetSecret:
-            result = await self.api_jmap_set_secret(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestOpenPGP:
-            result = await self.api_jmap_openpgp(conn_id, access, jmap_request)
-        elif type(jmap_request) == RequestPing:
-            result = ResponsePing(jmap_request)
+        if type(api_request) == RequestCLI:
+            result = await self.api_req_cli(conn_id, access, api_request)
+        elif type(api_request) == RequestMailbox:
+            result = await self.api_req_mailbox(conn_id, access, api_request)
+        elif type(api_request) == RequestSearch:
+            result = await self.api_req_search(conn_id, access, api_request)
+        elif type(api_request) == RequestTag:
+            result = await self.api_req_tag(conn_id, access, api_request)
+        elif type(api_request) == RequestCounts:
+            result = await self.api_req_counts(conn_id, access, api_request)
+        elif type(api_request) == RequestEmail:
+            result = await self.api_req_email(conn_id, access, api_request)
+        elif type(api_request) == RequestContexts:
+            result = await self.api_req_contexts(conn_id, access, api_request)
+        elif type(api_request) == RequestAddToIndex:
+            result = await self.api_req_add_to_index(conn_id, access, api_request)
+        elif type(api_request) == RequestConfigGet:
+            result = await self.api_req_config_get(conn_id, access, api_request)
+        elif type(api_request) == RequestConfigSet:
+            result = await self.api_req_config_set(conn_id, access, api_request)
+        elif type(api_request) == RequestUnlock:
+            result = await self.api_req_unlock(conn_id, access, api_request)
+        elif type(api_request) == RequestChangePassphrase:
+            result = await self.api_req_changepass(conn_id, access, api_request)
+        elif type(api_request) == RequestSetSecret:
+            result = await self.api_req_set_secret(conn_id, access, api_request)
+        elif type(api_request) == RequestOpenPGP:
+            result = await self.api_req_openpgp(conn_id, access, api_request)
+        elif type(api_request) == RequestPing:
+            result = ResponsePing(api_request)
 
         if internal:
             return result
@@ -822,7 +812,7 @@ main app worker. Hints:
             code, json_result = 200, to_json(result)
         else:
             code = 400
-            result = {'error': 'Unknown %s' % type(jmap_request)}
+            result = {'error': 'Unknown %s' % type(api_request)}
             json_result = to_json(result)
 
         return {
@@ -830,7 +820,7 @@ main app worker. Hints:
             'mimetype': 'application/json',
             'body': bytes(json_result, 'utf-8')}
 
-    def api_jmap_session(self, access):
+    def api_req_session(self, access):
         # FIXME: What does this user have access to?
         jsr = AppSessionResource(self, access)
         return {
@@ -891,17 +881,17 @@ main app worker. Hints:
     async def rpc_check_result(self, request_id, **kwargs):
         pass
 
-    async def rpc_jmap(self, request, **kwargs):
+    async def rpc_api(self, request, **kwargs):
         try:
             access = kwargs.get('access')
             if access:
                 access = self.config.all_access[access]
             else:
                 access = self.config.access_zero()
-            rv = await self.api_jmap(None, access, request, internal=True)
+            rv = await self.api_request(None, access, request, internal=True)
             self.worker.reply_json(rv, **kwargs['reply_kwargs'])
         except:
-            logging.exception('rpc_jmap failed %s' % (request,))
+            logging.exception('rpc_api failed %s' % (request,))
             self.worker.reply_json({'error': 'FIXME'}, **kwargs['reply_kwargs'])
 
     def rpc_ask_secret(self, context, resource, **kwargs):

@@ -1,7 +1,8 @@
 # A collection of common responses
 #
-# FIXME: These should all be rewritten to actually use JMAP.
-# FIXME: There should probably be sanity checks and validation etc.
+# FIXME: To what degree could these be implemented using the JMAP
+#        vocabulary?
+# FIXME: There should probably be more sanity checks and validation
 #
 import time
 

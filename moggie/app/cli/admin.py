@@ -9,6 +9,7 @@ import sys
 import time
 import traceback
 
+from ...api.requests import *
 from ...config import AppConfig, AccessConfig
 from ...util.dumbcode import to_json, from_json
 from .command import Nonsense, CLICommand
@@ -155,9 +156,7 @@ class CommandContext(CLICommand):
         self.print(to_json(config))
 
     async def get_contexts(self):
-        from ...jmap.requests import RequestConfigGet
-
-        cfg = await self.worker.async_jmap(self.access,
+        cfg = await self.worker.async_api_request(self.access,
             RequestConfigGet(contexts=True))
 
         contexts = cfg['config'].get('contexts', {})
@@ -253,8 +252,6 @@ class CommandContext(CLICommand):
                 'dict_val': self.roles}]
 
     async def do_create(self):
-        from ...jmap.requests import RequestConfigSet
-
         current = await self.get_contexts()
         if current:
             raise Nonsense('%s already exists, use update?' % self.name)
@@ -265,14 +262,12 @@ class CommandContext(CLICommand):
             'value': self.name}]
         updates.extend(self._make_updates())
 
-        rv = await self.worker.async_jmap(self.access,
+        rv = await self.worker.async_api_request(self.access,
             RequestConfigSet(new='context', updates=updates))
 
         return await self.get_contexts()
 
     async def do_update(self):
-        from ...jmap.requests import RequestConfigSet
-
         current = await self.get_contexts()
         if not current:
             raise Nonsense('%s not found, use create?' % self.name)
@@ -282,15 +277,13 @@ class CommandContext(CLICommand):
             raise Nonsense('Nothing to do?')
 
         for akey in current:
-            await self.worker.async_jmap(self.access,
+            await self.worker.async_api_request(self.access,
                 RequestConfigSet(section=akey, updates=updates))
             break
 
         return await self.get_contexts()
 
     async def do_remove(self):
-        from ...jmap.requests import RequestConfigSet
-
         if self._make_updates() or not self.name:
             raise Nonsense('Configure the context or remove it, not both')
 
@@ -301,7 +294,7 @@ class CommandContext(CLICommand):
         for akey in current:
             if akey == AppConfig.CONTEXT_ZERO:
                 raise Nonsense('%s cannot be removed.' % akey)
-            await self.worker.async_jmap(self.access,
+            await self.worker.async_api_request(self.access,
                 RequestConfigSet(section=akey, updates=[{
                         'op': 'remove_section',
                     }]))
@@ -343,7 +336,6 @@ class CommandUnlock(CLICommand):
             print('App already unlocked, nothing to do.')
             return True
 
-        from ...jmap.requests import RequestUnlock
         self.app.send_json(RequestUnlock(self.get_passphrase()))
         while True:
             msg = await self.await_messages('unlocked', 'notification')
@@ -492,9 +484,7 @@ class CommandGrant(CLICommand):
         self.print(to_json(config))
 
     async def get_roles(self, want_context=True):
-        from ...jmap.requests import RequestConfigGet
-
-        cfg = await self.worker.async_jmap(self.access,
+        cfg = await self.worker.async_api_request(self.access,
             RequestConfigGet(
                 urls=True,
                 access=True,
@@ -574,8 +564,6 @@ class CommandGrant(CLICommand):
                 'dict_val': self.roles}]
 
     async def do_create(self):
-        from ...jmap.requests import RequestConfigSet
-
         updates = [{
             'op': 'set',
             'variable': 'name',
@@ -586,14 +574,12 @@ class CommandGrant(CLICommand):
             current = await self.get_roles(want_context=True)  # Need contexts!
             if current and current[0]['name'] == self.name:
                 raise Nonsense('%s already exists, use update?' % self.name)
-            rv = await self.worker.async_jmap(self.access,
+            rv = await self.worker.async_api_request(self.access,
                 RequestConfigSet(new='access', updates=updates))
 
         return await self.get_roles()
 
     async def do_update(self):
-        from ...jmap.requests import RequestConfigSet
-
         updates = []
         if self.name and self.roles:
             updates.extend(self._make_role_update())
@@ -606,20 +592,18 @@ class CommandGrant(CLICommand):
             if akey == AppConfig.ACCESS_ZERO:
                 raise Nonsense(
                     '%s (%s) cannot be changed.' % (self.name, akey))
-            rv = await self.worker.async_jmap(self.access,
+            rv = await self.worker.async_api_request(self.access,
                 RequestConfigSet(section=akey, updates=updates))
 
         return await self.get_roles()
 
     async def do_remove(self):
-        from ...jmap.requests import RequestConfigSet
-
         current = await self.get_roles(want_context=False)
         if not (current and current[0]['name'] == self.name):
             raise Nonsense('%s not found.' % self.name)
 
         akey = current[0]['key']
-        rv = await self.worker.async_jmap(self.access,
+        rv = await self.worker.async_api_request(self.access,
             RequestConfigSet(section=akey, updates=[{
                     'op': 'remove_section',
                 }]))
@@ -627,14 +611,12 @@ class CommandGrant(CLICommand):
         return await self.get_roles()
 
     async def do_logout(self):
-        from ...jmap.requests import RequestConfigSet
-
         current = await self.get_roles(want_context=False)
         if not (current and current[0]['name'] == self.name):
             raise Nonsense('%s not found.' % self.name)
 
         akey = current[0]['key']
-        rv = await self.worker.async_jmap(self.access,
+        rv = await self.worker.async_api_request(self.access,
             RequestConfigSet(section=akey, updates=[{
                     'op': 'del',
                     'variable': 'tokens'
@@ -643,8 +625,6 @@ class CommandGrant(CLICommand):
         return await self.get_roles()
 
     async def do_login(self):
-        from ...jmap.requests import RequestConfigSet
-
         current = await self.get_roles(want_context=False)
         if not (current and current[0]['name'] == self.name):
             raise Nonsense('%s not found.' % self.name)
@@ -666,7 +646,7 @@ class CommandGrant(CLICommand):
                 ttl = int(ttl)
 
         akey = current[0]['key']
-        rv = await self.worker.async_jmap(self.access,
+        rv = await self.worker.async_api_request(self.access,
             RequestConfigSet(section=akey, updates=[{
                     'op': 'new_access_token',
                     'ttl': ttl
@@ -764,7 +744,6 @@ class CommandImport(CLICommand):
 
     async def run(self):
         from ...config import AppConfig
-        from ...jmap.requests import RequestMailbox, RequestSearch, RequestAddToIndex
 
         requests = []
         for path in self.paths:
@@ -797,7 +776,7 @@ class CommandImport(CLICommand):
         def _next():
             path, request_obj = requests.pop(0)
             sys.stdout.write('[import] Processing %s\n' % path)
-            self.worker.jmap(True, request_obj)
+            self.worker.api_request(True, request_obj)
 
         _next()
         while True:

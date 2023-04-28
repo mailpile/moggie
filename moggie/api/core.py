@@ -1,11 +1,16 @@
-# These are the JMAP Core objects, as described in RFC8620.
+# This is loosely modeled after the JMAP Core objects, as described in
+# RFC8620.
 #
 # Link: https://datatracker.ietf.org/doc/html/rfc8620
+#
+# FIXME: We may move towards implementing a JMAP server, although the
+#        protocol isn't currently looking like a great fit... If we
+# decide against it, this can and should be simplified.
 #
 from .helpers import _dict_helper
 
 
-class JMAPSessionResource(_dict_helper):
+class APISessionResource(_dict_helper):
     CAPABILITIES_CORE     = 'urn:ietf:params:jmap:core'
     CAPABILITIES_MAIL     = 'urn:ietf:params:jmap:mail'
     CAPABILITIES_CONTACTS = 'urn:ietf:params:jmap:contacts'
@@ -54,18 +59,18 @@ if __name__ == '__main__':
     assert(d.blank == 'okay')
 
     try:
-        JMAPSessionResource({}, _validate=True)
+        APISessionResource({}, _validate=True)
         assert(not 'reached')
     except ValueError:
         pass
 
-    jsr = JMAPSessionResource()
-    assert(jsr.maxSizeUpload  >= 50000000)
-    assert(jsr.maxSizeRequest >= 10000000)
-    jsr.maxSizeUpload = 1024
-    jsr.username = 'bre'
-    jsr.state = '0'
-    print(jsr)
+    asr = APISessionResource()
+    assert(asr.maxSizeUpload  >= 50000000)
+    assert(asr.maxSizeRequest >= 10000000)
+    asr.maxSizeUpload = 1024
+    asr.username = 'bre'
+    asr.state = '0'
+    print(asr)
 
-    jsr2 = JMAPSessionResource(jsr, _validate=True)
-    assert(jsr2.maxSizeUpload >= 1024)
+    asr2 = APISessionResource(asr, _validate=True)
+    assert(asr2.maxSizeUpload >= 1024)

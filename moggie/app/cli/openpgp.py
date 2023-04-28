@@ -13,7 +13,7 @@ from .command import Nonsense, CLICommand, AccessConfig
 
 class WorkerEncryptionWrapper:
     def __init__(self, cli_obj):
-        from moggie.jmap.requests import RequestOpenPGP
+        from moggie.api.requests import RequestOpenPGP
         self.cli_obj = co = cli_obj
         for op in (
                 'get_cert',
@@ -40,7 +40,8 @@ class WorkerEncryptionWrapper:
                         op=_op,
                         args=args,
                         kwargs=kwargs)
-                    result = await co.worker.async_jmap(co.access, request)
+                    result = await co.worker.async_api_request(
+                        co.access, request)
                     if result.get('error'):
                         logging.error('%s(...): %s' % (_op, result['error']))
                         raise Exception(result['error'])

@@ -40,7 +40,7 @@ from ...config import AppConfig
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
 from ...email.metadata import Metadata
-from ...jmap.requests import RequestSearch, RequestMailbox, RequestEmail
+from ...api.requests import *
 from ...security.mime import part_filename, magic_part_id
 from ...security.html import clean_email_html
 from ...storage.exporters.mbox import MboxExporter
@@ -440,7 +440,8 @@ FIXME: Document html and html formats!
                         parts=([part-1] if part else None),
                         full_raw=(raw and not part))
                     query['context'] = self.context
-                    msg = await self.worker.async_jmap(self.access, query)
+                    msg = await self.worker.async_api_request(
+                        self.access, query)
                 else:
                     msg = {'email': md.parsed()}
 
@@ -798,7 +799,7 @@ FIXME: Document html and html formats!
 
     async def perform_query(self, query, batch, limit):
         query['limit'] = min(batch, limit or batch)
-        msg = await self.worker.async_jmap(self.access, query)
+        msg = await self.worker.async_api_request(self.access, query)
         if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
 
@@ -1222,12 +1223,10 @@ class CommandCount(CLICommand):
         return []
 
     async def run(self):
-        from ...jmap.requests import RequestCounts
-
         query = RequestCounts(
             context=self.context,
             terms_list=list(set(self.terms)))
-        msg = await self.worker.async_jmap(self.access, query)
+        msg = await self.worker.async_api_request(self.access, query)
 
         if self.options['--lastmod']:
             suffix = '\tlastmod-unsupported 1'  # FIXME?
@@ -1475,8 +1474,6 @@ class CommandTag(CLICommand):
             await self.run_batch(self.tagops)
 
     async def run_batch(self, tagops):
-        from ...jmap.requests import RequestTag
-
         query = RequestTag(
             context=self.context,
             undoable=(not self.options['--redo='][-1]
@@ -1485,7 +1482,7 @@ class CommandTag(CLICommand):
             tag_undo_id=self.options['--undo='][-1],
             tag_redo_id=self.options['--redo='][-1],
             tag_ops=tagops)
-        msg = await self.worker.async_jmap(self.access, query)
+        msg = await self.worker.async_api_request(self.access, query)
 
         fmt = self.options['--format='][-1]
         if fmt == 'json':

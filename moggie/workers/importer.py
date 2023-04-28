@@ -20,7 +20,7 @@ import time
 import traceback
 import threading
 
-from ..jmap.requests import *
+from ..api.requests import *
 from ..util.dumbcode import dumb_encode_asc, dumb_decode
 from ..storage.files import FileStorage
 from ..search.extractor import KeywordExtractor
@@ -111,7 +111,7 @@ class ImportWorker(BaseWorker):
 
     def api_import_search(self,
             request, initial_tags, tag_namespace, force, full, **kwargs):
-        request_obj = to_jmap_request(request)
+        request_obj = to_api_request(request)
         caller = self._caller
         def background_import_search():
             rv = self._import_search(
@@ -125,7 +125,7 @@ class ImportWorker(BaseWorker):
             if metadata.pointers[0].is_local_file:
                 return self.fs.email(metadata, text=True, data=False)
             else:
-                return self.app.jmap(True,
+                return self.app.api_request(True,
                     RequestEmail(metadata=metadata, text=True),
                     ).get('email')
         except Exception as e:
@@ -268,7 +268,7 @@ class ImportWorker(BaseWorker):
             #    (The app is responsible for selecting the right backend
             #    mail source to process the request, we don't need to know
             #    where things are coming from)
-            response = self.app.jmap(True, request_obj.update({
+            response = self.app.api_request(True, request_obj.update({
                 'skip': email_c,
                 'limit': self.BATCH_SIZE}))
             emails = response['emails'] or []
@@ -310,15 +310,15 @@ class ImportWorker(BaseWorker):
 
 if __name__ == '__main__':
     import sys
-    from ..jmap.requests import RequestMailbox
-    from ..jmap.responses import ResponseMailbox
+    from ..api.requests import RequestMailbox
+    from ..api.responses import ResponseMailbox
     from ..email.metadata import Metadata
 
     logging.basicConfig(level=logging.DEBUG)
 
     class MockAppWorker:
-        def jmap(self, access, request_obj):
-            print('jmap: %s' % request_obj)
+        def api_request(self, access, request_obj):
+            print('api_request: %s' % request_obj)
             return ResponseMailbox(request_obj, [
                 Metadata.ghost('<ghost1@moggie>')
                 ], False)
