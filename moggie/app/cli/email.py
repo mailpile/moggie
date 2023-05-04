@@ -1098,6 +1098,7 @@ class CommandEmail(CLICommand):
     async def gather_attachments(self, searches):
         atts = []
         for search in searches:
+            logging.debug('Unsupported attachment searches: %s' % searches)
             raise Nonsense('FIXME: Searching for attachments does not yet work')
         return atts
 

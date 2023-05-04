@@ -7,6 +7,7 @@ TOPICS = {
 
 Some useful commands:
 
+   moggie                            Launch the interactive e-mail client
    moggie start [--cli|--wait]       Launch the moggie background workers
    moggie unlock                     Unlock a running, encrypted moggie
    moggie stop                       Stop moggie

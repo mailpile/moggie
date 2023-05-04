@@ -89,7 +89,17 @@ class BaseWorker(Process):
             b'functions': (True,  self.api_functions),
             b'status':    (False, self.api_status)}
 
-        self._log_level = log_level
+        # Support mutt-style log levels, convert to Pythonish
+        if 0 <= log_level <= 4:
+            log_level = [
+                logging.CRITICAL,
+                logging.ERROR,
+                logging.WARNING,
+                logging.INFO,
+                logging.DEBUG
+                ][log_level]
+
+        self.log_level = log_level
         self._notify = notify
         self._secret = b64encode(os.urandom(18), b'-_').strip()
         self._auth_header = ''
@@ -167,19 +177,19 @@ class BaseWorker(Process):
             setattr(self, prefix + 'async_' + attr, async_wrap)
 
     def log_more(self, *ignored_args):
-        if self._log_level <= logging.DEBUG:
+        if self.log_level <= logging.DEBUG:
             return
-        self._log_level -= 10
+        self.log_level -= 10
         configure_logging(
-            type(self).__name__, stdout=self.LOG_STDOUT, level=self._log_level)
-        logging.log(self._log_level,
-            'Lowered log threshold to %d' % self._log_level)
+            type(self).__name__, stdout=self.LOG_STDOUT, level=self.log_level)
+        logging.log(self.log_level,
+            'Lowered log threshold to %d' % self.log_level)
 
     def run(self):
         if signal is not None:
             signal.signal(signal.SIGUSR2, self.log_more)
         configure_logging(
-            type(self).__name__, stdout=self.LOG_STDOUT, level=self._log_level)
+            type(self).__name__, stdout=self.LOG_STDOUT, level=self.log_level)
         logging.info('Started %s(%s), pid=%d'
             % (type(self).__name__, self.name, os.getpid()))
         try:

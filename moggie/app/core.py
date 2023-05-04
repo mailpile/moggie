@@ -148,8 +148,7 @@ main app worker. Hints:
 
         if worker_name not in self.openpgp_workers:
             ksc, sopc, = context.get_openpgp_settings()
-            log_level = int(self.config.get(
-                self.config.GENERAL, 'log_level', fallback=logging.ERROR))
+            log_level = self.worker.log_level
             worker = OpenPGPWorker(
                 self.worker.worker_dir, self.worker.profile_dir,
                 self.config.get_aes_keys(),
@@ -172,8 +171,7 @@ main app worker. Hints:
         except:
             return False
 
-        log_level = int(self.config.get(
-            self.config.GENERAL, 'log_level', fallback=logging.ERROR))
+        log_level = self.worker.log_level
 
         missing_metadata = self.metadata is None
         if missing_metadata:
@@ -204,8 +202,7 @@ main app worker. Hints:
 
     def start_workers(self, start_encrypted=True):
         notify_url = self.worker.callback_url('rpc/notify')
-        log_level = int(self.config.get(
-            self.config.GENERAL, 'log_level', fallback=logging.ERROR))
+        log_level = self.worker.log_level
 
         if self.ticker is None:
             self._ticker = self.ticker_task()

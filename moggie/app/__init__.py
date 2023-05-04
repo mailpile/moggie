@@ -4,12 +4,22 @@ import sys
 import time
 
 
+COMMANDS = {}
+DEFAULT_LOG_LEVEL = 2
+
+
 class Nonsense(Exception):
     pass
 
 
+class RaiseHelp(Nonsense):
+    def __init__(self, args=None, invalid=None):
+        self.args = args or []
+        self.invalid = invalid
+        super().__init__(self)
+
+
 def CommandStart(wd, args):
-    args = list(args)
     wait = '--wait' in args
     if wait:
         args.remove('--wait')
@@ -52,9 +62,9 @@ def CommandRestart(wd, args):
     CommandStart(wd, args)
 
 
-def CommandTUI(wd, sys_args, tui_args, send_args):
+def CommandTUI(wd, tui_args, draft=[]):
     from . import tui
-    return tui.Main(wd, sys_args, tui_args, send_args)
+    return tui.Main(wd, tui_args, draft)
 
 
 def CommandMuttalike(wd, args):
@@ -62,41 +72,38 @@ def CommandMuttalike(wd, args):
     This command will be a shim which implements many of the same
     command line options as mutt, in a moggie way.
     """
-    from ..email.draft import FakeDraftMain, MessageDraft
+    from ..email.draft import MessageDraft
+
     single = ('-D', '-E', '-R', '-h', '-n', '-p', '-v' '-vv' , '-y', '-z', '-Z')
-    def _eat(target):
-        a0 = args[0]
+    sys_args = {'_order': [], '--': []}
+    tui_args = {'_order': [], '--': []}
+    draft = None
+    passing = []
+
+    def _eat(target, a0, args):
         if a0 in target['_order']:
             raise Nonsense('Duplicate argument: %s' % a0)
         target['_order'].append(a0)
-
         if a0 in single:
-            target.update({args.pop(0): True})
+            target.update({a0: True})
         else:
-            eating = args[:2]
-            args[:2] = []
-            target[eating[0]] = eating[1]
+            eating = args.pop(0)
+            target[a0] = eating
 
-    sys_args = {'_order': [], '--': []}
-    tui_args = {'_order': []}
-    send_args = {'_order': []}
+    def _process(arg, args):
+        if arg == '-h':
+            raise RaiseHelp(args=args)
+        elif arg in ('-E', '-f', '-p', '-R', '-y', '-Z'):
+            _eat(tui_args, arg, args)
+        elif args in ('-d', '-D', '-F', '-m', '-n'):
+            _eat(sys_args, arg, args)
+        elif pass_unknown:
+            passing.append(arg)
+        else:
+            raise RaiseHelp(invalid=arg)
+
     try:
-        while args:
-            if args[0] == '-h':
-                return COMMANDS['help'](wd, args[1:])
-            elif args[0] in MessageDraft.ALL_CLI_ARGS:
-                _eat(send_args)
-            elif args[0] in ('-E', '-f', '-p', '-R', '-y', '-Z'):
-                _eat(tui_args)
-            elif args[0] in ('-d', '-D', '-F', '-m', '-n'):
-                _eat(sys_args)
-            elif args[0] == '--':
-                send_args['--'] += args[1:]
-                args = []
-            elif args[0][:1] != '-':
-                send_args['--'].append(args.pop(0))
-            else:
-                return COMMANDS['help'](wd, [], invalid=args[0])
+        draft = MessageDraft.FromArgs(args, unhandled_cb=_process)
 
         tui_exclusive = ('-f', '-p', '-y', '-Z')
         for a in (arg for arg in tui_exclusive if arg in tui_args):
@@ -104,28 +111,52 @@ def CommandMuttalike(wd, args):
                 if a != b and (b in tui_args):
                     raise Nonsense('Cannot %s and %s at once' % (a, b))
 
+        if not tui_args['_order'] and not tui_args['--']:
+            tui_args = {}
+
+        if not sys_args['_order'] and not sys_args['--']:
+            sys_args = {}
+
     except Nonsense as e:
-        return COMMANDS['help'](wd, [], invalid=str(e))
+        raise RaiseHelp(invalid=str(e))
+
+    except Exception as e:
+        logging.exception(e)
+        raise
+
+    if '-d' in sys_args:
+        from ..config import configure_logging
+        loglevel = max(0, min(int(sys_args['-d']), 4))
+        loglevel = [
+            logging.CRITICAL,
+            logging.ERROR,
+            logging.WARNING,
+            logging.INFO,
+            logging.DEBUG
+            ][loglevel]
+        logfile = configure_logging(
+            stdout=False,
+            profile_dir=wd,
+            level=loglevel)
+        if loglevel <= logging.INFO:
+            sys.stderr.write('Logging to %s (startup in 2s)\n' % (logfile,))
+            time.sleep(2)
 
     # This is our default mode of operation
-    if not args and not tui_args and not send_args:
+    if not args and not tui_args and not draft:
         tui_args['-y'] = True
 
-    if tui_args:
-        return CommandTUI(wd, sys_args, tui_args, send_args)
-    elif send_args:
-        return FakeDraftMain(sys_args, send_args)  # FIXME
+    if sys.stdin.isatty() and sys.stdout.isatty():
+        return CommandTUI(wd, tui_args, draft)
 
-    # Fallback
-    return COMMANDS['help'](wd, [])
+    elif draft:
+        draft.more['message'] = [sys.stdin.read()]
+        draft_as_args = draft.email_args()
+        # FIXME: mutt will send the message automatically!
+        #        To be compatible, we should add --send-at=NOW
+        return COMMANDS.get('email').Command(wd, draft_as_args)
 
-
-COMMANDS = {
-    'default': CommandMuttalike,
-    'restart': CommandRestart,
-    'start': CommandStart,
-    'stop': CommandStop,
-    'tui': CommandTUI}
+    return COMMANDS.get('help').Command(wd, [])
 
 
 def Main(args):
@@ -133,22 +164,28 @@ def Main(args):
     from ..config import configure_logging, AppConfig
     wd = DEFAULT_WORKDIR()
 
-    commands = COMMANDS
     command = 'default'
     if len(args) > 0 and args[0][:1] != '-' and '@' not in args[0]:
         command = args.pop(0)
 
-    if command not in commands:
-        from .cli import CLI_COMMANDS
-        CLI_COMMANDS.update(commands)  # So moggie help can find things
-        commands = CLI_COMMANDS
+    # Merge our local commands with the CLI_COMMANDS registry.
+    # Trust me, I know what I'm doing!
+    global COMMANDS
+    from .cli import CLI_COMMANDS
+    CLI_COMMANDS.update({
+        'default': CommandMuttalike,
+        'restart': CommandRestart,
+        'start': CommandStart,
+        'stop': CommandStop,
+        'tui': CommandTUI})
+    COMMANDS = CLI_COMMANDS
 
-    configure_logging(
-        profile_dir=wd,
-        level=int(AppConfig(wd).get(
-            AppConfig.GENERAL, 'log_level', fallback=logging.DEBUG)))
+    global DEFAULT_LOG_LEVEL
+    DEFAULT_LOG_LEVEL = int(AppConfig(wd).get(
+        AppConfig.GENERAL, 'log_level', fallback=logging.DEBUG))
+    configure_logging(profile_dir=wd, level=DEFAULT_LOG_LEVEL)
 
-    command = commands.get(command)
+    command = COMMANDS.get(command)
     if command is not None:
         if hasattr(command, 'Command'):
             result = command.Command(wd, args)

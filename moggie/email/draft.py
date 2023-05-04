@@ -21,7 +21,7 @@ from .metadata import Metadata
 # way to create and use others. Others could be per-context?
 #
 
-DEFAULT_TEMPLATE = """\
+DEFAULT_TEMPLATE = b"""\
 Message-Id: %(message_id)s
 Date: %(date)s
 From: %(from)s
@@ -49,22 +49,41 @@ class MessageDraft(Metadata):
 
     def __init__(self, headers=None, more=None):
         # FIXME: We always want to know which context a draft is associated with.
-        super().__init__(0, 'DRAFT', 0, 0, 0,
+        super().__init__(0, 0,
+            Metadata.PTR(0, b'/dev/null', 0),
             headers or DEFAULT_TEMPLATE,
+            parent_id=0,
+            thread_id=0,
             more=more)
+
+    def __bool__(self):
+        # Make sure if nothing has been configured, we return false when
+        # used in a boolean "do we have a draft?" context
+        return bool(self.more)
+
+    def __str__(self):
+        if self:
+            return super().__str__()
+        return ''
 
     @classmethod
     def FromMetadata(cls, metadata):
         return cls(headers=metadata.headers, more=metadata.more)
 
     @classmethod
-    def FromArgs(cls, args):
+    def FromArgs(cls, args, unhandled_cb=None):
+        """
+        Create a MessageDraft from mutt-style command line arguments.
+        Unrecognized arguments are offered to a callback for processing.
+        """
         m = {}
+        u = 'to'
         while args:
             arg = args.pop(0)
             # FIXME: Allow user to specify from-address somehow!
             if arg == '-a':
-                m['attach'] = m.get('attach', []) + [args.pop(0)]
+                u = 'attach'
+                m[u] = m.get(u, []) + [args.pop(0)]
             elif arg == '-b':
                 m['bcc'] = m.get('bcc', []) + [args.pop(0)]
             elif arg == '-c':
@@ -76,7 +95,11 @@ class MessageDraft(Metadata):
             elif arg == '-s':
                 m['subject'] = (m.get('subject', '') + ' ' + args.pop(0)).strip()
             elif arg[:1] != '-':
-                m['to'] = m.get('to', []) + [arg]
+                m[u] = m.get(u, []) + [arg]
+            elif arg == '--':
+                u = 'to'
+            elif unhandled_cb is not None:
+                unhandled_cb(arg, args)
             else:
                 raise Exception('Unhandled arg: %s' % arg)
         return cls(more=m)
@@ -93,6 +116,22 @@ class MessageDraft(Metadata):
         # FIXME
         return '(no subject)'
 
+    def email_args(self):
+        args = []
+        m = self.more
+
+        if 'subject' in m:
+            args.append('--subject=%s' % m['subject'])
+
+        if not m.get('html:auto') and 'html' not in m:
+            args.append('--html=N')
+
+        for arg in ('to', 'cc', 'bcc', 'attach', 'message', 'text', 'html'):
+            for val in m.get(arg, []):
+               args.append('--%s=%s' % (arg, val))
+
+        return args
+
     def generate_editable(self):
         # FIXME: Bodies, Attachments, MIME, PGP... so much fun!
         m = self.more.get
@@ -106,12 +145,12 @@ class MessageDraft(Metadata):
             'subject': m('subject') or self.no_subject(),
             'attachments': ' '.join(m('attach', [])),
             'features': ', '.join(m('features', self.default_features()))}
-        return '%s\n\n%s' % (headers, self.more.get('body', '(no message)'))
+        return '%s%s' % (headers, self.more.get('message') or '(no message)')
 
 
-def FakeDraftMain(sys_args, args):
-    tpl = MessageDraft.FromArgs(args)
-    print('%s' % (tpl.generate_editable(),))
+def FakeDraftMain(args, draft=None):
+    draft = draft or MessageDraft.FromArgs(args)
+    print('%s' % (draft.generate_editable(),))
 
 
 if __name__ == "__main__":

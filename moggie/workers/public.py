@@ -263,13 +263,20 @@ class PublicWorker(BaseWorker):
             self.HTTP_500: {'code': 500, 'msg': 'Internal Error'}}
 
     @classmethod
-    def FromArgs(cls, workdir, args):
+    def FromArgs(cls, workdir, args, log_level=None):
         host = 'localhost'
         port = '0'
         kite_name = kite_secret = None
         cfg = AppConfig(workdir)
 
-        log_level = cfg.get(cfg.GENERAL, 'log_level', fallback=logging.ERROR)
+        if '-d' in args:
+            didx = args.index('-d')
+            log_level = args[didx+1]
+            args[didx:didx+2] = []
+
+        if log_level is None:
+            log_level = cfg.get(cfg.GENERAL, 'log_level',
+                fallback=logging.ERROR)
 
         if cls.CONFIG_SECTION:
             port = cfg.get(cls.CONFIG_SECTION, 'port', fallback=port)
