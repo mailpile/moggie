@@ -60,8 +60,15 @@ class AppSessionResource(APISessionResource):
         if access.username:
             self.username = access.username
         accounts = {}
-        for context, role in access.roles.items():
-            accounts[context] = {}  #FIXME: Present context as JMAP?
+        contexts = app.config.contexts
+        for ctx, role in access.roles.items():
+            context = contexts[ctx]
+            remote = context.remote_context_url or False
+            accounts[ctx.split(' ', 1)[1]] = APIAccount({
+                'name': context.name,
+                'isPersonal': ('A' in role or 'a' in role) and not remote,
+                'isReadOnly': not (remote or bool(role.strip('rpe'))),
+                'accountCapabilities': APIAccountCapabilities(remote=remote)})
         self.accounts = accounts
 
 

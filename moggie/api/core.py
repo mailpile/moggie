@@ -10,6 +10,21 @@
 from .helpers import _dict_helper
 
 
+class APIAccountCapabilities(dict):
+    URL = 'https://moggie.mailpile.is/'
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args)
+        self[self.URL] = kwargs
+
+
+class APIAccount(_dict_helper):
+    ATTRS = {
+        'name':                (str,      'name'),
+        'isPersonal':          (bool,     'isPersonal'),
+        'isReadOnly':          (bool,     'isReadOnly'),
+        'accountCapabilities': (dict, {}, 'accountCapabilities')}
+
+
 class APISessionResource(_dict_helper):
     CAPABILITIES_CORE     = 'urn:ietf:params:jmap:core'
     CAPABILITIES_MAIL     = 'urn:ietf:params:jmap:mail'
@@ -21,7 +36,7 @@ class APISessionResource(_dict_helper):
         'maxSizeUpload':         (int, 50000000, _CC+ 'maxSizeUpload'),
         'maxConcurrentUpload':   (int,        4, _CC+ 'maxConcurrentUpload'),
         'maxSizeRequest':        (int, 10000000, _CC+ 'maxSizeRequest'),
-        'maxConcurrentRequests': (int,        4, _CC+ 'maxConcurrentRequests'),
+        'maxConcurrentRequests': (int,       16, _CC+ 'maxConcurrentRequests'),
         'maxCallsInRequest':     (int,       16, _CC+ 'maxCallsInRequest'),
         'maxObjectsInGet':       (int,      500, _CC+ 'maxObjectsInGet'),
         'maxObjectsInSet':       (int,      500, _CC+ 'maxObjectsInSet'),
