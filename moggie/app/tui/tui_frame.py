@@ -1,12 +1,13 @@
 import asyncio
 import datetime
-import json
 import logging
+import json
+import os
 import time
 import urwid
 
-from ...config import APPNAME, APPVER
-from ...jmap.requests import *
+from ...config import APPNAME, APPVER, AppConfig
+from ...api.requests import *
 from ..suggestions import Suggestion, SuggestionWelcome
 
 from .contextlist import ContextList
@@ -22,42 +23,14 @@ def _w(w, attr={}, valign='top'):
     return urwid.AttrWrap(urwid.Filler(w, valign=valign), attr)
 
 
-class PopUpManager(urwid.PopUpLauncher):
-    def __init__(self, tui_frame, content):
-        super().__init__(content)
-        self.tui_frame = tui_frame
-        self.target = None
-        self.target_args = []
-
-    def open_with(self, target, *target_args):
-        self.target = target
-        self.target_args = target_args
-        return self.open_pop_up()
-
-    def create_pop_up(self):
-        target, args = self.target, self.target_args
-        if self.target:
-            pop_up = self.target(self.tui_frame, *self.target_args)
-            urwid.connect_signal(pop_up, 'close', lambda b: self.close_pop_up())
-            return pop_up
-        return None
-
-    def get_pop_up_parameters(self):
-        # FIXME: Make this dynamic somehow?
-        cols, rows = self.tui_frame.screen.get_cols_rows()
-        wwidth = min(cols, self.target.WANTED_WIDTH)
-        return {
-            'left': (cols//2)-(wwidth//2),
-            'top': 2,
-            'overlay_width': wwidth,
-            'overlay_height': self.target.WANTED_HEIGHT}
-
-
 class TuiFrame(urwid.Frame):
-    def __init__(self, screen, app_is_locked):
+
+    current_context = property(lambda s: s.context_list.active)
+
+    def __init__(self, screen):
         self.screen = screen
-        self.is_locked = app_is_locked
-        self.was_locked = app_is_locked
+        self.is_locked = True
+        self.was_locked = True
         self.render_cols_rows = self.screen.get_cols_rows()
         self.app_bridge = None
 
@@ -88,7 +61,22 @@ class TuiFrame(urwid.Frame):
         loop = asyncio.get_event_loop()
         loop.create_task(self.topbar_clock())
 
-    current_context = property(lambda s: s.context_list.active)
+    def set_initial_state(self, initial_state):
+        self.is_locked = initial_state.get('app_is_locked')
+        self.was_locked = self.is_locked
+
+        show_draft = initial_state.get('show_draft')
+        show_mailbox = initial_state.get('show_mailbox')
+
+        if show_draft:
+            # Display the composer; whether we are locked or not.
+            # But what happens to any composed mail will vary!
+            pass  # FIXME
+
+        elif show_mailbox:
+            self.context_list.expanded = 0
+            self.show_mailbox(
+                os.path.abspath(show_mailbox), AppConfig.CONTEXT_ZERO)
 
     async def topbar_clock(self):
         while True:

@@ -11,6 +11,37 @@ def emit_soon(widget, signal, seconds=0.75):
     asyncio.create_task(emitter(seconds, signal))
 
 
+class PopUpManager(urwid.PopUpLauncher):
+    def __init__(self, tui_frame, content):
+        super().__init__(content)
+        self.tui_frame = tui_frame
+        self.target = None
+        self.target_args = []
+
+    def open_with(self, target, *target_args):
+        self.target = target
+        self.target_args = target_args
+        return self.open_pop_up()
+
+    def create_pop_up(self):
+        target, args = self.target, self.target_args
+        if self.target:
+            pop_up = self.target(self.tui_frame, *self.target_args)
+            urwid.connect_signal(pop_up, 'close', lambda b: self.close_pop_up())
+            return pop_up
+        return None
+
+    def get_pop_up_parameters(self):
+        # FIXME: Make this dynamic somehow?
+        cols, rows = self.tui_frame.screen.get_cols_rows()
+        wwidth = min(cols, self.target.WANTED_WIDTH)
+        return {
+            'left': (cols//2)-(wwidth//2),
+            'top': 2,
+            'overlay_width': wwidth,
+            'overlay_height': self.target.WANTED_HEIGHT}
+
+
 class Selectable(urwid.WidgetWrap):
     def __init__(self, contents, on_select=None):
         self.contents = contents

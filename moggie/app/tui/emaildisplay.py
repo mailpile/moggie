@@ -4,7 +4,7 @@ import urwid
 
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
-from ...jmap.requests import RequestEmail
+from ...api.requests import RequestEmail
 
 from .widgets import *
 

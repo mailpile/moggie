@@ -331,6 +331,7 @@ class ContextConfig(ConfigSectionProxy):
     _KEYS = {
         'name': str,
         'description': str,
+        'remote_context_url': str,
         'default_identity': str,
         # Optional...
         'scope_search': str,

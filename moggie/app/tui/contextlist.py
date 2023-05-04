@@ -1,6 +1,6 @@
 import urwid
 
-from ...jmap.requests import RequestContexts, RequestCounts
+from ...api.requests import RequestContexts, RequestCounts
 from .widgets import *
 
 
@@ -151,10 +151,15 @@ class ContextList(urwid.ListBox):
         if self.waiting:
             self.tui_frame.app_bridge.send_json(self.search_obj)
             self.waiting = False
+
         if (message.get('prototype') == self.search_obj['prototype']):
             self.contexts = message['contexts']
             self.update_content()
             self.request_counts()
+            # FIXME: If this is our local back-end, we should check for
+            #        remote sessions and establish a connection to them
+            #        as well!
+
         elif (message.get('prototype') == self.counts_obj['prototype']):
             # FIXME: Do something with the counts!
             self.update_content()

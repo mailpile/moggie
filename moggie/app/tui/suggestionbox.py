@@ -1,7 +1,7 @@
 import copy
 import urwid
 
-from ...jmap.requests import RequestBase
+from ...api.requests import RequestBase
 from ..suggestions import *
 from .widgets import *
 

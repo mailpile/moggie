@@ -5,7 +5,7 @@ import time
 import urwid
 
 from ...email.metadata import Metadata
-from ...jmap.requests import RequestAddToIndex
+from ...api.requests import RequestAddToIndex
 from ..suggestions import Suggestion
 
 from .suggestionbox import SuggestionBox
