@@ -11,7 +11,6 @@ import sys
 
 from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
 from ..config.helpers import DictItemProxy, EncodingListItemProxy
-from ..api.core import APISessionResource
 from ..api.requests import *
 from ..api.responses import *
 from ..storage.files import FileStorage
@@ -52,26 +51,6 @@ def run_async_in_thread(method, *m_args, **m_kwargs):
     return result[0]
 
 
-class AppSessionResource(APISessionResource):
-    def __init__(self, app, access):
-        super().__init__(self)
-        self.app = app
-        self.access = access
-        if access.username:
-            self.username = access.username
-        accounts = {}
-        contexts = app.config.contexts
-        for ctx, role in access.roles.items():
-            context = contexts[ctx]
-            remote = context.remote_context_url or False
-            accounts[ctx.split(' ', 1)[1]] = APIAccount({
-                'name': context.name,
-                'isPersonal': ('A' in role or 'a' in role) and not remote,
-                'isReadOnly': not (remote or bool(role.strip('rpe'))),
-                'accountCapabilities': APIAccountCapabilities(remote=remote)})
-        self.accounts = accounts
-
-
 class AppCore:
     PYCLI_BANNER = ("""
 %s %s / Python %s
@@ -105,7 +84,6 @@ main app worker. Hints:
             b'rpc/api':               (True, self.rpc_api),
             b'rpc/ask_secret':        (True, self.rpc_ask_secret),
             b'rpc/set_secret':        (True, self.rpc_set_secret),
-            b'rpc/jmap_session':      (True, self.rpc_session_resource),
             b'rpc/crypto_status':     (True, self.rpc_crypto_status),
             b'rpc/get_access_token':  (True, self.rpc_get_access_token)}
 
@@ -824,14 +802,6 @@ main app worker. Hints:
             'mimetype': 'application/json',
             'body': bytes(json_result, 'utf-8')}
 
-    def api_req_session(self, access):
-        # FIXME: What does this user have access to?
-        jsr = AppSessionResource(self, access)
-        return {
-            'code': 200,
-            'mimetype': 'application/json',
-            'body': str(jsr)}
-
 
     # Internal API
 
@@ -903,10 +873,6 @@ main app worker. Hints:
 
     def rpc_set_secret(self, context, resource, secret, secret_ttl, **kwargs):
         self.worker.reply_json(False, **kwargs['reply_kwargs'])
-
-    def rpc_session_resource(self, **kwargs):
-        jsr = AppSessionResource(self, self.config.access_zero())
-        self.worker.reply_json(jsr, **kwargs['reply_kwargs'])
 
     def rpc_crypto_status(self, **kwargs):
         all_started = self.metadata and self.search and self.importer

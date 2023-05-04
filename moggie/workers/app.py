@@ -192,20 +192,7 @@ async def web_websocket(opcode, msg, conn, ws,
 @http_require(csrf=False)
 @process_post(max_bytes=20480, _async=True)
 async def web_jmap_session(req_env):
-    code, msg, status = 500, 'Oops', 'err'
-    with RequestTimer('web_jmap_session', req_env, status='rej') as timer:
-        try:
-            access = req_env['worker'].get_auth(req_env, post=False, secure_transport=True)
-            timer.status = 'ok'
-            return await req_env['app'].api_jmap_session(access)
-        except PermissionError as e:
-            code, msg, status = 403, str(e), 'rej'
-        except:
-            logging.exception('web_jmap_session failed')
-
-        # If we get this far, we had an internal error of some sort.
-        timer.status = status
-        return {'code': code, 'msg': msg, 'body': 'Sorry\n'}
+    return {'code': 404, 'msg': 'Not Found', 'body': 'Sorry\n'}
 
 
 @async_url('/api')
