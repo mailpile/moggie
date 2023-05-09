@@ -79,11 +79,14 @@ class CLICommand:
             if msg or eof:
                 if isinstance(msg, (bytes, bytearray)):
                     reply_buffer.append(bytes(msg))
-                else:
+                elif isinstance(msg, str):
                     reply_buffer.append(bytes(msg, 'utf-8'))
+                else:
+                    reply_buffer.append(msg)
         try:
             cmd_obj = cls(app.profile_dir, args,
                 access=access, appworker=app, connect=False)
+            cmd_obj.set_msg_defaults(args)
             cmd_obj.write_reply = reply
             cmd_obj.write_error = reply
             cmd_obj.stdin = []
@@ -125,6 +128,7 @@ class CLICommand:
                 return sys.stdout.buffer.write(stuff)
         self.write_reply = _writer
         self.write_error = _writer
+        self.skip_json = False
 
         self.filename = None
         self.disposition = None
@@ -152,6 +156,18 @@ class CLICommand:
             if not self.worker.connect(autostart=self.AUTO_START, quick=True):
                 raise NotRunning('Failed to launch or connect to app')
         return self.worker
+
+    def set_msg_defaults(self, args):
+        self.stdin = []
+        if '--format=' in self.options:
+            # If the caller hasn't explicitly requested a data format, we
+            # set the default to "json", but skip actually encoding it to
+            # avoid duplicate effort. The print_json method will set a
+            # special mime-type so our caller knows what to expect.
+            fmt_args = sum(1 for a in args if a.startswith('--format='))
+            if not fmt_args:
+                self.skip_json = True
+                self.options['--format='][:1] = ['json']
 
     def set_web_defaults(self, req_env):
         self.stdin = []
@@ -231,6 +247,10 @@ class CLICommand:
             for k in columns if k in row))
 
     def print_json(self, data, nl='\n'):
+        if self.skip_json:
+            self.mimetype = 'application/moggie-internal'
+            return self.write_reply(data)
+        self.mimetype = 'application/json; charset=utf-8'
         self.write_reply(to_json(data) + nl)
 
     def print(self, *args, nl='\n'):

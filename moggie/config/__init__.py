@@ -364,10 +364,10 @@ class ContextConfig(ConfigSectionProxy):
 
     def _extra_tags(self, accounts=None):
         etags = []
-        etags.extend(self._etags_list)
         accounts = self._accounts() if (accounts is None) else accounts
         for akey, acct in accounts:
             etags.extend(acct.get_tags())
+        etags.extend(self._etags_list)
         return set(etags)
 
     def _volatile(self, what):

@@ -1202,8 +1202,9 @@ class CommandCount(CLICommand):
 
         if self.options['--multi']:
             self.terms = args
+            self.terms.extend(self.options['--q='])
         elif args:
-            self.terms = [' '.join(args)]
+            self.terms = [' '.join(args + self.options['--q='])]
 
         if not self.terms:
             self.terms = ['*']

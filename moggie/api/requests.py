@@ -124,6 +124,7 @@ class RequestContexts(RequestBase):
 
 
 class RequestConfigGet(RequestBase):
+    DEEP = 'deep'
     def __init__(self,
             which=None,
             urls=False,

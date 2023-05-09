@@ -479,16 +479,17 @@ main app worker. Hints:
                 result['urls'].append('https://%s' % kite_name)
 
         if api_request.get('contexts'):
+            deep = (api_request['contexts'] == api_request.DEEP)
             contexts = self.config.contexts
             if which and which.startswith(self.config.CONTEXT_PREFIX):
                 if access.grants(which, AccessConfig.GRANT_ACCESS):
                     result['contexts'] = {
-                        which: contexts[which].as_dict(deep=False)}
+                        which: contexts[which].as_dict(deep=deep)}
                 else:
                     error = 'Access denied: contexts/%s' % (which,)
             elif access.grants(czero, AccessConfig.GRANT_ACCESS):
                 result['contexts'] = dict(
-                    (k, v.as_dict(deep=False)) for k,v in contexts.items())
+                    (k, v.as_dict(deep=deep)) for k,v in contexts.items())
             else:
                 error = 'Access denied: contexts'
 
@@ -711,23 +712,24 @@ main app worker. Hints:
         result = await async_run_in_thread(import_search)
         return ResponsePing(api_request)  # FIXME
 
-    async def api_req_cli(self, conn_id, access, api_request):
-        rbuf_cmd = await CLI_COMMANDS[api_request['command']].MsgRunnable(
-            self.worker, access, api_request['args'])
+    async def api_req_cli(self, conn_id, access, api_req):
+        rbuf_cmd = await CLI_COMMANDS.get(api_req.command).MsgRunnable(
+            self.worker, access, api_req['args'])
         if rbuf_cmd is None:
-            return ResponseCLI(api_request, 'text/error', 'No such command')
+            return ResponseCommand(api_req, 'text/error', 'No such command')
 
         rbuf, cmd = rbuf_cmd
         await cmd.web_run()
-        rbuf = b''.join(rbuf)
+
         mimetype = cmd.mimetype.split(';')[0].lower()
-        if mimetype in (
-                'text/plain', 'text/html', 'text/css', 'text/javascript',
-                'application/json'):
-            result = str(rbuf, 'utf-8')
+        if mimetype == 'application/moggie-internal':
+            result = rbuf[:-1]
+        elif mimetype.startswith('text/') or mimetype == 'application/json':
+            result = str(b''.join(rbuf), 'utf-8')
         else:
-            result = 'base64:' + str(base64.b64encode(rbuf), 'utf-8')
-        return ResponseCLI(api_request, mimetype, result)
+            result = b''.join(rbuf)
+
+        return ResponseCommand(api_req, mimetype, result)
 
     async def api_req_openpgp(self, conn_id, access, api_request):
         # OpenPGP requests all follow the same pattern; we figure out which

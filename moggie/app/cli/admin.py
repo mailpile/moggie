@@ -61,7 +61,7 @@ class CommandContext(CLICommand):
     WEB_EXPOSE = True
     OPTIONS = [[
         ('--format=',      ['text'], 'X=(text*|json)'),
-        ('--output=',            [], 'X=(ids|scope), add details to listings'),
+        ('--output=',            [], 'X=(accounts|ids|identities|scope), add details to listings'),
         ('--with-standard-tags', [], 'Add common tags to a new context'),
         ('--name=',              [], 'X="Context name"'),
         ('--description=',       [], 'X="Context description"'),
@@ -153,11 +153,14 @@ class CommandContext(CLICommand):
                     'S': ss        if (i == 0) else ''})
 
     def emit_json(self, config):
-        self.print(to_json(config))
+        self.print_json(config)
 
     async def get_contexts(self):
+        with_details = ('details' in self.options['--output='])
+
         cfg = await self.worker.async_api_request(self.access,
-            RequestConfigGet(contexts=True))
+            RequestConfigGet(
+                contexts=(RequestConfigGet.DEEP if with_details else True)))
 
         contexts = cfg['config'].get('contexts', {})
         if self.name:
@@ -481,7 +484,7 @@ class CommandGrant(CLICommand):
                     'q': u[i][2]                 if (i < len(u)) else ''})
 
     def emit_json(self, config):
-        self.print(to_json(config))
+        self.print_json(config)
 
     async def get_roles(self, want_context=True):
         cfg = await self.worker.async_api_request(self.access,
