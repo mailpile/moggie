@@ -1,3 +1,6 @@
+# This is the main application "window manager"; it manages the UI
+# from a high level and holds everything together.
+
 import asyncio
 import datetime
 import logging
@@ -27,12 +30,12 @@ class TuiFrame(urwid.Frame):
 
     current_context = property(lambda s: s.context_list.active)
 
-    def __init__(self, screen):
+    def __init__(self, screen, conn_manager):
         self.screen = screen
         self.is_locked = True
         self.was_locked = True
         self.render_cols_rows = self.screen.get_cols_rows()
-        self.app_bridge = None
+        self.conn_manager = conn_manager
 
         suggestions = SuggestionBox(self,
             fallbacks=[SuggestionWelcome],
@@ -46,7 +49,7 @@ class TuiFrame(urwid.Frame):
         self.crumbs = []
         self.notifications = []
         self.columns = urwid.Columns([self.filler1], dividechars=1)
-        self.context_list = ContextList(self, [])
+        self.context_list = ContextList(self)
 
         self.all_columns = [self.context_list]
         self.topbar_pile = urwid.Pile([])
@@ -116,14 +119,8 @@ class TuiFrame(urwid.Frame):
         except:
             logging.exception('Exception handling message: %s' % (message,))
 
-    def link_bridge(self, app_bridge):
-        self.app_bridge = app_bridge
-        return self.handle_bridge_message
-
-    def set_context(self, contexts, i):
-        # FIXME: Do we really need to recreate the context list?
-        self.context_list = ContextList(self, contexts, expanded=i)
-        self.all_columns[0] = self.context_list
+    def set_context(self, i):
+        self.context_list.expand(i)
         self.update_columns()
 
     def show_mailbox(self, which, context=None):
@@ -143,7 +140,7 @@ class TuiFrame(urwid.Frame):
 
     def unlock(self, passphrase):
         logging.info('Passphrase supplied, attempting unlock')
-        self.app_bridge.send_json(RequestUnlock(passphrase))
+        self.conn_manager.send(RequestUnlock(passphrase))
 
     def ui_change_passphrase(self):
         self.topbar.open_with(ChangePassDialog)
@@ -153,7 +150,7 @@ class TuiFrame(urwid.Frame):
         logging.info(
             'New passphrase supplied, requesting change (disconnect=%s)'
             % (disconnect,))
-        self.app_bridge.send_json(RequestChangePassphrase(
+        self.conn_manager.send(RequestChangePassphrase(
             old_passphrase, new_passphrase,
             disconnect=disconnect))
 

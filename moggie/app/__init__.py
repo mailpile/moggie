@@ -12,13 +12,6 @@ class Nonsense(Exception):
     pass
 
 
-class RaiseHelp(Nonsense):
-    def __init__(self, args=None, invalid=None):
-        self.args = args or []
-        self.invalid = invalid
-        super().__init__(self)
-
-
 def CommandStart(wd, args):
     wait = '--wait' in args
     if wait:
@@ -92,15 +85,13 @@ def CommandMuttalike(wd, args):
 
     def _process(arg, args):
         if arg == '-h':
-            raise RaiseHelp(args=args)
+            return COMMANDS.get('help').Command(wd, args)
         elif arg in ('-E', '-f', '-p', '-R', '-y', '-Z'):
             _eat(tui_args, arg, args)
-        elif args in ('-d', '-D', '-F', '-m', '-n'):
+        elif arg in ('-d', '-D', '-F', '-m', '-n'):
             _eat(sys_args, arg, args)
-        elif pass_unknown:
-            passing.append(arg)
         else:
-            raise RaiseHelp(invalid=arg)
+            raise Nonsense('Invalid argument: %s' % arg)
 
     try:
         draft = MessageDraft.FromArgs(args, unhandled_cb=_process)
@@ -118,7 +109,7 @@ def CommandMuttalike(wd, args):
             sys_args = {}
 
     except Nonsense as e:
-        raise RaiseHelp(invalid=str(e))
+        raise
 
     except Exception as e:
         logging.exception(e)
@@ -141,10 +132,6 @@ def CommandMuttalike(wd, args):
         if loglevel <= logging.INFO:
             sys.stderr.write('Logging to %s (startup in 2s)\n' % (logfile,))
             time.sleep(2)
-
-    # This is our default mode of operation
-    if not args and not tui_args and not draft:
-        tui_args['-y'] = True
 
     if sys.stdin.isatty() and sys.stdout.isatty():
         return CommandTUI(wd, tui_args, draft)
@@ -185,13 +172,21 @@ def Main(args):
         AppConfig.GENERAL, 'log_level', fallback=logging.DEBUG))
     configure_logging(profile_dir=wd, level=DEFAULT_LOG_LEVEL)
 
-    command = COMMANDS.get(command)
-    if command is not None:
+    def _run(command):
         if hasattr(command, 'Command'):
             result = command.Command(wd, args)
         else:
             result = command(wd, args)
         if result is False:
             sys.exit(1)
+
+    command = COMMANDS.get(command)
+    if command is not None:
+        try:
+            _run(command)
+            sys.exit(0)
+        except Nonsense as e:
+            sys.stderr.write('Error: %s\n' % e)
+        sys.exit(1)
     else:
-        COMMANDS['help'](wd, args)
+        _run(COMMANDS.get('help'))
