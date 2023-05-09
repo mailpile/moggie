@@ -749,43 +749,43 @@ main app worker. Hints:
     async def api_request(self, conn_id, access, client_request,
             internal=False):
         try:
-            api_request = to_api_request(client_request)
+            api_req = to_api_request(client_request)
         except KeyError as e:
             logging.warning('Invalid request: %s' % e)
             return {'code': 500}
 
         # FIXME: This needs refactoring
         result = None
-        if type(api_request) == RequestCLI:
-            result = await self.api_req_cli(conn_id, access, api_request)
-        elif type(api_request) == RequestMailbox:
-            result = await self.api_req_mailbox(conn_id, access, api_request)
-        elif type(api_request) == RequestSearch:
-            result = await self.api_req_search(conn_id, access, api_request)
-        elif type(api_request) == RequestTag:
-            result = await self.api_req_tag(conn_id, access, api_request)
-        elif type(api_request) == RequestCounts:
-            result = await self.api_req_counts(conn_id, access, api_request)
-        elif type(api_request) == RequestEmail:
-            result = await self.api_req_email(conn_id, access, api_request)
-        elif type(api_request) == RequestContexts:
-            result = await self.api_req_contexts(conn_id, access, api_request)
-        elif type(api_request) == RequestAddToIndex:
-            result = await self.api_req_add_to_index(conn_id, access, api_request)
-        elif type(api_request) == RequestConfigGet:
-            result = await self.api_req_config_get(conn_id, access, api_request)
-        elif type(api_request) == RequestConfigSet:
-            result = await self.api_req_config_set(conn_id, access, api_request)
-        elif type(api_request) == RequestUnlock:
-            result = await self.api_req_unlock(conn_id, access, api_request)
-        elif type(api_request) == RequestChangePassphrase:
-            result = await self.api_req_changepass(conn_id, access, api_request)
-        elif type(api_request) == RequestSetSecret:
-            result = await self.api_req_set_secret(conn_id, access, api_request)
-        elif type(api_request) == RequestOpenPGP:
-            result = await self.api_req_openpgp(conn_id, access, api_request)
-        elif type(api_request) == RequestPing:
-            result = ResponsePing(api_request)
+        if type(api_req) == RequestCommand:
+            result = await self.api_req_cli(conn_id, access, api_req)
+        elif type(api_req) == RequestMailbox:
+            result = await self.api_req_mailbox(conn_id, access, api_req)
+        elif type(api_req) == RequestSearch:
+            result = await self.api_req_search(conn_id, access, api_req)
+        elif type(api_req) == RequestTag:
+            result = await self.api_req_tag(conn_id, access, api_req)
+        elif type(api_req) == RequestCounts:
+            result = await self.api_req_counts(conn_id, access, api_req)
+        elif type(api_req) == RequestEmail:
+            result = await self.api_req_email(conn_id, access, api_req)
+        elif type(api_req) == RequestContexts:
+            result = await self.api_req_contexts(conn_id, access, api_req)
+        elif type(api_req) == RequestAddToIndex:
+            result = await self.api_req_add_to_index(conn_id, access, api_req)
+        elif type(api_req) == RequestConfigGet:
+            result = await self.api_req_config_get(conn_id, access, api_req)
+        elif type(api_req) == RequestConfigSet:
+            result = await self.api_req_config_set(conn_id, access, api_req)
+        elif type(api_req) == RequestUnlock:
+            result = await self.api_req_unlock(conn_id, access, api_req)
+        elif type(api_req) == RequestChangePassphrase:
+            result = await self.api_req_changepass(conn_id, access, api_req)
+        elif type(api_req) == RequestSetSecret:
+            result = await self.api_req_set_secret(conn_id, access, api_req)
+        elif type(api_req) == RequestOpenPGP:
+            result = await self.api_req_openpgp(conn_id, access, api_req)
+        elif type(api_req) == RequestPing:
+            result = ResponsePing(api_req)
 
         if internal:
             return result
@@ -794,7 +794,7 @@ main app worker. Hints:
             code, json_result = 200, to_json(result)
         else:
             code = 400
-            result = {'error': 'Unknown %s' % type(api_request)}
+            result = {'error': 'Unknown %s' % type(api_req)}
             json_result = to_json(result)
 
         return {

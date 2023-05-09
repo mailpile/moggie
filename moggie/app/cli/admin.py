@@ -341,7 +341,7 @@ class CommandUnlock(CLICommand):
             msg = await self.await_messages('unlocked', 'notification')
             if msg and msg.get('message'):
                 print(msg['message'])
-                return (msg['prototype'] == 'unlocked')
+                return (msg['req_type'] == 'unlocked')
             else:
                 print('Unknown error (%s) or timed out.' % msg)
                 return False

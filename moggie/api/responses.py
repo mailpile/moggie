@@ -9,14 +9,14 @@ import time
 
 class ResponsePing(dict):
     def __init__(self, request):
-        self.update({'prototype': 'pong', 'ts': request.get('ts', 0)})
+        self.update({'req_type': 'pong', 'ts': request.get('ts', 0)})
 
 
 class ResponseNotification(dict):
     def __init__(self, notification):
         self.update(notification)
         self.update({
-            'prototype': 'notification',
+            'req_type': 'notification',
             'ts': int(time.time())})
 
 
@@ -31,7 +31,7 @@ class ResponsePleaseUnlock(ResponseNotification):
 class ResponseUnlocked(dict):
     def __init__(self, request):
         super().__init__({
-            'prototype': 'unlocked',
+            'req_type': 'unlocked',
             'message': 'App unlocked!',
             'ts': int(time.time())})
 
@@ -39,9 +39,9 @@ class ResponseUnlocked(dict):
 class ResponseAddToIndex(dict):
     def __init__(self, request, done, total):
         self.update({
-            'prototype': 'add_to_index',
-            'context': request['context'],
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
+            'context': request['context'],
             'total': total,
             'done': done})
 
@@ -49,7 +49,7 @@ class ResponseAddToIndex(dict):
 class ResponseMailbox(dict):
     def __init__(self, request, emails, watched):
         self.update({
-            'prototype': 'mailbox',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'context': request['context'],
             'mailbox': request['mailbox'],
@@ -62,7 +62,7 @@ class ResponseMailbox(dict):
 class ResponseSearch(dict):
     def __init__(self, request, emails, results):
         self.update({
-            'prototype': 'search',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'context': request['context'],
             'terms': request['terms'],
@@ -77,7 +77,7 @@ class ResponseSearch(dict):
 class ResponseCounts(dict):
     def __init__(self, request, counts):
         self.update({
-            'prototype': 'counts',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'context': request['context'],
             'counts': counts})
@@ -86,7 +86,7 @@ class ResponseCounts(dict):
 class ResponseTag(dict):
     def __init__(self, request, results):
         self.update({
-            'prototype': 'tag',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'context': request['context'],
             'results': results})
@@ -95,7 +95,7 @@ class ResponseTag(dict):
 class ResponseEmail(dict):
     def __init__(self, request, parsed_email):
         self.update({
-            'prototype': 'email',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'metadata': request['metadata'],
             'email': parsed_email})
@@ -104,7 +104,7 @@ class ResponseEmail(dict):
 class ResponseConfigGet(dict):
     def __init__(self, request, config_data, error=None):
         self.update({
-            'prototype': 'config_get',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'config': config_data})
         if error is not None:
@@ -114,7 +114,7 @@ class ResponseConfigGet(dict):
 class ResponseConfigSet(dict):
     def __init__(self, request, config_data, error=None):
         self.update({
-            'prototype': 'config_get',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'config': config_data})
         if error is not None:
@@ -124,15 +124,15 @@ class ResponseConfigSet(dict):
 class ResponseContexts(dict):
     def __init__(self, request, contexts):
         self.update({
-            'prototype': 'contexts',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'contexts': contexts})
 
 
-class ResponseCLI(dict):
+class ResponseCommand(dict):
     def __init__(self, request, mimetype, data):
         self.update({
-            'prototype': 'contexts',
+            'req_type': request['req_type'],
             'req_id': request['req_id'],
             'mimetype': mimetype,
             'data': data})

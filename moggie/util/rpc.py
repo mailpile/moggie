@@ -75,7 +75,7 @@ class JsonRpcClient:
 
 
 class BridgeWorker:
-    PING_INTERVAL = 3
+    PING_INTERVAL = 30
 
     def __init__(self, ev_loop, name, app, peer):
         self.ws = None
@@ -153,6 +153,7 @@ class BridgeWorker:
                         compression=None,
                         timeout=60,
                         ping_timeout=5,
+                        ping_interval=self.PING_INTERVAL,
                         close_timeout=1,
                         max_size=50*1024*1024,
                         max_queue=2,

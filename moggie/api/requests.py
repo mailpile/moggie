@@ -25,13 +25,13 @@ class RequestBase(dict):
 
 class RequestPing(RequestBase):
     def __init__(self):
-        self.update({'prototype': 'ping', 'ts': int(time.time())})
+        self.update({'req_type': 'ping', 'ts': int(time.time())})
 
 
 class RequestSearch(RequestBase):
     def __init__(self, context='', terms='', req_id=None):
         self.update({
-            'prototype': 'search',
+            'req_type': 'search',
             'context': context,
             'terms': terms
         }, req_id=req_id)
@@ -40,7 +40,7 @@ class RequestSearch(RequestBase):
 class RequestOpenPGP(RequestBase):
     def __init__(self, context='', op='', args=[], kwargs={}, req_id=None):
         self.update({
-            'prototype': 'openpgp',
+            'req_type': 'openpgp',
             'context': context,
             'op': op,
             'args': args,
@@ -51,7 +51,7 @@ class RequestOpenPGP(RequestBase):
 class RequestCounts(RequestBase):
     def __init__(self, context='', terms_list=[], req_id=None):
         self.update({
-            'prototype': 'counts',
+            'req_type': 'counts',
             'context': context,
             'terms_list': terms_list
         }, req_id=req_id)
@@ -62,7 +62,7 @@ class RequestTag(RequestBase):
             tag_ops=[], tag_undo_id=None, tag_redo_id=None, undoable=True,
             req_id=None):
         self.update({
-            'prototype': 'tag',
+            'req_type': 'tag',
             'context': context,
             'undoable': undoable,
             'tag_undo_id': tag_undo_id,
@@ -77,7 +77,7 @@ class RequestAddToIndex(RequestBase):
             watch=False, force=False,
             req_id=None):
         self.update({
-            'prototype': 'add_to_index',
+            'req_type': 'add_to_index',
             'context': context,
             'search': search,
             'force': force,
@@ -91,7 +91,7 @@ class RequestMailbox(RequestBase):
             username=None, password=None,
             req_id=None):
         self.update({
-            'prototype': 'mailbox',
+            'req_type': 'mailbox',
             'context': context,
             'mailbox': mailbox,
             'username': username,
@@ -106,7 +106,7 @@ class RequestEmail(RequestBase):
             metadata=[], text=False, data=False, full_raw=False, parts=None,
             req_id=None):
         self.update({
-            'prototype': 'email',
+            'req_type': 'email',
             'metadata': metadata[:Metadata.OFS_HEADERS],
             'text': text,
             'data': data,
@@ -118,7 +118,7 @@ class RequestEmail(RequestBase):
 class RequestContexts(RequestBase):
     def __init__(self, req_id=None):
         self.update({
-            'prototype': 'contexts',
+            'req_type': 'contexts',
             # FIXME
         }, req_id=req_id)
 
@@ -133,7 +133,7 @@ class RequestConfigGet(RequestBase):
             contexts=False,
             req_id=None):
         self.update({
-            'prototype': 'config_get',
+            'req_type': 'config_get',
             'which': which,
             'urls': urls,
             'access': access,
@@ -150,7 +150,7 @@ class RequestConfigSet(RequestBase):
             updates=[],
             req_id=None):
         self.update({
-            'prototype': 'config_set',
+            'req_type': 'config_set',
             'new': new,
             'section': section,
             'updates': updates
@@ -161,7 +161,7 @@ class RequestSetSecret(RequestBase):
     def __init__(self,
             key=None, context=None, secret=None, ttl=None, req_id=None):
         self.update({
-            'prototype': 'set_secret',
+            'req_type': 'set_secret',
             'context': context,
             'key': key,
             'ttl': ttl,
@@ -173,7 +173,7 @@ class RequestSetSecret(RequestBase):
 class RequestUnlock(RequestBase):
     def __init__(self, passphrase=None, req_id=None):
         self.update({
-            'prototype': 'unlock',
+            'req_type': 'unlock',
             'passphrase': passphrase
         }, req_id=req_id)
 
@@ -184,27 +184,26 @@ class RequestChangePassphrase(RequestBase):
             new_passphrase=None,
             disconnect=False, req_id=None):
         self.update({
-            'prototype': 'change_passphrase',
+            'req_type': 'change_passphrase',
             'old_passphrase': old_passphrase,
             'new_passphrase': new_passphrase,
             'disconnect': disconnect
         }, req_id=req_id)
 
 
-class RequestCLI(RequestBase):
+class RequestCommand(RequestBase):
     def __init__(self, command=None, args=None, req_id=None):
         self.update({
-            'prototype': 'unlock',
-            'command': command,
+            'req_type': 'cli:%s' % command,
             'args': args
         }, req_id=req_id)
 
-
+    command = property(lambda s: s['req_type'].split(':', 1)[-1])
 
 
 def to_api_request(_input):
     cls = {
-         'cli': RequestCLI,
+         'cli': RequestCommand,
          'tag': RequestTag,
          'ping': RequestPing,
          'email': RequestEmail,
@@ -218,7 +217,7 @@ def to_api_request(_input):
          'openpgp': RequestOpenPGP,
          'unlock': RequestUnlock,
          'change_passphrase': RequestChangePassphrase,
-         }.get(_input.get('prototype', ''))
+         }.get(_input.get('req_type', '').split(':')[0])
     if cls:
         obj = cls()
         obj.update(_input)

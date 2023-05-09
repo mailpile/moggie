@@ -1,3 +1,4 @@
+import sys
 from .command import CLICommand
 
 TOPICS = {
@@ -202,7 +203,7 @@ class CommandHelp(CLICommand):
     WEBSOCKET = False
     WEB_EXPOSE = True
     OPTIONS = [[
-        ('--format=', ['text'], 'Output format; text*, json, html, sexp'),
+        ('--format=', [None], 'Output format; text*, json, html, sexp'),
     ]]
 
     def configure(self, args):
@@ -279,7 +280,7 @@ class CommandHelp(CLICommand):
 
             arg_fmt = '%s:%s' % (arg, fmt)
             if arg_fmt in TOPICS:
-                output[fmt] = TOPICS[arg_fmt]
+                output[fmt] = TOPICS[arg_fmt].rstrip()
             output['title'] = 'moggie help %s' % arg
 
             if arg == 'topics':
@@ -297,10 +298,10 @@ class CommandHelp(CLICommand):
                     _print('## Other topics:\n\n' + _wrap(topics, '  '), '\n')
 
             elif arg_fmt in TOPICS:
-                _print(_unindent(TOPICS[arg_fmt]), '\n')
+                _print(_unindent(TOPICS[arg_fmt].rstrip()), '\n')
 
             elif arg in TOPICS:
-                _print(_unindent(TOPICS[arg]), '\n')
+                _print(_unindent(TOPICS[arg].rstrip()), '\n')
 
             elif (cmd is not None) and cmd.__doc__:
                 helptext = _unindent(cmd.__doc__.strip())
@@ -315,12 +316,16 @@ Try `moggie help topics` for a list of what help has been written.
                 happy = False
 
         output['text'] = '\n'.join(chunks)
-        if fmt == 'text':
+        if fmt in ('text', None):
+            # FIXME: Can we detect a terminal and launch less/more for
+            #        the user automatially? Would be nice!
             return self.print(output['text']) and happy
-        elif 'html' not in output:
+
+        if 'html' not in output:
             import markdown
             # FIXME: Linkify moggie commands?
             output['html'] = markdown.markdown(output['text'])
+
         if fmt == 'html':
             self.print_html_start(title=output['title'])
             self.print(output['html'])
@@ -329,4 +334,5 @@ Try `moggie help topics` for a list of what help has been written.
             self.print_json(output)
         elif fmt == 'sexp':
             self.print_json(output)
+
         return happy

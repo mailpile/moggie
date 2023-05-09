@@ -344,7 +344,7 @@ class CLICommand:
                 await asyncio.sleep(sleeptime)
             while self.messages:
                 msg = self.messages.pop(0)
-                if msg.get('prototype') in prototypes:
+                if msg.get('req_type') in prototypes:
                     return msg
         return {}
 
