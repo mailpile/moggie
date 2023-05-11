@@ -40,13 +40,13 @@ def DetectBinaries(
     if which and use_cache:
         if which in BINARIES:
             return BINARIES[which]
-        env_bin = os.getenv('MAILPILE_%s' % which.upper(), '')
+        env_bin = os.getenv('MOGGIE_%s' % which.upper(), '')
         if env_bin:
             BINARIES[which] = env_bin
             return env_bin
 
     if skip is None:
-        skip = (os.getenv('MAILPILE_IGNORE_BINARIES', '')
+        skip = (os.getenv('MOGGIE_IGNORE_BINARIES', '')
             .replace('/ga', '_agent')   # Backwards compatibility
             .replace('/dm', '_dirmngr') # Backwards compatibility
             .split())
@@ -65,7 +65,7 @@ def DetectBinaries(
                 bin_test = copy.copy(bin_test)
                 bin_test[0] = preferred[binary]
             else:
-                env_bin = os.getenv('MAILPILE_%s' % binary.upper(), '')
+                env_bin = os.getenv('MOGGIE_%s' % binary.upper(), '')
                 if env_bin:
                     BINARIES[binary] = env_bin
                     continue

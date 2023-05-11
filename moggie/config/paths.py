@@ -32,12 +32,12 @@ def LEGACY_DEFAULT_WORKDIR(profile):
 
 def DEFAULT_WORKDIR():
     # The Mailpile environment variable trumps everything
-    workdir = os.getenv('MAILPILE_HOME')
+    workdir = os.getenv('MOGGIE_HOME')
     if workdir:
         return _ensure_exists(workdir)
 
     # Which profile?
-    profile = os.getenv('MAILPILE_PROFILE', 'default')
+    profile = os.getenv('MOGGIE_PROFILE', 'default')
 
     # Check if we have a legacy setup we need to preserve
     workdir = LEGACY_DEFAULT_WORKDIR(profile)
@@ -53,7 +53,7 @@ def DEFAULT_WORKDIR():
 def DEFAULT_SHARED_DATADIR():
     # IMPORTANT: This code is duplicated in mailpile-admin.py.
     #            If it needs changing please change both places!
-    env_share = os.getenv('MAILPILE_SHARED')
+    env_share = os.getenv('MOGGIE_SHARED')
     if env_share is not None:
         return env_share
 
