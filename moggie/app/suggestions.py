@@ -6,6 +6,7 @@ class Suggestion:
     ID = None
 
     UI_QUIT = 'quit'
+    UI_HELP = 'help'
     UI_ACCOUNTS = 'accounts'
     UI_BROWSE = 'browse'
     UI_ENCRYPT = 'encrypt'
@@ -28,8 +29,8 @@ class Suggestion:
 
 
 class SuggestionWelcome(Suggestion):
-    MESSAGE = 'Welcome to Moggie! Press `q` to quit.'
-    UI_ACTION = Suggestion.UI_QUIT
+    MESSAGE = 'Use the arrow keys/enter to move/select, `q` to quit!'
+    UI_ACTION = Suggestion.UI_HELP
     ID = 0
 
 
@@ -37,6 +38,7 @@ class SuggestionAddAccount(Suggestion):
     MESSAGE = 'Add one or more e-mail accounts'
     UI_ACTION = Suggestion.UI_ACCOUNTS
     ID = 1
+
     # FIXME: Make wanted() check whether accounts have been added.
 
 
@@ -61,7 +63,7 @@ class SuggestionEncrypt(Suggestion):
 
 SUGGESTIONS = dict((s.ID, s) for s in [
     SuggestionWelcome,
-    SuggestionAddAccount,
+#   SuggestionAddAccount, -- FIXME
     SuggestionBrowse,
     SuggestionEncrypt,
     ])

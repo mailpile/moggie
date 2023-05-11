@@ -10,9 +10,11 @@ class SuggestionBox(urwid.Pile):
     DISMISSED = set()
 
     def __init__(self, tui_frame,
+            update_parent=None,
             fallbacks=None, suggestions=None, max_suggestions=3):
 
         self.tui_frame = tui_frame
+        self.update_parent = update_parent or (lambda: None)
         self.max_suggestions = max_suggestions
         self.widgets = []
         urwid.Pile.__init__(self, self.widgets)
@@ -35,7 +37,10 @@ class SuggestionBox(urwid.Pile):
                 if len(suggest) >= self.max_suggestions:
                     break
         if not len(suggest):
-            suggest.extend(self.fallbacks)
+            for sg_cls in self.fallbacks:
+                sg_obj = sg_cls.If_Wanted(context, None)
+                if sg_obj and sg_obj.ID not in SuggestionBox.DISMISSED:
+                    suggest.append(sg_obj)
         return suggest
 
     def set_suggestions(self, suggestions, context=None):
@@ -58,14 +63,15 @@ class SuggestionBox(urwid.Pile):
         def dismiss(i):
             SuggestionBox.DISMISSED.add(suggestion.ID)
             self.update_suggestions(self.get_suggestions())
+            self.update_parent()
         return dismiss
 
     def update_suggestions(self, suggest):
         widgets = []
         for sgn in suggest:
             columns = [
-                ('fixed',  4, urwid.Text(('subtle', '*'), 'right')),
-                ('weight', 1, Selectable(urwid.Text(sgn.message()),
+                ('fixed',  2, urwid.Text(('subtle', '->'), 'right')),
+                ('weight', 1, Selectable(urwid.Text(('subtle', sgn.message())),
                     on_select={'enter': self._on_activate(sgn)}))]
             if sgn.ID is not None:
                 columns.append(

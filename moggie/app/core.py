@@ -500,19 +500,17 @@ main app worker. Hints:
         roles, tag_ns, scope_s = access.grants(ctx,
             AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
 
-        loop = asyncio.get_event_loop()
-        async def load_mailbox():
-            # FIXME: Triage local/remote here? Hmm.
-            # Note: This might return a "please login" if the mailbox
-            #       is encrypted or on a remote server.
-            return await self.storage.async_mailbox(loop,
+        # FIXME: Triage local/remote here? Hmm.
+        # Note: This might return a "please login" if the mailbox
+        #       is encrypted or on a remote server.
+        info = await self.storage.async_mailbox(asyncio.get_event_loop(),
                 api_request['mailbox'],
                 username=api_request['username'],
                 password=api_request['password'],
                 limit=api_request['limit'],
                 skip=api_request['skip'])
+
         watched = False
-        info = await load_mailbox()
         return ResponseMailbox(api_request, info, watched)
 
     async def api_req_search(self, conn_id, access, api_request):

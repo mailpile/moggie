@@ -803,7 +803,7 @@ FIXME: Document html and html formats!
         if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
 
-        if not self.raw_results:
+        if 'results' in msg and not self.raw_results:
             self.raw_results = msg['results']
             self.webui_state['details'] = {}
             self.webui_state['preferences'] = self.preferences
@@ -1235,9 +1235,9 @@ class CommandCount(CLICommand):
             suffix = ''
 
         if self.options['--format='][-1] == 'json':
-            self.print_json(msg['counts'])
+            self.print_json(msg.get('counts', {}))
         elif self.options['--format='][-1] == 'sexp':
-            self.print_sexp(msg['counts'])
+            self.print_sexp(msg.get('counts', {}))
         else:
             for term in self.terms:
                 count = msg.get('counts', {}).get(term, 0)

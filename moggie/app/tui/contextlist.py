@@ -28,18 +28,17 @@ class ContextList(urwid.ListBox):
         ('trash',  (('d', 'Trash',    'in:trash'),))]
     TAG_KEYS = 'wertyu'
 
-    def __init__(self, tui_frame, expanded=0):
+    def __init__(self, tui_frame, update_parent=None, expanded=0, first=False):
         self.expanded = expanded
         self.tui_frame = tui_frame
+        self.update_parent = update_parent or (lambda: None)
+        self.first = first
         self.crumb = ''
         self.active = None
+        self.default_action = None
         self.walker = urwid.SimpleListWalker([])
-        urwid.ListBox.__init__(self, self.walker)
-
-        # FIXME: OK, this is where we should be calling the context
-        #        and count CLI commands! In an async fashion!
-        self.search_obj = RequestCommand('context', args=['--output=details'])
-        self.counts_obj = RequestCommand('count')
+        self.v_history = []
+        self.hotkeys = {}
 
         self.order = []
         self.contexts = {}
@@ -47,6 +46,11 @@ class ContextList(urwid.ListBox):
         self.tag_counts = {}
         self.update_content()
         self.awaiting_counts = {}
+
+        self.search_obj = RequestCommand('context', args=['--output=details'])
+        self.counts_obj = RequestCommand('count')
+
+        urwid.ListBox.__init__(self, self.walker)
 
         # Configure event listeners, request a list of contexts.
         me = 'contextlist'
@@ -56,23 +60,78 @@ class ContextList(urwid.ListBox):
         cm.add_handler(me, '*', 'pong', self.incoming_pong)
         cm.send(self.search_obj)
 
-    def expand(self, i):
+    def expand(self, i, activate=True):
         self.expanded = i
         self.update_content()
+        if activate:
+            self.activate_default_view()
 
-    def show_overview(self, i=None):
-        pass  # FIXME
+    def activate_default_view(self):
+        if self.default_action is not None:
+            self.default_action(None)
+            self.first = False
+            return True
+        self.first = True
+        return False
 
-    def show_connections(self, i=None):
-        pass  # FIXME
+    def _get_context(self, context):
+        if context is None:
+            context = self.active
+        if isinstance(context, str):
+            if '/' not in context:
+                context = 'local_app/' + context
+            context = self.contexts[context]
+        return context
+
+    def get_context_and_src_ids(self, context=None):
+        try:
+            context = self._get_context(context)
+            return context['key'], context['ctx_src_id']
+        except (KeyError, TypeError):
+            return 'Context 0', 'local_app/Context 0'
+
+    def send_with_context(self, message_obj, context=None):
+        if self.contexts:
+            context = self._get_context(context)
+
+            if isinstance(message_obj, dict):
+                message_obj['context'] = context['key']
+            if isinstance(message_obj, RequestCommand):
+                message_obj['args'][:0] = ['--context=%s' % context['key']]
+
+            bridge = context['source']
+        else:
+            bridge = None
+
+        self.tui_frame.conn_manager.send(message_obj, bridge_name=bridge)
+
+    def add_history(self, desc, recreate, icon='-'):
+        self.v_history = [vh for vh in self.v_history if (vh[1] != desc)][-4:]
+        self.v_history.append((icon, desc, self.expanded, recreate))
+        self.update_content()
+
+    def show_history(self, icon, desc, ctx_src_id, recreate):
+        self.expand(ctx_src_id, activate=False)
+        recreate()
+
+    def show_overview(self, context):
+        logging.debug('FIXME: Should show context %s' % context)
+
+    def show_connections(self, context):
+        logging.debug('FIXME: Should show context connections')
+
+    def show_account(self, account):
+        logging.debug('FIXME: Should show account details: %s' % account)
+
+    def show_search(self, terms, ctx_src_id):
+        return self.tui_frame.show_search_result(terms, ctx_src_id,
+            history=False)
 
     def request_counts(self):
         self.tag_counted = time.time()
         self.awaiting_counts = {}
-        for i, ctx in self.contexts.items():
-            args = [
-                '--multi',
-                '--context=%s' % ctx['key']]
+        for ctx_src_id, ctx in self.contexts.items():
+            args = ['--multi']
             all_tags = ctx.get('tags', []) + ctx.get('extra_tags', [])
             if all_tags:
                 for tag in set(all_tags):
@@ -80,31 +139,34 @@ class ContextList(urwid.ListBox):
                     args.append('--q=in:%s' % tag)
                     args.append('--q=in:%s tag:unread' % tag)
                 self.counts_obj.update({'args': args})
-                self.awaiting_counts[self.counts_obj['req_id']] = i
-                self.tui_frame.conn_manager.send(self.counts_obj)
+                self.awaiting_counts[self.counts_obj['req_id']] = ctx_src_id
+                self.send_with_context(self.counts_obj, ctx)
 
     def incoming_contexts(self, source, message):
-        logging.debug('Got contexts: %s' % message)
         for ctx, info in message['data'][0].items():
-            full_ctx = '%s/%s' % (source, ctx)
-            if full_ctx not in self.contexts:
+            ctx_src_id = '%s/%s' % (source, ctx)
+            if ctx_src_id not in self.contexts:
                 info['source'] = source
-                self.order.append(full_ctx)
-                self.contexts[full_ctx] = info
-                self.tag_counts[full_ctx] = {}
+                info['ctx_src_id'] = ctx_src_id
+                self.order.append(ctx_src_id)
+                self.contexts[ctx_src_id] = info
+                self.tag_counts[ctx_src_id] = {}
             else:
-                self.contexts[full_ctx].update(info)
+                self.contexts[ctx_src_id].update(info)
         self.update_content()
         self.request_counts()
+        self.update_parent()
+        if self.first:
+            logging.debug('Launching default action?')
+            self.activate_default_view()
 
     def incoming_counts(self, source, message):
-        ctx_id = self.awaiting_counts.get(message['req_id'])
-        if ctx_id:
-            self.tag_counts[ctx_id] = counts = {}
+        ctx_src_id = self.awaiting_counts.get(message['req_id'])
+        if ctx_src_id:
+            self.tag_counts[ctx_src_id] = counts = {}
             for search, count in message['data'][0].items():
                 search = search[3:].replace(' tag:unread', '*')
                 counts[search] = count
-            logging.debug('Counts for %s: %s' % (ctx_id, counts))
             self.update_content()
 
     def incoming_pong(self, source, message):
@@ -120,10 +182,12 @@ class ContextList(urwid.ListBox):
             # This goes through the main frame in case it wants to know
             # things have changed and coordinate with other UI elements.
             return lambda x: self.tui_frame.set_context(which)
-        def _sel_email(which):
-            return lambda x: self.tui_frame.show_account(self.active, which)
-        def _sel_search(terms):
-            return lambda x: self.tui_frame.show_search_result(terms)
+        def _sel_email(account):
+            return lambda x: self.show_account(account)
+        def _sel_search(terms, ctx_src_id):
+            return lambda x: self.show_search(terms, ctx_src_id)
+        def _sel_history(*args):
+            return lambda x: self.show_history(*args)
 
         def _friendly_count(tc):
             if tc < 1:
@@ -134,12 +198,26 @@ class ContextList(urwid.ListBox):
                 return ' %dk' % (tc // 1000)
             return 'oo'
 
+        self.hotkeys = {}
+        self.crumb = '(moggie is unconfigured)'
         widgets = []
+        if self.v_history:
+            widgets.append(urwid.Text(('subtle', 'Recent:')))
+            for entry in reversed(self.v_history):
+                icon, desc = entry[:2]
+                widgets.append(Selectable(
+                    urwid.Text(
+                        [('subtle', '%s %s' % (icon, desc))],
+                        'left', 'clip'),
+                    on_select={'enter': _sel_history(*entry)}))
+            widgets.append(urwid.Divider())
+            #widgets.append(urwid.Text([('subtle', '_'*20)], 'left', 'clip'))
+
         last_ctx_name = '-:-!-:-'
         self.order.sort(
-            key=lambda c: (0 if c.endswith('/Context 0') else 1, c))
-        for i, ctx_id in enumerate(self.order):
-            ctx = self.contexts[ctx_id]
+            key=lambda c: (0 if (c == 'local_app/Context 0') else 1, c))
+        for i, ctx_src_id in enumerate(self.order):
+            ctx = self.contexts[ctx_src_id]
             name = ctx['name']
             if name.startswith(last_ctx_name+' '):
                 name = ' - ' + name[len(last_ctx_name)+1:]
@@ -151,13 +229,15 @@ class ContextList(urwid.ListBox):
 #               ('hotkey', sc),
                 ('subtle', name)], 'left', 'clip')
 
-            if i == self.expanded:
+            if self.expanded in (i, ctx_src_id):
+                self.expanded = ctx_src_id
                 last_ctx_name = name
                 self.active = ctx
                 self.crumb = ctx['name']
                 widgets.append(Selectable(urwid.AttrMap(ctx_name,
                     {None: 'active', 'subtle': 'active', 'hotkey': 'act_hk'}),
                     on_select={'enter': self.show_overview}))
+                self.default_action = self.show_overview
 #               widgets.append(Selectable(urwid.Text(
 #                   [('subtle', 'live:1')], 'right', 'clip'),
 #                   on_select={'enter': self.show_connections}))
@@ -165,13 +245,18 @@ class ContextList(urwid.ListBox):
                 widgets.append(Selectable(ctx_name,
                     on_select={'enter': _sel_ctx(i)}))
 
-            if i == self.expanded:
+            def_act = None
+            if self.expanded == ctx_src_id:
                 acount = 0
-                for a_id, acct in ctx.get('accounts', {}).items():
+                for ai, (a_id, acct) in enumerate(
+                        ctx.get('accounts', {}).items()):
+                    action = _sel_email(acct)
                     widgets.append(Selectable(urwid.Padding(
                             urwid.Text(('email', acct['name']), 'left', 'clip'),
                             left=1, right=1),
-                        on_select={}))  # FIXME
+                        on_select={'enter': action}))  # FIXME
+                    if ai == 0:
+                        self.default_action = def_act = action
                     acount += 1
                     if acount > 3:
                         pass  # FIXME: Add a "more" link, break loop
@@ -182,29 +267,40 @@ class ContextList(urwid.ListBox):
                 all_tags = ctx.get('tags', []) + ctx.get('extra_tags', [])
                 for tag, items in self.TAG_ITEMS:
                     if tag in all_tags:
-                        tc = self.tag_counts[ctx_id].get(tag.lower()+'*', 0)
+                        tc = self.tag_counts[ctx_src_id].get(tag.lower()+'*', 0)
                         for ti, (sc, name, search) in enumerate(items):
+                            os = search and {'enter': _sel_search(
+                                search, ctx_src_id)}
+                            if sc and os:
+                                self.hotkeys[sc] = os['enter']
                             sc = (' %s:' % sc) if sc else '   '
-                            os = search and {'enter': _sel_search(search)}
                             widgets.append(Selectable(
                                 urwid.Text([
                                     ('hotkey', sc), name,
                                     ('subtle', _friendly_count(tc) if (ti == 0) else '')]),
                                 on_select=os))
+                            if (ti == 0) and os and not shown:
+                                self.default_action = def_act = os['enter']
                         shown.append(tag)
+
                 count = 1
                 unshown = [t for t in all_tags if t not in shown]
                 if unshown:
                     widgets.append(urwid.Divider())
-                    for tag in unshown:
+                    for ai, tag in enumerate(unshown):
+                        action = _sel_search('in:%s' % tag, ctx_src_id)
                         sc = '   '
                         if count <= len(self.TAG_KEYS):
-                            sc = (' %s:' % self.TAG_KEYS[count-1])
+                            hk = self.TAG_KEYS[count-1]
+                            sc = (' %s:' % hk)
+                            self.hotkeys[hk] = action
                         count += 1
                         name = tag[:1].upper() + tag[1:]
                         widgets.append(Selectable(
                             urwid.Text([('hotkey', sc), name]),
-                            on_select={'enter': _sel_search('in:%s' % tag)}))
+                            on_select={'enter': action}))
+                        if ai == 0 and not def_act:
+                            self.default_action = def_act = action
                     if count > 5:
                         pass  # FIXME: Add a "more" link, break loop
                 widgets.append(urwid.Divider())
@@ -217,7 +313,7 @@ This is moggie!
 
 """, 'center'))
 
-        if configured:
+        if configured and False:  # FIXME
             widgets.append(urwid.Text([('subtle', '_'*20)], 'left', 'clip'))
             widgets.append(Selectable(urwid.Text(
                     [('hotkey', 'C:'), ('subtle', 'add context')], 'right'),

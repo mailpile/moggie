@@ -50,6 +50,7 @@ class TuiConnManager:
     def add_handler(self, name, bridge_name, message_type, callback):
         if isinstance(message_type, dict):
             message_type = message_type['req_type']
+        bridge_name = bridge_name.split('/')[0]
         pattern = '%s:%s' % (bridge_name, message_type)
         handlers = self.handlers.get(pattern, {})
         _id = '%x.%s' % (self.seq, name)
@@ -59,9 +60,8 @@ class TuiConnManager:
         return _id
 
     def del_handler(self, _id):
-        for hdict in self.handlers.values():
-            if _id in hdict:
-                del hdict[_id]
+        if _id in self.handlers:
+            del self.handlers[_id]
 
     def send(self, message, bridge_name=None):
         if self.connecting is not None:
@@ -86,7 +86,7 @@ class TuiConnManager:
             self.send(message, bridge_name)
 
     def handle_message(self, bridge_name, message):
-        #logging.debug('Incoming(%s): %s' % (bridge_name, message))
+        logging.debug('Incoming(%s): %.512s' % (bridge_name, message))
         #logging.debug('Handlers: %s' % self.handlers)
         try:
             message = from_json(message)

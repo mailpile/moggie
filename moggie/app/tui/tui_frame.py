@@ -13,6 +13,7 @@ from ...config import APPNAME, APPVER, AppConfig
 from ...api.requests import *
 from ..suggestions import Suggestion, SuggestionWelcome
 
+from .decorations import EMOJI
 from .contextlist import ContextList
 from .emaillist import EmailList
 from .changepassdialog import ChangePassDialog
@@ -28,7 +29,7 @@ def _w(w, attr={}, valign='top'):
 
 class TuiFrame(urwid.Frame):
 
-    current_context = property(lambda s: s.context_list.active)
+    current_context = property(lambda s: s.context_list.active['key'])
 
     def __init__(self, screen, conn_manager):
         self.screen = screen
@@ -49,7 +50,8 @@ class TuiFrame(urwid.Frame):
         self.crumbs = []
         self.notifications = []
         self.columns = urwid.Columns([self.filler1], dividechars=1)
-        self.context_list = ContextList(self)
+        self.context_list = ContextList(self,
+            first=False, update_parent=self.update_columns)
 
         self.all_columns = [self.context_list]
         self.topbar_pile = urwid.Pile([])
@@ -77,9 +79,12 @@ class TuiFrame(urwid.Frame):
             pass  # FIXME
 
         elif show_mailbox:
-            self.context_list.expanded = 0
-            self.show_mailbox(
-                os.path.abspath(show_mailbox), AppConfig.CONTEXT_ZERO)
+            self.show_mailbox(os.path.abspath(show_mailbox))
+
+        else:
+            # What the default view is, depends on what the context
+            # has configured. Let the ContextList figure it out.
+            self.context_list.activate_default_view()
 
     async def topbar_clock(self):
         while True:
@@ -91,6 +96,9 @@ class TuiFrame(urwid.Frame):
             expired = time.time() - 20
             self.notifications = [
                 n for n in self.notifications if n['ts'] > expired]
+
+    def send_with_context(self, message_obj, context=None):
+        return self.context_list.send_with_context(message_obj, context)
 
     def handle_bridge_message(self, bridge_name, message):
         try:
@@ -124,16 +132,27 @@ class TuiFrame(urwid.Frame):
         self.update_columns()
 
     def show_mailbox(self, which, context=None):
-        if context is None:
-            context = self.context_list.active
+        ctx_id, ctx_src_id = self.context_list.get_context_and_src_ids(context)
         self.col_show(self.all_columns[0],
-            EmailList(self, RequestMailbox(context, which)))
+            EmailList(self, RequestMailbox(ctx_id, which), ctx_src_id))
+        self.context_list.add_history(
+            os.path.basename(which),
+            lambda: self.show_mailbox(which, context),
+            icon=EMOJI.get('mailbox', '-'))
 
-    def show_search_result(self, terms, context=None):
-        if context is None:
-            context = self.context_list.active
+    def show_search_result(self, terms, context=None, history=True):
+        if self.is_locked:
+            self.topbar.open_with(UnlockDialog)
+            return
+
+        ctx_id, ctx_src_id = self.context_list.get_context_and_src_ids(context)
         self.col_show(self.all_columns[0],
-            EmailList(self, RequestSearch(context, terms)))
+            EmailList(self, RequestSearch(ctx_id, terms), ctx_src_id))
+        if history:
+            self.context_list.add_history(
+                terms,
+                lambda: self.show_search_result(terms, context, True),
+                icon=EMOJI.get('search', '-'))
 
     def ui_quit(self):
         raise urwid.ExitMainLoop()
@@ -170,14 +189,14 @@ class TuiFrame(urwid.Frame):
         return urwid.Frame.render(self, *args, **kwargs)
 
     def locked_emoji(self):
-        return ' \U0001F512' if self.is_locked else ''
+        return (' %s' % EMOJI.get('lock', '!')) if self.is_locked else ''
 
     def update_topbar(self, update=True):
         # FIXME: Calculate/hint hotkeys based on what our columns suggest?
         now = time.time()
 
         maxwidth = self.render_cols_rows[0] - 2
-        crumbtrail = ' -> '.join(self.crumbs)
+        crumbtrail = ': '.join(self.crumbs)
         if len(crumbtrail) > maxwidth:
             crumbtrail = '...' + crumbtrail[-(maxwidth-3):]
 
@@ -226,18 +245,17 @@ class TuiFrame(urwid.Frame):
             nage = now - self.notifications[-1]['ts']
         if 0 < nage <= 30:
             msg = self.notifications[-1]['message']
-            hints = [
-                ('weight', len(msg), urwid.Text(
-                    msg, align='left', wrap='clip'))]
+            hints = [('weight', len(msg),
+                urwid.Text(msg, align='left', wrap='clip'))]
         else:
             nage = 0
-            hints.append(
-                ('weight', len(clock), urwid.Text(('subtle', clock),
-                    align='center')))
+            hints.append(('weight', len(clock),
+                urwid.Text(('subtle', clock), align='center')))
 
         if not nage or (maxwidth > 70 + 8*(3+len(global_hks))):
             # FIXME: Calculate actual width and use that.
             search = [] if self.is_locked else [('top_hk', '/:'), 'Search ']
+            search = []  # FIXME
             unlock = [('top_hk', '/:'), 'Unlock '] if self.is_locked else []
             hints.extend([
                 ('fixed', 23+6*len(global_hks), urwid.Text(
@@ -255,7 +273,7 @@ class TuiFrame(urwid.Frame):
                     ] + hints + [
                 ]), 'header')),
             _p(urwid.AttrMap(urwid.Columns([
-                urwid.Text(crumbtrail, align='left'),
+                urwid.Text((' ' * 19) + crumbtrail, align='left'),
                 ]), 'crumbs'))]
         #if update:
         #    self.contents['header'] = (self.topbar, None)
@@ -374,6 +392,10 @@ class TuiFrame(urwid.Frame):
             elif key in (' ',):
                 self.all_columns[1].listbox.keypress(cols_rows, key)
             else:
+                for col in self.all_columns:
+                    if hasattr(col, 'hotkeys') and key in col.hotkeys:
+                        col.hotkeys[key](None)
+                        return
                 return key
         except IndexError:
             return key

@@ -108,17 +108,18 @@ class EmailListWalker(urwid.ListWalker):
 class SuggestAddToIndex(Suggestion):
     MESSAGE = 'Add these messages to the search index'
 
-    def __init__(self, app_bridge, context, search_obj):
+    def __init__(self, tui_frame, search_obj, ctx_src_id):
         Suggestion.__init__(self, context, None)  # FIXME: Config?
-        self.app_bridge = app_bridge
+        self.tui_frame = tui_frame
+        self.ctx_src_id = ctx_src_id
         self.request_add = RequestAddToIndex(
-            context=context,
+            context=search_obj['context'],
             search=search_obj)
         self._message = self.MESSAGE
         self.adding = False
 
     def action(self):
-        self.app_bridge.send_json(self.request_add)
+        self.tui_frame.send_with_context(self.request_add, self.ctx_src_id)
         self.adding = True
 
     def message(self):
@@ -135,12 +136,21 @@ class EmailList(urwid.Pile):
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
-    def __init__(self, tui_frame, search_obj):
+    def __init__(self, tui_frame, search_obj, ctx_src_id):
+        self.ctx_src_id = ctx_src_id
         self.search_obj = search_obj
         self.tui_frame = tui_frame
-        self.app_bridge = tui_frame.app_bridge
+        self.conn_manager = tui_frame.conn_manager
 
-        self.crumb = search_obj.get('mailbox', 'FIXME')
+        self.crumb = search_obj.get('mailbox', None)
+        if not self.crumb:
+            terms = search_obj.get('terms', 'FIXME')
+            if terms.startswith('in:'):
+                terms = terms[3].upper() + terms[4:]
+            elif terms == 'all:mail':
+                terms = 'All Mail'
+            self.crumb = terms
+
         self.global_hks = {
             'J': [lambda *a: None, ('top_hk', 'J:'), 'Read Next '],
             'K': [lambda *a: None, ('top_hk', 'K:'), 'Previous  ']}
@@ -150,8 +160,12 @@ class EmailList(urwid.Pile):
         self.walker = EmailListWalker(self)
         self.emails = self.walker.emails
         self.listbox = urwid.ListBox(self.walker)
-        self.suggestions = SuggestionBox(self.tui_frame)
+        self.suggestions = SuggestionBox(self.tui_frame,
+            update_parent=self.update_content)
         self.widgets = []
+
+        self.cm_handler_id = self.conn_manager.add_handler(
+            'emaillist', ctx_src_id, search_obj, self.incoming_message)
 
         self.loading = 0
         self.want_more = True
@@ -169,28 +183,26 @@ class EmailList(urwid.Pile):
             cat = urwid.BoxAdapter(SplashCat(self.suggestions, message), rows)
             self.contents = [(cat, ('pack', None))]
             return
-        elif self.search_obj['prototype'] != 'search':
-            self.suggestions.set_suggestions([
-                SuggestAddToIndex(
-                    self.app_bridge,
-                    self.tui_frame.current_context,
-                    self.search_obj)])
+        elif self.search_obj['req_type'] != 'search':
+            pass
+            #self.suggestions.set_suggestions([
+            #    SuggestAddToIndex(self, self.search_obj, self.ctx_src_id)])
 
         # Inject suggestions above the list of messages, if any are
         # present. This can change dynamically as the backend sends us
         # hints.
-        if self.walker.selected:
+        if self.walker.selected and 'mailbox' in self.search_obj:
             self.widgets.append(urwid.Columns([
-                ('weight', 1, urwid.Text(
+                ('weight', 1, urwid.Text(('subtle',
                     'NOTE: You are operating directly on a mailbox!\n'
                     '      Tagging will add emails to the search index.\n'
-                    '      Deletion cannot be undone.')),
+                    '      Deletion cannot be undone.'))),
                 ('fixed', 3, CloseButton(None))]))
         elif len(self.suggestions):
             self.widgets.append(self.suggestions)
 
         rows -= sum(w.rows((60,)) for w in self.widgets)
-        if self.widgets:
+        if False and self.widgets:
             self.widgets.append(urwid.Divider())
             rows -= 1
         self.widgets.append(urwid.BoxAdapter(self.listbox, rows))
@@ -198,12 +210,13 @@ class EmailList(urwid.Pile):
         self.contents = [(w, ('pack', None)) for w in self.widgets]
 
     def cleanup(self):
+        self.conn_manager.del_handler(self.cm_handler_id)
+        self.search_obj = None
         del self.tui_frame
-        del self.app_bridge
+        del self.conn_manager
         del self.walker.emails
         del self.walker
         del self.emails
-        del self.search_obj
         del self.listbox
         del self.widgets
 
@@ -222,14 +235,15 @@ class EmailList(urwid.Pile):
         self.search_obj.update({
             'skip': len(self.emails),
             'limit': min(max(500, 2*len(self.emails)), 10000)})
-        self.app_bridge.send_json(self.search_obj)
+        self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
-    def incoming_message(self, message):
-        self.suggestions.incoming_message(message)
-        if (message.get('prototype') != self.search_obj['prototype'] or
-                message.get('req_id') != self.search_obj['req_id']):
+    def incoming_message(self, source, message):
+        logging.debug('[%s] => %.128s' % (source, message))
+        if (not self.search_obj
+                or message.get('req_id') != self.search_obj['req_id']):
             return
         try:
+            self.suggestions.incoming_message(message)
             self.walker.add_emails(message['skip'], message['emails'])
 
             self.want_more = (message['limit'] == len(message['emails']))

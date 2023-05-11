@@ -1,5 +1,10 @@
 from ...config import APPNAME, APPVER
 
+EMOJI = {
+    'mailbox': '\U0001F4C1',
+    'search':  '\U0001F50E',
+    'lock':    '\U0001F512'}
+
 
 ENVELOPES = ("""\
      _______      x
@@ -13,6 +18,7 @@ ENVELOPES = ("""\
  |  ==== |        x
  '-------'        x
 """).replace('x', '')
+
 
 HELLO = ("""\
   _                        x
