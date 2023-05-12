@@ -160,7 +160,6 @@ class BaseWorker(Process):
                         result = self.call(prefix + name, *args, qs=kwargs)
                     else:
                         result = dict_wrap(False, *args, **kwargs)
-                    logging.debug('result=%s' % result)
                     return result
 
                 async def async_wrap(*args, **kwargs):
@@ -169,7 +168,6 @@ class BaseWorker(Process):
                             prefix + name, *args, **kwargs)
                     else:
                         result = dict_wrap(False, *args, **kwargs)
-                    logging.debug('result=%s' % result)
                     return result
 
                 return async_wrap, wrap, api_wrap
@@ -485,18 +483,19 @@ class BaseWorker(Process):
 
     def _call_return(self, hdr, data):
         if b'application/json' in hdr:
-            data = from_json(data)
-            if 'exception' in data:
-                reraise(data)
+            if data:
+                data = from_json(data)
+                if data and 'exception' in data:
+                    reraise(data)
             return data
         else:
             return (hdr, data)
 
-    async def async_call(self, loop, fn,
-            *args, qs=None, method='POST', upload=None, data_cb=None):
+    async def async_call(self, loop, fn, *args,
+            qs=None, method='POST', upload=None, data_cb=None, hide_qs=False):
 
         upload, (conn, conn_args, on_connect) = self.call(fn, *args,
-            qs=qs, method=method, upload=upload,
+            qs=qs, method=method, upload=upload, hide_qs=hide_qs,
             prep_only=True)
 
         # Actually make the connection: this is likely to block if the
@@ -540,7 +539,6 @@ class BaseWorker(Process):
                     chunk = await loop.sock_recv(conn, self.READ_BYTES)
                     if not chunk:
                         break
-                    logging.debug('Read %d bytes' % len(chunk))
                     data += chunk
                 return self._call_return(hdr, data)
         else:
@@ -550,7 +548,8 @@ class BaseWorker(Process):
     # FIXME: We really would like this to be available as async, so
     #        we can multiplex things while our workers work.
     def call(self, fn, *args,
-            qs=None, method='POST', upload=None, prep_only=False):
+            qs=None, method='POST', upload=None, prep_only=False,
+            hide_qs=False):
         fn = fn.encode('latin-1') if isinstance(fn, str) else fn
         remote = fn[:6] in (b'http:/', b'https:')
         if remote:
@@ -571,7 +570,7 @@ class BaseWorker(Process):
         if qs:
             path += ('?' + '&'.join(
                 '%s=%s' % (k, dumb_encode_asc(qs[k])) for k in qs))
-        if len(path) > (self.PEEK_BYTES - self.REQUEST_OVERHEAD):
+        if hide_qs or len(path) > (self.PEEK_BYTES - self.REQUEST_OVERHEAD):
             if upload is None:
                 # Support arbitrarily large arguments, via POST
                 upload = path.encode('latin-1')
@@ -674,7 +673,8 @@ class BaseWorker(Process):
                 data['_caller'] = client_info_tuple[0]
             elif self._caller:
                 data['_caller'] = self._caller
-        self.reply(self.HTTP_JSON if (http_code is None) else http_code,
+        http_code = self.HTTP_200 if (http_code is None) else http_code
+        self.reply(http_code + self.HTTP_JSON,
             to_json(data).encode('utf-8') + b'\n',
             client_info_tuple=client_info_tuple)
 

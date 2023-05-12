@@ -10,9 +10,11 @@ class PleaseUnlockError(OSError):
     This exception is raised when we need credentials to unlock something,
     be it an encrypted file or remote resource we need to log-in to.
     """
-    def __init__(self, err, resource=None):
+    def __init__(self, err, username=True, password=True, resource=None):
         super().__init__(err)
         self.resource = resource
+        self.username = username
+        self.password = password
 
 
 def tag_quote(txt):

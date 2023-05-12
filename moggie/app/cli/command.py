@@ -5,6 +5,7 @@ import time
 import sys
 
 from ... import config
+from ...api.exceptions import NeedInfoException
 from ...config import AccessConfig
 from ...util.dumbcode import to_json, from_json
 
@@ -258,6 +259,24 @@ class CLICommand:
 
     def error(self, *args, nl='\n'):
         self.write_error(' '.join(args) + nl)
+
+    async def repeatable_async_api_request(self, access, query):
+        nei = None
+        try:
+            return await self.worker.async_api_request(access, query)
+        except NeedInfoException as exc:
+            nei = exc
+
+        from getpass import getpass
+        if self.stdin == sys.stdin:
+            sys.stderr.write(str(nei) + '\n')
+            for need in nei.need:
+                if need.datatype == 'password':
+                    query[need.field] = getpass(need.label + ': ')
+                elif need.datatype == 'text':
+                    query[need.field] = input(need.label + ': ')
+
+        return await self.worker.async_api_request(access, query)
 
     async def _await_connection(self):
         sleeptime, deadline = 0, (time.time() + 10)

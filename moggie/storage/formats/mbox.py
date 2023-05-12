@@ -32,9 +32,12 @@ From: nobody <deleted@example.org>\r\n\
 
     @classmethod
     def Magic(cls, parent, key, is_dir=None):
-        if is_dir:
+        try:
+            if is_dir:
+                return False
+            return (parent[key][:5] == b'From ')
+        except (KeyError, OSError):
             return False
-        return (parent[key][:5] == b'From ')
 
     def __contains__(self, key):
         try:

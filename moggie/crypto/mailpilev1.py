@@ -25,18 +25,20 @@ To bulk-decrypt multiple files and save the output to a directory:
 All of these commands will prompt you to enter the Mailpile master
 password, before attempting decryption.
 
-Just like Mailpile, MAILPILE_PROFILE environment variable can be
-set to extract data from an alternate Mailpile directory.
+Just like for Mailpile, the MAILPILE_PROFILE environment variable can
+be set to extract data from an alternate Mailpile directory.
 """
 import hashlib
 import io
+import logging
 import os
+import re
 import threading
 from base64 import b64decode
 
 import moggie.platforms
 from .aes_utils import aes_ctr_decrypt
-from .passphrases import SecurePassphraseStorage
+from .passphrases import *
 from ..util.mailpile import PleaseUnlockError, sha512b64
 from ..util.safe_popen import Popen, PIPE
 
@@ -52,6 +54,8 @@ OPENSSL_COMMAND = moggie.platforms.GetDefaultOpenSSLCommand
 OPENSSL_MD_ALG = 'md5'
 
 GNUPG_COMMAND = moggie.platforms.GetDefaultGnuPGCommand
+
+WHITESPACE_RE_B = re.compile(b'\s+')
 
 
 def _proc_decrypt(command, secret, ciphertext, _debug):
@@ -111,7 +115,9 @@ def _openssl_dec(cipher, key, ciphertext, _debug):
 
 def _decrypt_chunk(key, data, _debug, _raise, maxbytes):
     eol = b'\r\n' if (b'\r\n' in data) else b'\n'
-    head, ciphertext = data.split(eol+eol, 1)
+    eol_pos = data.index(eol+eol)
+    head = data[:eol_pos]
+    ciphertext = data[eol_pos + len(eol)*2:]
     headers = dict([l.split(': ', 1)
         for l in str(head, 'utf-8').splitlines() if ': ' in l])
 
@@ -122,16 +128,22 @@ def _decrypt_chunk(key, data, _debug, _raise, maxbytes):
     sha256 = headers.get('sha256')
     nonce = bytes(headers.get('nonce', ''), 'utf-8')
 
-    if maxbytes:
-        # A block size of 32 bytes, is a multiple of both 128 and 256 bit.
-        # Base64 blocks are 3 bytes per every 4 encoded.
-        # So we align to a multiple of 32*3 = 96.
-        if (maxbytes % 96):
-            maxbytes -= (maxbytes % 96)
-            maxbytes += 96
-        maxbytes //= 3
-        maxbytes *= 4
-        ciphertext = ciphertext.strip()[:maxbytes]
+    def _ctext():
+        nonlocal maxbytes, ciphertext
+        if maxbytes:
+            # Avoid reading everythig!
+            ciphertext = ciphertext[:((maxbytes*4) // 3 + 1024)]
+            # A block size of 32 bytes, is a multiple of both 128 and 256 bit.
+            # Base64 blocks are 3 bytes per every 4 encoded.
+            # So we align to a multiple of 32*3 = 96.
+            if (maxbytes % 96):
+                maxbytes -= (maxbytes % 96)
+                maxbytes += 96
+            maxbytes //= 3
+            maxbytes *= 4
+            return WHITESPACE_RE_B.sub(b'', ciphertext)[:maxbytes]
+        else:
+            return ciphertext
 
     mutated_key = sha512b64(key, nonce)[:32].strip()
     if _debug:
@@ -139,7 +151,7 @@ def _decrypt_chunk(key, data, _debug, _raise, maxbytes):
 
     if cipher == 'aes-128-ctr':
         md5_key = hashlib.md5(mutated_key).digest()
-        plaintext = aes_ctr_decrypt(md5_key, nonce, b64decode(ciphertext))
+        plaintext = aes_ctr_decrypt(md5_key, nonce, b64decode(_ctext()))
 
     elif cipher[:4] == 'aes-':
         plaintext, err = _openssl_dec(cipher, mutated_key, ciphertext, _debug)
@@ -147,7 +159,10 @@ def _decrypt_chunk(key, data, _debug, _raise, maxbytes):
             raise IOError('openssl: %s' % err)
 
     elif cipher == 'none':
-        plaintext = b64decode(ciphertext)
+        plaintext = b64decode(_ctext())
+
+    elif cipher == 'broken':
+        plaintext = ciphertext
 
     else:
         raise ValueError('Unsupported cipher: %s' % cipher)
@@ -175,7 +190,37 @@ def _decrypt_chunk(key, data, _debug, _raise, maxbytes):
             else:
                 return ciphertext
 
-    return plaintext
+    if maxbytes:
+        return plaintext[:maxbytes]
+    else:
+        return plaintext
+
+
+def _mailpile1_kdf(data, key):
+    import json, sys
+
+    header_data = str(data, 'utf-8').replace('\r', '').split('\n\n')[0]
+    header = {}
+    for line in header_data.splitlines():
+        if ':' in line:
+            k, v = line.split(':', 1)
+            header[k.lower()] = v.strip()
+
+    kdf = header.get('kdf', '')
+    salt = bytes(header.get('salt', ''), 'utf-8')
+
+    def _to_b64w(s):
+        return s.replace(b'/', b'_').replace(b'+', b'-').replace(b'=', b'')
+
+    if kdf.startswith('scrypt '):
+        params = json.loads(kdf[7:])
+        return _to_b64w(stretch_with_scrypt(key, salt, params))
+
+    elif kdf.startswith('pbkdf2 '):
+        params = json.loads(kdf[7:])
+        return _to_b64w(stretch_with_pbkdf2(key, salt, params))
+
+    return key
 
 
 def decrypt_mailpilev1(key, data, _debug=False, _raise=False, maxbytes=None):
@@ -189,7 +234,7 @@ def decrypt_mailpilev1(key, data, _debug=False, _raise=False, maxbytes=None):
         key = key.get_passphrase_bytes()
 
     if data.startswith(PGP_MARKER_DELIM1):
-        plaintext, err = _gnupg_dec(key, data, _debug)
+        plaintext, err = _gnupg_dec(_mailpile1_kdf(data, key), data, _debug)
         if maxbytes:
             yield plaintext[:maxbytes]
         else:
@@ -288,6 +333,7 @@ if __name__ == '__main__':
                 data = bytes(
                     'Wrote %s (%d bytes)\n' % (dpath, len(data)), 'utf-8')
             sys.stdout.buffer.write(data)
+            sys.stdout.buffer.write(b'\n')
             sys.stdout.buffer.flush()
 
         while args:

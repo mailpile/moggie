@@ -1,6 +1,7 @@
 # This is the Mailpile1 compatibility, for importing mail and tags
 # from a legacy Mailpile 0.x/1.x installation.
 #
+import logging
 import os
 from urllib.parse import unquote, quote
 from configparser import ConfigParser
@@ -35,23 +36,31 @@ def get_master_key(fs, path, password):
     if not mailpile_dir:
         raise OSError('file not found: mailpile.key')
 
+    logging.debug('Loading Mailpile master key from %s' % mailpile_dir)
     if mailpile_dir in MASTER_KEY_CACHE:
         master_key = MASTER_KEY_CACHE[mailpile_dir]
 
     else:
         if not password:
             raise PleaseUnlockError(
-                'Need passphrase to unlock Mailpile',
-                resource=mailpile_dir)
+                'Need passphrase to unlock Mailpile at %s' % mailpile_dir,
+                resource=mailpile_dir, username=False)
 
         try:
             if not isinstance(password, bytes):
                 password = bytes(password, 'utf-8')
             master_key = mailpilev1.get_mailpile_key(mailpile_dir, password)
+            if not master_key:
+                raise ValueError('No key')
+
             master_key = SecurePassphraseStorage(passphrase=master_key)
             MASTER_KEY_CACHE[mailpile_dir] = master_key
+
+            logging.debug('Loaded Mailpile master key from %s' % mailpile_dir)
         except (PleaseUnlockError, ValueError) as e:
-            raise PleaseUnlockError('Password incorrect', resource=mailpile_dir)
+            raise PleaseUnlockError(
+                'Password incorrect for %s' % mailpile_dir,
+                resource=mailpile_dir, username=False)
 
     return mailpile_dir, master_key
 
@@ -66,6 +75,7 @@ class FormatMaildirWERVD(FormatMaildir):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.master_key = None
+        self.resource = None
 
     def unlock(self, ignored_username, password, ask_key=None, set_key=None):
         if not self.master_key:
@@ -95,16 +105,16 @@ class FormatMaildirWERVD(FormatMaildir):
 
     def _get_master_key(self, password=None):
         if self.master_key is None:
-            _, self.master_key = get_master_key(
+            self.resource, self.master_key = get_master_key(
                 self.parent, self.path[0], password)
-        return self.master_key
+        return self.resource, self.master_key
 
     def _decrypt(self, ciphertext, maxbytes):
         plaintext = ciphertext
         for marker in mailpilev1.MARKERS:
             if marker in ciphertext[:512].split(b'\r\n', 1)[0]:
                 plaintext = b''.join(mailpilev1.decrypt_mailpilev1(
-                    self._get_master_key(),
+                    self._get_master_key()[1],
                     ciphertext,
                     maxbytes=maxbytes,
                     _raise=True))
@@ -114,15 +124,21 @@ class FormatMaildirWERVD(FormatMaildir):
         return plaintext
 
     def __getitem__(self, path, *args, **kwargs):
-        """
-        Should raise PleaseUnlockError if decryption fails.
-        """
         ciphertext = super().__getitem__(path, *args, **kwargs)
-        return self._decrypt(ciphertext, None)
+        try:
+            return self._decrypt(ciphertext, None)
+        except Exception as e:
+            logging.exception('Failed to decrypt %s' % path)
+            raise
 
     def get_email_headers(self, sub, fn):
-        ciphertext = self.parent[os.path.join(self.basedir, sub, fn)]
-        return self._decrypt(ciphertext, 4096)
+        path = os.path.join(self.basedir, sub, fn)
+        ciphertext = self.parent[path]
+        try:
+            return self._decrypt(ciphertext, 4096)
+        except Exception as e:
+            logging.exception('Failed to decrypt %s' % path)
+            raise
 
 
 class FormatMailpilev1:

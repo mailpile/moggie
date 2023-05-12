@@ -13,6 +13,7 @@ from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
 from ..config.helpers import DictItemProxy, EncodingListItemProxy
 from ..api.requests import *
 from ..api.responses import *
+from ..api.exceptions import *
 from ..storage.files import FileStorage
 from ..util.dumbcode import dumb_decode, to_json, from_json
 from ..workers.importer import ImportWorker
@@ -295,8 +296,11 @@ main app worker. Hints:
         return rv
 
     def _fs_set_secret(self, context, resource, secret, ttl):
+        if hasattr(secret, 'get_passphrase_bytes'):
+            secret = secret.get_passphrase_bytes()
         return self.worker.call('rpc/set_secret',
-            context, resource, secret, ttl)
+            context, resource, secret, ttl,
+            hide_qs=True)  # Keep secrets out of web logs
 
     def _is_locked(self):
         return (self.config.has_crypto_enabled and not self.config.aes_key)

@@ -799,7 +799,7 @@ FIXME: Document html and html formats!
 
     async def perform_query(self, query, batch, limit):
         query['limit'] = min(batch, limit or batch)
-        msg = await self.worker.async_api_request(self.access, query)
+        msg = await self.repeatable_async_api_request(self.access, query)
         if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
 
@@ -828,8 +828,11 @@ FIXME: Document html and html formats!
                 limit -= count
 
             for r in results:
-                async for fd in formatter(r):
-                    yield fd
+                if isinstance(r, list):
+                    async for fd in formatter(r):
+                        yield fd
+                else:
+                    logging.debug('Bogus result: %s' % r)
 
             query['skip'] += count
             if ((count < query['limit'])

@@ -3,7 +3,9 @@ import time
 import traceback
 import threading
 
+from ..api.exceptions import NeedInfoException
 from ..util.dumbcode import *
+from ..util.mailpile import PleaseUnlockError
 from ..email.metadata import Metadata
 
 from .base import BaseWorker
@@ -108,10 +110,13 @@ class StorageWorker(BaseWorker):
     async def async_mailbox(self, loop, key,
             skip=0, limit=None, username=None, password=None):
         return await self.async_call(loop,
-            'mailbox', key, skip, limit, username, password)
+            'mailbox', key, skip, limit, username, password,
+            hide_qs=True)  # Keep passwords out of web logs
 
     def mailbox(self, key, skip=0, limit=None, username=None, password=None):
-        return self.call('mailbox', key, skip, limit, username, password)
+        return self.call(
+            'mailbox', key, skip, limit, username, password,
+            hide_qs=True)  # Keep passwords out of web logs
 
     def get(self, key, *args, dumbcode=None):
         if dumbcode is not None:
@@ -155,25 +160,40 @@ class StorageWorker(BaseWorker):
             end = skip + (limit or (len(pm)-skip))
             return self.reply_json(pm[beg:end])
 
-        collect = []
-        parser = self.backend.iter_mailbox(key,
-            skip=skip, username=username, password=password)
-        self.parsed_mailboxes[key] = [time.time(), False, collect]
+        try:
+            collect = []
+            parser = self.backend.iter_mailbox(key,
+                skip=skip, username=username, password=password)
+            parse_cache = [time.time(), False, collect]
 
-        if limit is None:
-            collect.extend(msg for msg in parser)
-            logging.debug('%s: Returning %d messages (u)' % (key, len(collect)))
-            self.parsed_mailboxes[key][1] = True
-            return self.reply_json(collect)
+            if limit is None:
+                collect.extend(msg for msg in parser)
+                logging.debug(
+                    '%s: Returning %d messages (u)' % (key, len(collect)))
+                parse_cache[1] = True
+                self.parsed_mailboxes[key] = parse_cache
+                return self.reply_json(collect)
 
-        result = []
-        for msg in parser:
-            collect.append(msg)
-            if limit and len(result) >= limit:
-                break
-            result.append(msg)
-        logging.debug('%s: Returning %d messages' % (key, len(result)))
-        self.reply_json(result)
+            result = []
+            for msg in parser:
+                collect.append(msg)
+                if limit and len(result) >= limit:
+                    break
+                result.append(msg)
+
+            logging.debug('%s: Returning %d messages' % (key, len(result)))
+            self.parsed_mailboxes[key] = parse_cache
+            self.reply_json(result)
+
+        except PleaseUnlockError as pue:
+            logging.debug('Need unlock, raising NeedInfoException')
+            needs, neo = [], NeedInfoException
+            if pue.username:
+                needs.append(neo.Need('Username', 'username'))
+            if pue.password:
+                needs.append(
+                    neo.Need('Password', 'password', datatype='password'))
+            raise neo(str(pue), need=needs)
 
         # Finish in background thread
         if limit and len(result) >= limit:

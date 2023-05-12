@@ -42,7 +42,7 @@ class WorkerPageKiteSettings(uPageKiteDefaults):
     info = logging.info
     error = logging.error
     debug = logging.debug
-    trace = logging.debug
+    #trace = logging.debug
 
     @classmethod
     async def network_send_sleep(uPK, sent):
@@ -191,7 +191,6 @@ class WorkerHTTPD(HTTPD):
                 break
 
         secret = ''
-        logging.debug('headers=%s' % headers)
         if headers.get('Cookie', '').startswith('moggie_token='):
             secret = headers['Cookie'].split('=', 1)[-1]
             if path.startswith('/' + secret):
