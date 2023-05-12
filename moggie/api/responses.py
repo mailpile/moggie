@@ -59,6 +59,16 @@ class ResponseMailbox(dict):
             'emails': emails})
 
 
+class ResponseBrowse(dict):
+    def __init__(self, request, paths):
+        self.update({
+            'req_type': request['req_type'],
+            'req_id': request['req_id'],
+            'context': request['context'],
+            'path': request['path'],
+            'info': paths})
+
+
 class ResponseSearch(dict):
     def __init__(self, request, emails, results):
         self.update({

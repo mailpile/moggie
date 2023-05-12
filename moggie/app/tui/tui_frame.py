@@ -14,6 +14,7 @@ from ...api.requests import *
 from ..suggestions import Suggestion, SuggestionWelcome
 
 from .decorations import EMOJI
+from .browser import Browser
 from .contextlist import ContextList
 from .emaillist import EmailList
 from .changepassdialog import ChangePassDialog
@@ -66,11 +67,14 @@ class TuiFrame(urwid.Frame):
         loop = asyncio.get_event_loop()
         loop.create_task(self.topbar_clock())
 
+        conn_manager.add_handler('tui', '*', '*', self.handle_bridge_messages)
+
     def set_initial_state(self, initial_state):
         self.is_locked = initial_state.get('app_is_locked')
         self.was_locked = self.is_locked
 
         show_draft = initial_state.get('show_draft')
+        show_browser = initial_state.get('show_browser')
         show_mailbox = initial_state.get('show_mailbox')
 
         if show_draft:
@@ -78,8 +82,11 @@ class TuiFrame(urwid.Frame):
             # But what happens to any composed mail will vary!
             pass  # FIXME
 
+        elif show_browser:
+            self.show_browser(show_browser)
+
         elif show_mailbox:
-            self.show_mailbox(os.path.abspath(show_mailbox))
+            self.show_mailbox(show_mailbox)
 
         else:
             # What the default view is, depends on what the context
@@ -100,30 +107,20 @@ class TuiFrame(urwid.Frame):
     def send_with_context(self, message_obj, context=None):
         return self.context_list.send_with_context(message_obj, context)
 
-    def handle_bridge_message(self, bridge_name, message):
+    def handle_bridge_messages(self, bridge_name, message):
         try:
-            message = json.loads(message)
             for widget in self.all_columns:
-                if hasattr(widget, 'incoming_message'):
+                if hasattr(widget, 'handle_bridge_messages'):
                     try:
-                        widget.incoming_message(message)
+                        widget.handle_bridge_messages(bridge_name, message)
                     except:
                         logging.exception('Incoming message asploded')
 
-            if message.get('prototype') in ('notification', 'unlocked'):
-                if message['prototype'] == 'unlocked':
+            if message.get('req_type') in ('notification', 'unlocked'):
+                if message['req_type'] == 'unlocked':
                     self.is_locked = False
                 self.notifications.append(message)
-                self.update_topbar()
-            elif message.get('internal_websocket_error'):
-                if message.get('count', 0) > 3:
-                    msg = ('Worker (%s) is unreachable. Is the network down?'
-                        % bridge_name)
-                    self.notifications.append({
-                        'message': msg,
-                        'ts': time.time(),
-                        'data': message})
-                    self.update_topbar()
+                self.context_list.activate_default_view()
         except:
             logging.exception('Exception handling message: %s' % (message,))
 
@@ -131,14 +128,25 @@ class TuiFrame(urwid.Frame):
         self.context_list.expand(i)
         self.update_columns()
 
-    def show_mailbox(self, which, context=None):
+    def show_browser(self, which, context=None, history=True):
+        ctx_id, ctx_src_id = self.context_list.get_context_and_src_ids(context)
+        self.col_show(self.all_columns[0],
+            Browser(self, RequestBrowse(ctx_id, which), ctx_src_id))
+        if history:
+            self.context_list.add_history(
+                os.path.basename(which),
+                lambda: self.show_browser(which, context),
+                icon=EMOJI.get('browsing', '-'))
+
+    def show_mailbox(self, which, context=None, history=True):
         ctx_id, ctx_src_id = self.context_list.get_context_and_src_ids(context)
         self.col_show(self.all_columns[0],
             EmailList(self, RequestMailbox(ctx_id, which), ctx_src_id))
-        self.context_list.add_history(
-            os.path.basename(which),
-            lambda: self.show_mailbox(which, context),
-            icon=EMOJI.get('mailbox', '-'))
+        if history:
+            self.context_list.add_history(
+                os.path.basename(which),
+                lambda: self.show_mailbox(which, context),
+                icon=EMOJI.get('mailbox', '-'))
 
     def show_search_result(self, terms, context=None, history=True):
         if self.is_locked:

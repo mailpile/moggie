@@ -109,7 +109,7 @@ class TuiConnManager:
                 '%s:%s' % (bridge_name, message_type),
                 '*:%s' % message_type,
                 '%s:*' % bridge_name,
-                '*'):
+                '*:*'):
             failed = set()
             for tid, target in self.handlers.get(pattern, {}).items():
                 try:
@@ -158,9 +158,15 @@ def Main(workdir, tui_args, send_draft):
             initial_state['show_draft'] = send_draft
 
         elif '-f' in tui_args:
-            # Display the contents of a mailbox; this should always be
-            # possible whether app is locked or not.
-            initial_state['show_mailbox'] = tui_args['-f']
+            # Display the contents of a mailbox or folder; this should
+            # always be possible whether the app is locked or not.
+            target = tui_args['-f']
+            if '-y' in tui_args:
+                initial_state['show_browser'] = target
+            elif target.endswith('/'):
+                initial_state['show_browser'] = target
+            else:
+                initial_state['show_mailbox'] = target
 
         tui_frame.set_initial_state(initial_state)
         urwid.MainLoop(urwid.AttrMap(tui_frame, 'body'),

@@ -862,6 +862,110 @@ class CommandImport(CLICommand):
         return True
 
 
+class CommandBrowse(CLICommand):
+    """# moggie browse [options] </path/>
+
+    Search the given path for folders and mailboxes.
+
+    ### Options
+
+    %(OPTIONS)s
+
+    Note that the command runs on the moggie back-end, so may be exploring
+    a different filesystem from the one running the moggie CLI.
+    """
+    NAME = 'browse'
+    ROLES = (
+        AccessConfig.GRANT_FS +
+        AccessConfig.GRANT_NETWORK)
+    WEBSOCKET = False
+    AUTO_START = False
+    IGNORED = ['.', '..',
+        'cur', 'new', 'tmp', 'wervd.ver',
+        '.git', '.notmuch', '.cache', '.dbus', '.fossil', '.muttrc',
+        '.procmailrc', '.subversion', '.Xauthority',
+        '.ssh', '.gnupg', 'secring.gpg', 'private-keys-v1.d',
+        '.fetchmailrc', '.password-store', 'etc', 'passwd']
+    OPTIONS = [[
+        ('--format=',     ['text'], 'X=(text*|json|sexp)'),
+        ('--context=', ['default'], 'X=<ctx>, import messages into a specific context'),
+        ('--username=',     [None], 'X=<U>, username required to access the data (if any)'),
+        ('--password=',     [None], 'X=<P>, password requried to access the data (if any)'),
+        ('--ifnewer=',         [0], 'X=<ts>, ignore files unchanged since timestamp'),
+        ('--ignore=',      IGNORED, '')]]
+
+    def configure(self, args):
+        self.paths = self.strip_options(args)
+        for p in self.paths:
+            while p.endswith('/') and len(p) > 1:
+                p = p[:-1]
+            if os.path.basename(p) in self.IGNORED:
+                raise Nonsense('Invalid path: %s' % p)
+        return []
+
+    def emit_text(self, path, results):
+        if not isinstance(results, list):
+            self.print('%s' % results)
+            return
+
+        width = 15
+        for child in results:
+            width = max(len(child['path']), width)
+        fmt = '%%(path)-%ds %%(size)10s %%(mtime)10s %%(magic)s' % width
+
+        for child in results:
+            if not isinstance(child, dict):
+                self.print('%s' % child)
+                continue
+
+            magic = child.get('magic', [])
+            if child.get('is_dir'):
+                magic.append('dir')
+            child['magic'] = ','.join(sorted(magic))
+            self.print(fmt % child)
+
+    async def run(self):
+        ctx_id = self.get_context()
+        acct_id = mailbox_label = mailbox_tags = mailbox_policy = None
+
+        ignored = set(self.options['--ignore='])
+        def _prune(results):
+            if 'info' in results:
+                results = [r for r in results['info']
+                    if r.get('exists')
+                    and os.path.basename(r['path']) not in ignored]
+                for r in results:
+                    for d in ('mode', 'owner', 'group', 'exists'):
+                        if d in r:
+                            del r[d]
+                    if 'is_dir' in r and not r['is_dir']:
+                        del r['is_dir']
+                    if 'bytes' in r.get('magic', []):
+                        r['magic'].remove('bytes')
+            return results
+
+        fmt = self.options['--format='][-1]
+        results = {}
+        for path in self.paths:
+            while path.endswith('/') and len(path) > 1:
+                path = path[:-1]
+            results[path] = _prune(
+                await self.worker.async_api_request(self.access,
+                    RequestBrowse(
+                        context=ctx_id,
+                        path=path,
+                        ifnewer=int(self.options['--ifnewer='][-1]),
+                        username=self.options['--username='][-1],
+                        password=self.options['--password='][-1])))
+            if fmt == 'text':
+                self.emit_text(path, results[path])
+
+        if fmt == 'json':
+            self.print_json(results)
+        elif fmt == 'sexp':
+            self.print_sexp(results)
+
+
 ## FIXME - Are these still what we want/need? ##
 
 

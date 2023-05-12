@@ -195,7 +195,9 @@ class FileStorage(BaseStorage):
         except:
             pass
 
-    def info(self, key=None, details=False, limit=None, skip=0):
+    def info(self, key=None,
+            details=False, recurse=0, relpath=None,
+            limit=None, skip=0):
         paths = self.key_to_paths(key)
         path = paths.pop(0)
         try:
@@ -207,36 +209,52 @@ class FileStorage(BaseStorage):
             else:
                 stat = os.stat(path)
         except (OSError, KeyError, IndexError, ValueError):
-            return {'exists': False}
+            return {'path': path, 'exists': False}
+
+        def _utf8(t):
+            try:
+                return str(t, 'utf-8')
+            except UnicodeDecodeError:
+                return t
 
         is_dir = os.path.isdir(path)
         info = {
+            'path': _utf8(path),
             'exists': True,
             'is_dir': is_dir,
             'size': stat.st_size,
             'mode': stat.st_mode,
             'owner': stat.st_uid,
             'group': stat.st_gid,
-            'mtime': int(stat.st_mtime),
-            'atime': int(stat.st_atime),
-            'ctime': int(stat.st_ctime)}
+            'mtime': int(stat.st_mtime)}
 
         if not details:
             return info
 
-        if is_dir:
+        if relpath is None:
+            relpath = True
+
+        if is_dir and (details is True or 'contents' in details):
             info['contents'] = c = []
             maildir = 0
-            relpath = self.relpath(path)
+            rp = self.relpath(path) if relpath else path
             for p in self.listdir(key):
-                c.append(dumb_encode_asc(os.path.join(relpath, p)))
+                subpath = os.path.join(rp, p)
+                if recurse:
+                    rec_next = max(0, recurse - 1)
+                    det_next = 'magic' if (not rec_next) else True
+                    c.append(self.info(subpath,
+                        details=det_next, relpath=relpath, recurse=rec_next))
+                else:
+                    c.append(_utf8(subpath))
 
-        magic = []
-        for cls_type, cls in FORMATS.items():
-            if cls.Magic(self, path, is_dir=is_dir):
-                magic.append(cls.NAME)
-        if magic:
-            info['magic'] = magic
+        if details is True or 'magic' in details:
+            magic = []
+            for cls_type, cls in FORMATS.items():
+                if cls.Magic(self, path, is_dir=is_dir):
+                    magic.append(cls.NAME)
+            if magic:
+                info['magic'] = magic
 
         return info
 

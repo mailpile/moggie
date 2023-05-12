@@ -105,6 +105,21 @@ class RequestMailbox(RequestBase):
         }, req_id=req_id)
 
 
+class RequestBrowse(RequestBase):
+    def __init__(self, context='',
+            path='', ifnewer=False,
+            username=None, password=None,
+            req_id=None):
+        self.update({
+            'req_type': 'browse',
+            'context': context,
+            'path': path,
+            'ifnewer': ifnewer,
+            'username': username,
+            'password': password
+        }, req_id=req_id)
+
+
 class RequestEmail(RequestBase):
     def __init__(self,
             metadata=[], text=False, data=False, full_raw=False, parts=None,
@@ -214,6 +229,7 @@ def to_api_request(_input):
          'email': RequestEmail,
          'counts': RequestCounts,
          'search': RequestSearch,
+         'browse': RequestBrowse,
          'mailbox': RequestMailbox,
          'contexts': RequestContexts,
          'config_set': RequestConfigSet,

@@ -1,46 +1,41 @@
-import datetime
 import logging
-import sys
-import time
 import urwid
 
-from ...email.metadata import Metadata
-from ...api.requests import RequestAddToIndex
+from ...api.requests import RequestBrowse
 from ..suggestions import Suggestion
 
 from .suggestionbox import SuggestionBox
-from .emaildisplay import EmailDisplay
 from .widgets import *
 
 
-class EmailListWalker(urwid.ListWalker):
+class BrowserListWalker(urwid.ListWalker):
     def __init__(self, parent):
         self.focus = 0
-        self.emails = []
+        self.paths = []
         self.selected = set()
         self.selected_all = False
         self.parent = parent
 
     def __len__(self):
-        return len(self.emails)
+        return sum(1 for path in self.paths if path[0])
 
-    def add_emails(self, skip, emails):
-        if not emails:
-            return
-        self.emails[skip:] = emails
-        self.emails.sort()
-        self.emails.reverse()
+    def add_paths(self, parent, paths):
+        def _mk_path(p):
+            displayed = 1
+            return [displayed, indent, path]
+        self.paths.extend(_mk_path(path) for path in paths)
+        self.paths.sort()
         self._modified()
 
     def set_focus(self, focus):
         self.focus = focus
-        if focus > len(self.emails) - 100:
-            self.parent.load_more()
+        #if focus > len(self.paths) - 100:
+        #    self.parent.load_more()
 
     def next_position(self, pos):
-        if pos + 1 < len(self.emails):
+        if pos + 1 < len(self.paths):
             return pos + 1
-        self.parent.load_more()
+        #self.parent.load_more()
         raise IndexError
 
     def prev_position(self, pos):
@@ -50,48 +45,31 @@ class EmailListWalker(urwid.ListWalker):
 
     def positions(self, reverse=False):
         if reverse:
-            return reversed(range(0, len(self.emails)))
-        return range(0, len(self.emails))
+            return reversed(range(0, len(self.paths)))
+        return range(0, len(self.paths))
 
     def __getitem__(self, pos):
         try:
-            md = Metadata(*self.emails[pos])
-            uuid = md.uuid
-            md = md.parsed()
-            dt = datetime.datetime.fromtimestamp(md.get('ts', 0))
-            if self.selected_all or uuid in self.selected:
-                prefix = 'check'
-                attrs = '>    <'
-                dt = dt.strftime('%Y-%m  ✓')
-            else:
-                attrs = '(    )'
-                prefix = 'list'
-                dt = dt.strftime('%Y-%m-%d')
-            frm = md.get('from', {})
-            frm = frm.get('fn') or frm.get('address') or '(none)'
-            subj = md.get('subject', '(no subject)')
+            filename = self.paths[pos][-1]
             cols = urwid.Columns([
-              ('weight', 15, urwid.Text((prefix+'_from', frm), wrap='clip')),
-              (6,            urwid.Text((prefix+'_attrs', attrs))),
-              ('weight', 27, urwid.Text((prefix+'_subject', subj), wrap='clip')),
-              (10,           urwid.Text((prefix+'_date', dt), align='left'))],
+              ('weight', 15, urwid.Text(('browse_file', filename), wrap='clip')),
+              (10,           urwid.Text(('_date', dt), align='left'))],
               dividechars=1)
             return Selectable(cols, on_select={
-                'enter': lambda x: self.parent.show_email(self.emails[pos]),
-                'x': lambda x: self.check(uuid),
-                ' ': lambda x: self.check(uuid, display=self.emails[pos])})
+                'enter': lambda x: self.parent.open_path(filename),
+                'x': lambda x: self.check(filename)})
         except IndexError:
             pass
         except:
             logging.exception('Failed to load message')
         raise IndexError
 
-    def check(self, uuid, display=None):
+    def check(self, path, display=None):
         had_any = (len(self.selected) > 0)
-        if uuid in self.selected and not display:
-            self.selected.remove(uuid)
+        if path in self.selected and not display:
+            self.selected.remove(path)
         else:
-            self.selected.add(uuid)
+            self.selected.add(path)
         have_any = (len(self.selected) > 0)
 
         # Warn the container that our selection state has changed.
@@ -101,8 +79,6 @@ class EmailListWalker(urwid.ListWalker):
         self._modified()
         # FIXME: There must be a better way to do this...
         self.parent.keypress((100,), 'down')
-        if display is not None:
-            self.parent.show_email(display)
 
 
 class SuggestAddToIndex(Suggestion):
@@ -130,7 +106,7 @@ class SuggestAddToIndex(Suggestion):
         return self._message
 
 
-class EmailList(urwid.Pile):
+class Browser(urwid.Pile):
     COLUMN_NEEDS = 40
     COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
@@ -157,15 +133,15 @@ class EmailList(urwid.Pile):
 
         self.column_hks = [('top_hk', 'A:'), 'Add To Index']
 
-        self.walker = EmailListWalker(self)
-        self.emails = self.walker.emails
+        self.walker = BrowserListWalker(self)
+        self.paths = self.walker.paths
         self.listbox = urwid.ListBox(self.walker)
         self.suggestions = SuggestionBox(self.tui_frame,
             update_parent=self.update_content)
         self.widgets = []
 
         self.cm_handler_id = self.conn_manager.add_handler(
-            'emaillist', ctx_src_id, search_obj, self.incoming_message)
+            'browser', ctx_src_id, search_obj, self.incoming_message)
 
         self.loading = 0
         self.want_more = True
@@ -178,7 +154,7 @@ class EmailList(urwid.Pile):
         self.widgets[0:] = []
         rows = self.tui_frame.max_child_rows()
 
-        if not self.emails:
+        if not self.paths:
             message = 'Loading ...' if self.loading else 'No mail here!'
             cat = urwid.BoxAdapter(SplashCat(self.suggestions, message), rows)
             self.contents = [(cat, ('pack', None))]
@@ -216,7 +192,7 @@ class EmailList(urwid.Pile):
         del self.conn_manager
         del self.walker.emails
         del self.walker
-        del self.emails
+        del self.paths
         del self.listbox
         del self.widgets
 
@@ -234,8 +210,8 @@ class EmailList(urwid.Pile):
             return
         self.loading = time.time()
         self.search_obj.update({
-            'skip': len(self.emails),
-            'limit': min(max(500, 2*len(self.emails)), 10000)})
+            'skip': len(self.paths),
+            'limit': min(max(500, 2*len(self.paths)), 10000)})
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
     def incoming_message(self, source, message):

@@ -499,6 +499,33 @@ main app worker. Hints:
 
         return ResponseConfigGet(api_request, result, error=error)
 
+    async def api_req_browse(self, conn_id, access, api_request):
+        ctx = api_request['context']
+        roles, tag_ns, scope_s = access.grants(ctx,
+            AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
+
+        # FIXME: Triage local/remote here? Hmm.
+        # Note: This might return a "please login" if the mailbox
+        #       is encrypted or on a remote server.
+        path = api_request['path']
+        info = await self.storage.async_info(asyncio.get_event_loop(),
+            path, details=True, recurse=1, relpath=False)
+
+        children = []
+        if 'contents' in info:
+            children = info['contents']
+            del info['contents']
+
+        def _key(r):
+            try:
+                return ('/.' in r['path'], r['path'].lower(), r['mtime'])
+            except (TypeError, KeyError):
+                return (False, 'bogus', 0)
+
+        result = [info] + children
+        result.sort(key=_key)
+        return ResponseBrowse(api_request, result)
+
     async def api_req_mailbox(self, conn_id, access, api_request):
         ctx = api_request['context']
         roles, tag_ns, scope_s = access.grants(ctx,
@@ -765,31 +792,26 @@ main app worker. Hints:
 
         loop = asyncio.get_event_loop()
         worker = self._get_openpgp_worker(ctx).with_caller(conn_id)
-        result = await worker.async_call(loop, op, *args, qs=kwargs)
+        result = await worker.async_call(loop, op, *args, qs=kwargs, hide_qs=True)
         return result
 
-    async def api_request(self, conn_id, access, client_request,
-            internal=False):
-        try:
-            api_req = to_api_request(client_request)
-        except KeyError as e:
-            logging.warning('Invalid request: %s' % e)
-            return {'code': 500}
-
+    async def _route_api_request(self, conn_id, access, api_req):
         # FIXME: This needs refactoring
         result = None
         if type(api_req) == RequestCommand:
             result = await self.api_req_cli(conn_id, access, api_req)
-        elif type(api_req) == RequestMailbox:
-            result = await self.api_req_mailbox(conn_id, access, api_req)
+        elif type(api_req) == RequestCounts:
+            result = await self.api_req_counts(conn_id, access, api_req)
         elif type(api_req) == RequestSearch:
             result = await self.api_req_search(conn_id, access, api_req)
         elif type(api_req) == RequestTag:
             result = await self.api_req_tag(conn_id, access, api_req)
-        elif type(api_req) == RequestCounts:
-            result = await self.api_req_counts(conn_id, access, api_req)
         elif type(api_req) == RequestEmail:
             result = await self.api_req_email(conn_id, access, api_req)
+        elif type(api_req) == RequestMailbox:
+            result = await self.api_req_mailbox(conn_id, access, api_req)
+        elif type(api_req) == RequestBrowse:
+            result = await self.api_req_browse(conn_id, access, api_req)
         elif type(api_req) == RequestContexts:
             result = await self.api_req_contexts(conn_id, access, api_req)
         elif type(api_req) == RequestAddToIndex:
@@ -808,6 +830,25 @@ main app worker. Hints:
             result = await self.api_req_openpgp(conn_id, access, api_req)
         elif type(api_req) == RequestPing:
             result = ResponsePing(api_req)
+        return result
+
+    async def api_request(self, conn_id, access, client_request,
+            internal=False):
+        try:
+            api_req = to_api_request(client_request)
+        except KeyError as e:
+            logging.warning('Invalid request: %s' % e)
+            return {'code': 500}
+
+        try:
+            result = await self._route_api_request(conn_id, access, api_req)
+        except APIException as exc:
+            result = error = exc.as_dict()
+            error['error'] = str(exc)
+            error['request'] = api_req
+            del error['traceback']
+            logging.debug('Returning error %s: %s %s'
+                % (exc.__class__.__name__, error['error'], error['kwargs']))
 
         if internal:
             return result

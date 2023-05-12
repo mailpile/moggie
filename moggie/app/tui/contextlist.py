@@ -3,6 +3,7 @@ import time
 import urwid
 
 from ...api.requests import RequestCommand
+from .decorations import EMOJI
 from .widgets import *
 
 
@@ -38,6 +39,7 @@ class ContextList(urwid.ListBox):
         self.default_action = None
         self.walker = urwid.SimpleListWalker([])
         self.v_history = []
+        self.v_history_max = 4
         self.hotkeys = {}
 
         self.order = []
@@ -106,7 +108,8 @@ class ContextList(urwid.ListBox):
         self.tui_frame.conn_manager.send(message_obj, bridge_name=bridge)
 
     def add_history(self, desc, recreate, icon='-'):
-        self.v_history = [vh for vh in self.v_history if (vh[1] != desc)][-4:]
+        self.v_history = [vh for vh in self.v_history if (vh[1] != desc)]
+        self.v_history = self.v_history[-(self.v_history_max-1):]
         self.v_history.append((icon, desc, self.expanded, recreate))
         self.update_content()
 
@@ -162,7 +165,7 @@ class ContextList(urwid.ListBox):
 
     def incoming_counts(self, source, message):
         ctx_src_id = self.awaiting_counts.get(message['req_id'])
-        if ctx_src_id:
+        if ctx_src_id and message.get('data'):
             self.tag_counts[ctx_src_id] = counts = {}
             for search, count in message['data'][0].items():
                 search = search[3:].replace(' tag:unread', '*')
@@ -186,6 +189,9 @@ class ContextList(urwid.ListBox):
             return lambda x: self.show_account(account)
         def _sel_search(terms, ctx_src_id):
             return lambda x: self.show_search(terms, ctx_src_id)
+        def _sel_mailbox(path, ctx_src_id):
+            return lambda x: self.tui_frame.show_mailbox(
+                path, ctx_src_id, history=False)
         def _sel_history(*args):
             return lambda x: self.show_history(*args)
 
@@ -258,6 +264,20 @@ class ContextList(urwid.ListBox):
                     if ai == 0:
                         self.default_action = def_act = action
                     acount += 1
+
+                    for mi, mailbox in enumerate(acct.get('mailboxes', [])):
+                        label, _, _, path = mailbox.split(':', 3)
+                        if not label:
+                            continue
+                        action = _sel_mailbox(path, ctx_src_id)
+                        label = '%s %s' % (EMOJI.get('mailbox', '-'), label)
+                        widgets.append(Selectable(urwid.Padding(
+                                urwid.Text(('email', label), 'left', 'clip'),
+                                left=2, right=1),
+                            on_select={'enter': action}))  # FIXME
+                        if mi == 0:
+                            self.default_action = def_act = action
+
                     if acount > 3:
                         pass  # FIXME: Add a "more" link, break loop
                 if acount:
