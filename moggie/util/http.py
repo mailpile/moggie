@@ -25,13 +25,13 @@ def http1x_connect(host, port, path,
 
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     def on_connect():
-        nonlocal host, path, method, ver, timeout, more, headers
-        sock.settimeout(timeout)
+        nonlocal sock, host, path, method, ver, timeout, more, headers
         if not headers or 'Host:' not in headers:
             headers = 'Host: %s\r\n%s' % (host, headers)
         if not more and 'Content-Length:' not in headers:
             headers += 'Content-Length: 0\r\n'
 
+        sock.settimeout(timeout)
         sock.send(('%s %s HTTP/%s\r\n%s\r\n'
                 % (method, '/' + path.lstrip('/'), ver, headers)
             ).encode('latin-1'))

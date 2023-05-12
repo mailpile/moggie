@@ -519,9 +519,14 @@ class BaseWorker(Process):
             logging.debug('async_call(%s)'  % (fn,))
 
         try:
+            conn.settimeout(None)
+            conn.setblocking(False)
             peeked = await loop.sock_recv(conn, self.PEEK_BYTES)
         except socket.timeout:
             logging.warning('TIMED OUT: %s' % (fn,))
+            raise
+        except:
+            logging.exception('Error receiving from socket')
             raise
 
         if (peeked.startswith(self.HTTP_200)
