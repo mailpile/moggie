@@ -97,10 +97,13 @@ class StorageWorker(BaseWorker):
             return self.call('dump', qs={'compress': compress})
         return self.call('dump')
 
-    def info(self, key=None, details=None):
-        if details is not None:
-            return self.call('info', key, qs={'details': details})
-        return self.call('info', key)
+    async def async_info(self, loop,
+            key=None, details=None, recurse=0, relpath=None):
+        return await self.async_call(loop,
+            'info', key, details, recurse, relpath)
+
+    def info(self, key=None, details=None, recurse=0, relpath=None):
+        return self.call('info', key, details, recurse, relpath)
 
     async def async_mailbox(self, loop, key,
             skip=0, limit=None, username=None, password=None):
@@ -135,8 +138,10 @@ class StorageWorker(BaseWorker):
             self.HTTP_200 + b'Content-Type: application/octet-stream',
             self.backend.dump())
 
-    def api_info(self, key, details=False, method=None):
-        self.reply_json(self.backend.info(key, details=details))
+    def api_info(self, key, details, recurse, relpath, method=None):
+        self.reply_json(
+            self.backend.info(key,
+                details=details, recurse=recurse, relpath=relpath))
 
     def api_mailbox(self, key, skip, limit, username, password, method=None):
         self._expire_parse_cache()

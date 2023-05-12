@@ -20,6 +20,7 @@ except ImportError:
 from base64 import b64encode
 from multiprocessing import Process
 
+from ..api.exceptions import *
 from ..config import APPNAME, AppConfig, configure_logging
 from ..util.dumbcode import *
 from ..util.http import url_parts, http1x_connect
@@ -63,6 +64,7 @@ class BaseWorker(Process):
     HTTP_400 = b'HTTP/1.0 400 Invalid Request\r\nContent-Length: 16\r\n\r\nInvalid Request\n'
     HTTP_403 = b'HTTP/1.0 403 Access Denied\r\nX-MP: Sorry\r\nContent-Length: 14\r\n\r\nAccess Denied\n'
     HTTP_404 = b'HTTP/1.0 404 Not Found\r\nContent-Length: 10\r\n\r\nNot Found\n'
+    HTTP_424 = b'HTTP/1.0 424 Failed Dependency\r\n'
     HTTP_500 = b'HTTP/1.0 500 Internal Error\r\nContent-Length: 15\r\n\r\nInternal Error\n'
 
     HTTP_JSON = HTTP_200 + b'Content-Type: application/json\r\n'
@@ -87,6 +89,7 @@ class BaseWorker(Process):
             b'quit':      (True,  self.api_quit),
             b'noop':      (True,  self.api_noop),
             b'functions': (True,  self.api_functions),
+            b'exception': (True,  self.api_exception),
             b'status':    (False, self.api_status)}
 
         # Support mutt-style log levels, convert to Pythonish
@@ -305,6 +308,9 @@ class BaseWorker(Process):
     def api_functions(self, *args, **kwargs):
         self.reply_json([str(fn, 'utf-8') for fn in self.functions])
 
+    def api_exception(self, *args, **kwargs):
+        raise APIException(*args, **kwargs)
+
     def api_status(self, *args, **kwargs):
         if args and args[0] == 'as.text':
             lines = ['%s: %s' % (k, self.status[k]) for k in self.status]
@@ -477,6 +483,15 @@ class BaseWorker(Process):
                 self._caller_lock.release()
         return None
 
+    def _call_return(self, hdr, data):
+        if b'application/json' in hdr:
+            data = from_json(data)
+            if 'exception' in data:
+                reraise(data)
+            return data
+        else:
+            return (hdr, data)
+
     async def async_call(self, loop, fn,
             *args, qs=None, method='POST', upload=None, data_cb=None):
 
@@ -510,7 +525,8 @@ class BaseWorker(Process):
             logging.warning('TIMED OUT: %s' % (fn,))
             raise
 
-        if peeked.startswith(self.HTTP_200):
+        if (peeked.startswith(self.HTTP_200)
+               or peeked.startswith(self.HTTP_424)):
             hdr, data = peeked.split(b'\r\n\r\n', 1)
             if data_cb is not None:
                 data_cb(hdr, data)
@@ -526,10 +542,7 @@ class BaseWorker(Process):
                         break
                     logging.debug('Read %d bytes' % len(chunk))
                     data += chunk
-                if b'application/json' in hdr:
-                    return from_json(data)
-                else:
-                    return (hdr, data)
+                return self._call_return(hdr, data)
         else:
             # FIXME: Parse the HTTP response code and raise better exceptions
             raise PermissionError(str(peeked[:12], 'latin-1'))
@@ -600,12 +613,13 @@ class BaseWorker(Process):
             logging.warning('TIMED OUT: %s' % (path,))
             raise
 
-        if peeked.startswith(self.HTTP_200):
+        if (peeked.startswith(self.HTTP_200)
+                or peeked.startswith(self.HTTP_424)):
             hdr = peeked.split(b'\r\n\r\n', 1)[0]
             junk = conn.recv(len(hdr) + 4)
             conn = conn.makefile(mode='rb')
             if b'application/json' in hdr:
-                return from_json(conn.read())
+                return self._call_return(hdr, conn.read())
             else:
                 return (hdr, conn)
         else:
@@ -654,13 +668,13 @@ class BaseWorker(Process):
             close=False)
         return self._client
 
-    def reply_json(self, data, client_info_tuple=None):
+    def reply_json(self, data, client_info_tuple=None, http_code=None):
         if isinstance(data, dict):
             if client_info_tuple and client_info_tuple[0]:
                 data['_caller'] = client_info_tuple[0]
             elif self._caller:
                 data['_caller'] = self._caller
-        self.reply(self.HTTP_JSON,
+        self.reply(self.HTTP_JSON if (http_code is None) else http_code,
             to_json(data).encode('utf-8') + b'\n',
             client_info_tuple=client_info_tuple)
 
@@ -720,6 +734,9 @@ class BaseWorker(Process):
             client_info_tuple = self.client_info_tuple()
         def async_reply(msg):
             return self.reply(msg, client_info_tuple=client_info_tuple)
+        def async_reply_json(data, http_code=None):
+            return self.reply_json(data,
+                client_info_tuple=client_info_tuple, http_code=http_code)
 
         if argdecode_and_func is not None:
             try:
@@ -755,6 +772,8 @@ class BaseWorker(Process):
                 stats[fn+'_ms'] = 0.95*stats.get(fn+'_ms', t) + 0.05*t
                 stats['requests_ok'] += 1
                 return rv
+            except APIException as e:
+                return async_reply_json(e.as_dict(), http_code=self.HTTP_424)
             except TypeError:
                 logging.exception('Error in RPC handler %s %s(%s, %s)'
                     % (method, fn, args, kwargs))
@@ -806,6 +825,8 @@ class BaseWorker(Process):
                 stats[fn+'_ms'] = 0.95*stats.get(fn+'_ms', t) + 0.05*t
                 stats['requests_ok'] += 1
                 return rv
+            except APIException as e:
+                return self.reply_json(e.as_dict(), http_code=self.HTTP_424)
             except TypeError:
                 logging.exception('Error in RPC handler %s %s(%s, %s)'
                     % (method, fn, args, kwargs))
