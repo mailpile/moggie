@@ -287,36 +287,32 @@ class AccountConfig(ConfigSectionProxy):
     _KEYS = {
         'name': str,
         #addresses = list of e-mails
-        'mailbox_proto': str,    # none, imap, imaps, jmap, pop3, pop3s, files
-        'mailbox_config': str,   # move or read or copy or sync?
-        'sendmail_proto': str,   # none, smtp, jmap, imap, imaps, proc
+        'mailbox_proto': str,      # none, imap, imaps, jmap, pop3, pop3s, files
+        'mailbox_config': str,     # move or read or copy or sync?
         # Optional...
-        'mailbox_server': str,
-        'mailbox_username': str,  # unset=no auth
-        'mailbox_password': str,  # unset=no pass
-        'mailbox_inbox': str,     # Which "mailbox" is the inbox?
-        'mailbox_sent': str,
-        'mailbox_spam': str,
-        'mailbox_trash': str,
-# So what about other mailboxes?
-#
-# If they've been "configured", they should appear in the UK under "All Mail".
-# If unconfigured, they should be findable using a browsing UI.
-#
+        'sendmail_proto': str,     # none, smtp, jmap, imap, imaps, proc
+        'sendmail_server': str,    # none, smtp, jmap, imap, imaps, proc
         'sendmail_username': str,  # unset=no auth, special: ==mailbox_username
         'sendmail_password': str,  # unset=no pass, special: ==mailbox_password
+        'mailbox_server': str,
+        'mailbox_username': str,   # unset=no auth
+        'mailbox_password': str,   # unset=no pass
+        #mailboxes = list of label:tag:policy:path
+        #watch_paths = list of paths to watch for new mailboxes
+        'watch_policy': str,       # What to do when we find something...
         'description': str}
-    _EXTRA_KEYS = ['addresses', 'watched', 'archives']
+    _EXTRA_KEYS = ['addresses', 'mailboxes', 'watch_paths']
 
     def __init__(self, *args, **kwarg):
         super().__init__(*args, **kwarg)
-        self._watched = EncodingListItemProxy(self.config, self.config_key, 'watched')
-        self._archives = EncodingListItemProxy(self.config, self.config_key, 'archives')
-        self._addresses = EncodingListItemProxy(self.config, self.config_key, 'addresses')
+        c, k = self.config, self.config_key
+        self._addresses = EncodingListItemProxy(c, k, 'addresses')
+        self._mailboxes = EncodingListItemProxy(c, k, 'mailboxes')
+        self._watch_paths = EncodingListItemProxy(c, k, 'watch_paths')
 
-    watched = property(lambda self: self._watched)
-    archives = property(lambda self: self._archives)
     addresses = property(lambda self: self._addresses)
+    mailboxes = property(lambda self: self._mailboxes)
+    watch_paths = property(lambda self: self._watch_paths)
 
     def get_tags(self):
         tags = []
@@ -325,6 +321,19 @@ class AccountConfig(ConfigSectionProxy):
         if self.sendmail_proto:
             tags += self.OUTGOING_TAGS
         return tags
+
+    def add_mailbox(self, label, tags, policy, path):
+        if ':' in label or ':' in tags or ':' in policy:
+            raise ValueError('Mailbox settings must not contain `:`')
+        entry = ':'.join([label, tags, policy, path])
+
+        for idx, mailbox in enumerate(self.mailboxes):
+            l, t, p, mp = mailbox.split(':', 3)
+            if mp == path:
+                self.mailboxes[idx] = entry
+                return
+
+        self.mailboxes.append(entry)
 
 
 class ContextConfig(ConfigSectionProxy):
@@ -552,11 +561,15 @@ class AppConfig(ConfigParser):
 
         self.read(self.filepath)
         with self:
+            initialized = 0
             for sec, opt, val in self.INITIAL_SETTINGS:
                 if sec not in self:
                     self.add_section(sec)
                 if opt not in self._sections[sec]:
                     self.set(sec, opt, val, save=False)
+                    initialized += 1
+            if initialized == len(self.INITIAL_SETTINGS):
+                self.detect_local_accounts()
 
             try:
                 self.last_rotate = os.path.getmtime(self.filepath)
@@ -906,5 +919,21 @@ class AppConfig(ConfigParser):
         if save:
             self.save()
 
-
-
+    def detect_local_accounts(self):
+        try:
+            import getpass, os, socket
+            user = getpass.getuser()
+            spool = os.path.join('/var/mail', user)
+            hostname = socket.gethostname()
+            if os.path.exists(spool) and hostname:
+                local_email = '%s@%s' % (user, hostname)
+                local_acct_id = self.ACCOUNT_PREFIX + ' 0'
+                self.add_section(local_acct_id)
+                local_account = self.accounts[local_acct_id]
+                local_account.name = local_email
+                local_account.description = 'Local mail'
+                local_account.addresses.append(local_email)
+                local_account.add_mailbox('Inbox', '', '', spool)
+                self.context_zero().accounts.append(local_acct_id)
+        except:
+            pass

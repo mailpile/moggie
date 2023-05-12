@@ -678,10 +678,13 @@ main app worker. Hints:
 
         with self.config:
             ctx = api_request.get('context') or self.config.CONTEXT_ZERO
-            watch = api_request.get('watch')
-            acct_id = api_request.get('account')
             context = self.config.get_context(ctx)
+
+            acct_id = api_request.get('account', '')
             account = None
+            mailbox_label = api_request.get('mailbox_label', '')
+            mailbox_tags = api_request.get('mailbox_tags', '')
+            mailbox_policy = api_request.get('mailbox_policy', '')
 
             # Will raise ValueError or NameError if access denied
             roles, tag_ns, scope_s = access.grants(ctx,
@@ -689,19 +692,32 @@ main app worker. Hints:
                 AccessConfig.GRANT_COMPOSE +
                 AccessConfig.GRANT_TAG_RW )
 
+            if not acct_id and context.accounts:
+                acct_id = context.accounts[0]
             if acct_id:
                 account = self.config.get_account(acct_id)
+                if account:
+                    acct_id = account.config_key
 
-            if watch:
-                if not account:
+            mailbox = api_request['search'].get('mailbox')
+            if acct_id and mailbox and (mailbox_policy or mailbox_label):
+                if account:
+                    if acct_id not in context.accounts:
+                        raise ValueError('Account and context do not match')
+                else:
+                    logging.info('Auto-creating account: %s' % acct_id)
                     section = self._config_new_section('account')
-                    self.config[section].update({'name': 'Local mail'})
+                    self.config[section].update({'name': acct_id})
                     account = self.config.get_account(section)
-                    if acct_id and '@' in acct_id:
+                    if '@' in acct_id:
                         account.addresses.append(acct_id)
-                mailbox = api_request['search']['mailbox']
-                if mailbox not in account.watched:
-                    account.watched.append(mailbox)
+                    context.accounts.append(section)
+                logging.info('Adding to account %s: %s' % (acct_id, mailbox))
+                account.add_mailbox(
+                    mailbox_label or '',
+                    mailbox_tags or '',
+                    mailbox_policy,
+                    mailbox)
 
         def import_search():
             return self.importer.with_caller(conn_id).import_search(
@@ -711,7 +727,9 @@ main app worker. Hints:
                 force=api_request.get('force', False),
                 full=api_request.get('full', False))
 
-        result = await async_run_in_thread(import_search)
+        if not api_request.get('config_only'):
+            result = await async_run_in_thread(import_search)
+
         return ResponsePing(api_request)  # FIXME
 
     async def api_req_cli(self, conn_id, access, api_req):

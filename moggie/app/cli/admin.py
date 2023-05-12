@@ -691,8 +691,13 @@ class CommandImport(CLICommand):
         ('--ignore=',   ['.', '..', 'cur', 'new', 'tmp', '.notmuch'],
                                 ''),  # FIXME: Explain?
         ('--recurse',       [], 'Search the named paths recursively for mailboxes'),
+        ('--watch',    [False], 'Watch for new mail/mailboxes in the future'),
+        ('--copy',     [False], 'Copy mailbox contents to Moggie archives'),
+        ('--move',     [False], 'Move mailbox contents to Moggie archives'),
+        ('--cfg-only', [False], 'Update configuration only, reads no mail'),
+        ('--label=',        [], 'X=label, show mailbox in the UI'),
         ('--compact',       [], 'Compact the search engine after importing'),
-        ('--watch',    [False], 'Watch for new mail in the future'),
+#FIXME:
         ('--old',           [], 'Treat messages as "old": do not add to inbox etc.'),
         ('--dryrun',        [], 'Test only, adds nothing')]]
 
@@ -748,25 +753,64 @@ class CommandImport(CLICommand):
     async def run(self):
         from ...config import AppConfig
 
+        ctx_id = self.get_context()
+        acct_id = mailbox_label = mailbox_tags = mailbox_policy = None
+        recurse = bool(self.options['--recurse'])
+
+# FIXME: This belongs in configure()
+
+        # FIXME: 'Local mail' should not be hardcoded
+        acct_id = self.options['--username='][-1] or 'Local mail'
+        if self.options['--account=']:
+            acct_id = self.options['--account='][-1]
+
+        if acct_id and self.options['--context='][-1] == 'default':
+            pass  # FIXME: Set the context based on the account?
+
+        config_only = self.options['--cfg-only'][-1]
+        mailbox_tags = None
+        mailbox_policy = []
+        if self.options['--label=']:
+            mailbox_label = self.options['--label='][-1]
+            if mailbox_label in ('N', 'n', False):
+                mailbox_label = ''
+        if self.options['--move'][-1]:
+            mailbox_policy.append('move')
+        elif self.options['--copy'][-1]:
+            mailbox_policy.append('copy')
+        elif self.options['--watch'][-1]:
+            mailbox_policy.append('read')
+        mailbox_policy = '+'.join(mailbox_policy)
+
+## EOFIXME
+
         requests = []
         for path in self.paths:
+            policy, label, force = None, None, False
             if path in self.SEARCH:
-                request_obj = RequestSearch(
-                    context=AppConfig.CONTEXT_ZERO,
-                    terms=path)
+                request_obj = RequestSearch(context=ctx_id, terms=path)
+                force = True
             else:
                 request_obj = RequestMailbox(
-                    context=AppConfig.CONTEXT_ZERO,
+                    context=ctx_id,
                     username=self.options['--username='][-1],
                     password=self.options['--password='][-1],
                     mailbox=path)
 
+                policy = mailbox_policy
+                label = mailbox_label
+                if (recurse and label) or label in (True, 'Y', 'y'):
+                    label = os.path.basename(path)
+
             requests.append((path, RequestAddToIndex(
-                context=AppConfig.CONTEXT_ZERO,
+                context=ctx_id,
                 search=request_obj,
-                account=self.options['--account='][-1],
-                watch=self.options['--watch'][-1],
-                force=(path in self.SEARCH))))
+                account=acct_id,
+                mailbox_policy=policy,
+                mailbox_label=label,
+                mailbox_tags=mailbox_tags,
+                config_only=config_only,
+                force=force)))
 
         if not requests:
             return True
@@ -784,7 +828,13 @@ class CommandImport(CLICommand):
         _next()
         while True:
             try:
-                msg = await self.await_messages('notification', timeout=120)
+                if config_only:
+                    msg = {
+                       'message': '[import] Updated configuration only',
+                       'data': {'pending': 0}}
+                else:
+                    msg = await self.await_messages('notification', timeout=120)
+
                 if msg and msg.get('message'):
                     sys.stdout.write('\33[2K\r' + msg['message'])
                     if msg.get('data', {}).get('pending') == 0:

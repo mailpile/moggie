@@ -73,15 +73,19 @@ class RequestTag(RequestBase):
 
 class RequestAddToIndex(RequestBase):
     def __init__(self,
-            context='', account='', search='', initial_tags=[],
-            watch=False, force=False,
-            req_id=None):
+            context='', search='',
+            account='', mailbox_label='', mailbox_tags='', mailbox_policy='',
+            config_only=False, force=False, req_id=None):
         self.update({
             'req_type': 'add_to_index',
             'context': context,
             'search': search,
-            'force': force,
-            'tags': initial_tags
+            'account': account,
+            'mailbox_label': mailbox_label,
+            'mailbox_tags': mailbox_tags,
+            'mailbox_policy': mailbox_policy,
+            'config_only': config_only,
+            'force': force
         }, req_id=req_id)
 
 

@@ -308,8 +308,8 @@ class CLICommand:
         ctx = ctx or (self.options.get('--context=') or ['default'])[-1]
         if ctx == 'default':
             if self.access is True or not self.access:
-                ctx = cfg.get(
-                    AppConfig.GENERAL, 'default_cli_context', fallback='Context 0')
+                ctx = cfg.get(cfg.GENERAL, 'default_cli_context',
+                    fallback='Context 0')
             else:
                 ctx = self.access.get_default_context()
         else:

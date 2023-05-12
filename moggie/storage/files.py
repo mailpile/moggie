@@ -108,11 +108,14 @@ class FileStorage(BaseStorage):
 
     def get_filemap(self, path, prefer_access=mmap.ACCESS_WRITE):
         try:
-            with open(path, 'rb+') as fd:
-                return FileMap(fd.fileno(), 0, access=prefer_access)
-        except PermissionError:
-            with open(path, 'rb') as fd:
-                return FileMap(fd.fileno(), 0, access=mmap.ACCESS_READ)
+            try:
+                with open(path, 'rb+') as fd:
+                    return FileMap(fd.fileno(), 0, access=prefer_access)
+            except PermissionError:
+                with open(path, 'rb') as fd:
+                    return FileMap(fd.fileno(), 0, access=mmap.ACCESS_READ)
+        except ValueError as e:
+            return b''  # mmap() thows ValueError on empty file
 
     def __getitem__(self, key):
         try:
