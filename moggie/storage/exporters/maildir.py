@@ -108,6 +108,7 @@ class MaildirExporter(BaseExporter):
     which include our read/unread status and match our internal
     metadata/tags.
     """
+    EOL = b'\n'
     AS_ZIP = 0
     AS_TAR = 1
     AS_DEFAULT = AS_TAR
@@ -124,7 +125,8 @@ class MaildirExporter(BaseExporter):
         'flagged':   'F',
         'trash':     'T'}
 
-    def __init__(self, real_fd, dirname=None, output=None, password=None):
+    def __init__(self, real_fd, dirname=None, output=None, password=None, eol=None):
+        self.eol = self.EOL if (eol is None) else eol
         if output is None:
             output = self.AS_DEFAULT
         if output == self.AS_TAR:
@@ -177,6 +179,11 @@ class MaildirExporter(BaseExporter):
             self.basedir, self.PREFIX,
             ts, SEQ, taglist, self.flags(tags), self.SUFFIX)
 
+        if self.eol == b'\n':
+            message = message.replace(b'\r\n', b'\n')
+        else:
+            message = message.replace(b'\r\n', b'\n').replace(b'\n', self.eol)
+
         return (filename, ts, message)
 
     def export(self, metadata, message):
@@ -187,6 +194,7 @@ class EmlExporter(MaildirExporter):
     SUBDIRS = []
     PREFIX = ''
     SUFFIX = '.eml'
+    EOL = b'\r\n'   # .EML is a Windows thing?
 
     AS_DEFAULT = MaildirExporter.AS_ZIP
 
@@ -197,8 +205,10 @@ class EmlExporter(MaildirExporter):
         return ''
 
     def transform(self, metadata, message):
+        # Embed tags and read status in headers, and add the leading From
+        # line so the files can be opened as individual mboxes.
         message = MboxExporter.MboxTransform(metadata, message,
-            mangle_from=False)
+            mangle_from=False, add_from=True, fix_newlines=False)
         return super().transform(metadata, message)
 
 

@@ -1,6 +1,6 @@
 import os
 import time
-import zipfile
+import pyzipper as zipfile
 
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
@@ -161,11 +161,11 @@ class FormatMaildirZip(FormatMaildir):
             return False
         try:
             with cls.Zipfile(key, parent) as zf:
-                names = zf.namelist()
+                found = 0
                 for name in zf.namelist():
-                    if name[:4] in ('cur', 'new'):
-                        return True
-                return False
+                    if name[:4] in ('cur', 'new', 'tmp'):
+                        found += 1
+                return (found == 3)
         except:
             return False
 

@@ -108,6 +108,7 @@ class CommandSearch(CLICommand):
        * `sexp` - The same contents as JSON outputs, but as an S-expression
        * `zip` - Entire messages as individual files in a ZIP archove
        * `maildir` - Entire messages in a Maildir mailbox, in a .TGZ archive
+       * `mailzip` - Entire messages in a Maildir mailbox, in a .ZIP archive
        * `mbox` - Entire messages in a Unix mbox mailbox
 
     Notes:
@@ -189,7 +190,7 @@ FIXME: Document html and html formats!
             self.mimetype = 'text/html; charset=utf-8'
         elif fmt == 'mbox':
             self.mimetype = 'application/mbox'
-        elif fmt == 'zip':
+        elif fmt in ('zip', 'mailzip'):
             self.mimetype = 'application/mbox'
         elif fmt == 'maildir':
             self.mimetype = 'application/x-tgz'
@@ -197,12 +198,13 @@ FIXME: Document html and html formats!
         if fmt in ('html', 'jhtml') and not self.options['--limit='][-1]:
             self.options['--limit='].append(self.HTML_DEFAULT_LIMIT)
 
-        if self.options['--format='][-1] in ('maildir', 'zip', 'mbox'):
+        if self.options['--format='][-1] in (
+                'maildir', 'mailzip', 'zip', 'mbox'):
             self.default_output = 'emails'
 
         if ((self.options.get('--zip-password=') or [None])[-1] and
-               self.options['--format='][-1] not in ('zip',)):
-            raise Nonsense('Encryption is only supported with --format=zip')
+               self.options['--format='][-1] not in ('zip', 'mailzip')):
+            raise Nonsense('Encryption is only supported with ZIP formats')
 
         self.preferences = self.cfg.get_preferences(context=self.context)
         return []
@@ -424,7 +426,7 @@ FIXME: Document html and html formats!
         if thread is not None:
             fmt = self.options['--format='][-1]
             part = int((self.options.get('--part=') or [0])[-1])
-            raw = (fmt in ('mbox', 'maildir', 'raw', 'zip'))
+            raw = (fmt in ('mbox', 'maildir', 'mailzip', 'raw', 'zip'))
             want_body = raw or (self.options.get('--body=', [0])[-1] != 'false')
             want_html = self.options.get('--include-html')
             shown_types = ('text/plain', 'text/html') if want_html else ('text/plain',)
@@ -629,7 +631,7 @@ FIXME: Document html and html formats!
         if last:
             self.print_html_end(post)
 
-    def _get_exporter(self, cls):
+    def _get_exporter(self, cls, **kwargs):
         if self.exporter is None:
             password = (self.options.get('--zip-password=') or [None])[-1]
             class _wwrap:
@@ -641,11 +643,12 @@ FIXME: Document html and html formats!
                 def close(ws):
                     pass
             if password:
-                self.exporter = cls(_wwrap(), password=bytes(password, 'utf-8'))
+                kwargs['password'] = bytes(password, 'utf-8')
+                self.exporter = cls(_wwrap(), **kwargs)
                 if not self.exporter.can_encrypt():
                     raise Nonsense('Encryption is unavailable')
             else:
-                self.exporter = cls(_wwrap())
+                self.exporter = cls(_wwrap(), **kwargs)
         return self.exporter
 
     def _export(self, exporter, result, first, last):
@@ -666,6 +669,11 @@ FIXME: Document html and html formats!
 
     async def emit_result_maildir(self, result, first=False, last=False):
         exporter = self._get_exporter(MaildirExporter)
+        return self._export(exporter, result, first, last)
+
+    async def emit_result_mailzip(self, result, first=False, last=False):
+        exporter = self._get_exporter(
+            MaildirExporter, output=MaildirExporter.AS_ZIP)
         return self._export(exporter, result, first, last)
 
     def get_output(self):
@@ -717,6 +725,8 @@ FIXME: Document html and html formats!
             return self.emit_result_mbox
         elif fmt == 'maildir':
             return self.emit_result_maildir
+        elif fmt == 'mailzip':
+            return self.emit_result_mailzip
         elif fmt == 'zip':
             return self.emit_result_zip
         raise Nonsense('Unknown output format: %s' % fmt)
@@ -828,11 +838,8 @@ FIXME: Document html and html formats!
                 limit -= count
 
             for r in results:
-                if isinstance(r, list):
-                    async for fd in formatter(r):
-                        yield fd
-                else:
-                    logging.debug('Bogus result: %s' % r)
+                async for fd in formatter(r):
+                    yield fd
 
             query['skip'] += count
             if ((count < query['limit'])

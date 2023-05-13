@@ -20,14 +20,20 @@ class MboxExporter(BaseExporter):
         return self.MboxTransform(metadata, message)
 
     @classmethod
-    def MboxTransform(cls, metadata, message, mangle_from=True, add_from=True):
+    def MboxTransform(cls, metadata, message,
+            mangle_from=True, add_from=True, fix_newlines=True):
         # Convert to bytes and escape any bare From or >From lines
         if mangle_from:
             message = re.sub(b'\n(>*)From ', b'\n>\\1From ', message)
-        message = bytearray(message)
 
-        # What is our newline convention?
-        eol = b'\r\n' if (b'\r\n' in message[:256]) else b'\n'
+        if fix_newlines:
+            # mbox is a Unix format, so this is the newline convention we want.
+            eol = b'\n'
+            message = bytearray(message.replace(b'\r\n', eol))
+        else:
+            # What is our newline convention?
+            eol = b'\r\n' if (b'\r\n' in message[:256]) else b'\n'
+            message = bytearray(message)
 
         # Add the leading From delimeter, if not already present
         if not message.startswith(b'From ') and add_from:
