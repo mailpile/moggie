@@ -23,8 +23,9 @@ class ContextList(urwid.ListBox):
 #                   ('c', 'Calendar', ''),
 #                   ('p', 'People',   ''),
                     ('a', 'All Mail', 'all:mail'))),
-        ('outbox', (('9', 'OUTBOX',   'in:outbox'),)),
-        ('sent',   (('0', 'Sent',     'in:sent'),)),
+        ('outbox', (('8', 'OUTBOX',   'in:outbox'),)),
+        ('sent',   (('9', 'Sent',     'in:sent'),)),
+        ('drafts', (('0', 'Drafts',   'in:drafts'),)),
         ('spam',   (('s', 'Spam',     'in:spam'),)),
         ('trash',  (('d', 'Trash',    'in:trash'),))]
     TAG_KEYS = 'wertyu'
@@ -286,7 +287,8 @@ class ContextList(urwid.ListBox):
                 shown = []
                 all_tags = ctx.get('tags', []) + ctx.get('extra_tags', [])
                 for tag, items in self.TAG_ITEMS:
-                    if tag in all_tags:
+                    all_lc_tags = [t.lower() for t in all_tags]
+                    if tag in all_lc_tags:
                         tc = self.tag_counts[ctx_src_id].get(tag.lower()+'*', 0)
                         for ti, (sc, name, search) in enumerate(items):
                             os = search and {'enter': _sel_search(
@@ -304,7 +306,7 @@ class ContextList(urwid.ListBox):
                         shown.append(tag)
 
                 count = 1
-                unshown = [t for t in all_tags if t not in shown]
+                unshown = [t for t in all_tags if t.lower() not in shown]
                 if unshown:
                     widgets.append(urwid.Divider())
                     for ai, tag in enumerate(unshown):

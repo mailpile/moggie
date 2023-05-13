@@ -45,6 +45,8 @@ class ListItemProxy(list):
 
     def _write_back(self):
         list_str = (self.delim+' ').join(str(i) for i in self)
+        if len(list_str) > 60:
+            list_str = list_str.replace(self.delim, self.delim+'\n')
         self._config.set(self._key, self._item, list_str)
 
     def _validate(self, val):
@@ -147,6 +149,8 @@ class DictItemProxy(dict):
 
     def _write_back(self):
         dict_str = ', '.join('%s:%s' % (k, v) for k, v in self.items())
+        if len(dict_str) > 60:
+            dict_str = dict_str.replace(', ', ',\n ')
         self._config.set(self._key, self._item, dict_str)
 
     def _validate(self, key, val):

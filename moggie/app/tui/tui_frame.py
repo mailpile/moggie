@@ -119,8 +119,8 @@ class TuiFrame(urwid.Frame):
             if message.get('req_type') in ('notification', 'unlocked'):
                 if message['req_type'] == 'unlocked':
                     self.is_locked = False
+                    self.context_list.activate_default_view()
                 self.notifications.append(message)
-                self.context_list.activate_default_view()
         except:
             logging.exception('Exception handling message: %s' % (message,))
 
