@@ -16,6 +16,7 @@ from .formats import split_tagged_path, tag_path
 from .formats.base import FormatBytes
 from .formats.mbox import FormatMbox
 from .formats.maildir import FormatMaildir
+from .formats.mailzip import FormatMailzip
 from .formats.mailpilev1 import FormatMaildirWERVD
 
 
@@ -26,6 +27,7 @@ FORMATS = OrderedDict()
 FORMATS[FormatMbox.TAG] = FormatMbox
 FORMATS[FormatMaildirWERVD.TAG] = FormatMaildirWERVD
 FORMATS[FormatMaildir.TAG] = FormatMaildir
+FORMATS[FormatMailzip.TAG] = FormatMailzip
 FORMATS[FormatBytes.TAG] = FormatBytes
 
 

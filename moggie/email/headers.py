@@ -290,7 +290,7 @@ def parse_header(raw_header):
                     if ts > 0:
                         headers['_DATE_TS'] = ts
                         headers['_DATE_TZ'] = tz
-                except ValueError:
+                except (ValueError, TypeError):
                     pass
 
     headers['_ORDER'] = order

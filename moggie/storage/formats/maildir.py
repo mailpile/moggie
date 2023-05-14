@@ -1,11 +1,9 @@
 import os
 import time
-import pyzipper as zipfile
 
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.util import quick_msgparse, make_ts_and_Metadata
-from ...util.mailpile import PleaseUnlockError
 from . import tag_path
 
 
@@ -147,37 +145,6 @@ class FormatMaildir:
                 yield md
             except (KeyError, ValueError, TypeError):
                 pass
-
-
-class FormatMaildirZip(FormatMaildir):
-    NAME = 'maildir.zip'
-    TAG = b'mz'
-
-    @classmethod
-    def Magic(cls, parent, key, info=None, is_dir=None):
-        return False  # FIXME
-
-        if is_dir:
-            return False
-        try:
-            with cls.Zipfile(key, parent) as zf:
-                found = 0
-                for name in zf.namelist():
-                    if name[:4] in ('cur', 'new', 'tmp'):
-                        found += 1
-                return (found == 3)
-        except:
-            return False
-
-    @classmethod
-    def ZipFile(self, key, parent=None):
-        return zipfile.ZipFile((parent or self.parent).key_to_path(key))
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.zf = self.Zipfile(self.basedir)
-        self.files = dict((i.filename, i) for i in self.zf.infolist())
-        # FIXME, write this!
 
 
 if __name__ == "__main__":

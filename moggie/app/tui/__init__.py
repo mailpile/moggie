@@ -160,7 +160,7 @@ def Main(workdir, tui_args, send_draft):
         elif '-f' in tui_args:
             # Display the contents of a mailbox or folder; this should
             # always be possible whether the app is locked or not.
-            target = tui_args['-f']
+            target = os.path.abspath(tui_args['-f'])
             if '-y' in tui_args:
                 initial_state['show_browser'] = target
             elif target.endswith('/'):
