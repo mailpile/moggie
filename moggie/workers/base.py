@@ -870,7 +870,7 @@ if __name__ == '__main__':
                 except KeyboardInterrupt:
                     pass
                 except:
-                    traceback.print_exc()
+                    logging.exception('Ping failed!')
             self.reply_json({pong: args})
 
     tw = TestWorker('/tmp', name='moggie-test-worker').connect()

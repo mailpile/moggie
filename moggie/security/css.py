@@ -14,6 +14,7 @@
 # we emit are all compliant with our white-list of known safe rules.
 
 import copy
+import logging
 import re
 import traceback
 
@@ -143,7 +144,7 @@ class CSSParser:
             try:
                 self.statemap[self.state]()
             except:
-                traceback.print_exc()
+                logging.exception('CSSParser.parse() bailed out')
                 self.state = self.STATE_DONE
         if self.styles:
             self._state_styles_done()

@@ -83,7 +83,7 @@ class TuiConnManager:
 
     def flush_pending(self):
         pending, self.connecting = self.connecting, None
-        for message, bridge_name in pending:
+        for message, bridge_name in (pending or []):
             self.send(message, bridge_name)
 
     def handle_message(self, bridge_name, message):
