@@ -30,7 +30,7 @@ class TuiConnManager:
         self.seq = 0
         self.bridges = {}
         self.handlers = {
-            '*:internal_websocket_error': self.handle_ws_error}
+            '*:internal_websocket_error': {'_wse': self.handle_ws_error}}
 
         if local_app_worker:
             AsyncRPCBridge(aev_loop, 'local_app', local_app_worker, self)
@@ -60,8 +60,9 @@ class TuiConnManager:
         return _id
 
     def del_handler(self, _id):
-        if _id in self.handlers:
-            del self.handlers[_id]
+        for pattern in self.handlers:
+            if _id in self.handlers[pattern]:
+                del self.handlers[pattern][_id]
 
     def send(self, message, bridge_name=None):
         if self.connecting is not None:

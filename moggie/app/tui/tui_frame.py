@@ -19,6 +19,7 @@ from .contextlist import ContextList
 from .emaillist import EmailList
 from .changepassdialog import ChangePassDialog
 from .unlockdialog import UnlockDialog
+from .retrydialog import RetryDialog
 from .searchdialog import SearchDialog
 from .suggestionbox import SuggestionBox
 from .widgets import *
@@ -116,11 +117,15 @@ class TuiFrame(urwid.Frame):
                     except:
                         logging.exception('Incoming message asploded')
 
-            if message.get('req_type') in ('notification', 'unlocked'):
+            if message.get('error') and message.get('exception'):
+                self.topbar.open_with(RetryDialog, message)
+
+            elif message.get('req_type') in ('notification', 'unlocked'):
                 if message['req_type'] == 'unlocked':
                     self.is_locked = False
                     self.context_list.activate_default_view()
                 self.notifications.append(message)
+
         except:
             logging.exception('Exception handling message: %s' % (message,))
 
@@ -281,7 +286,7 @@ class TuiFrame(urwid.Frame):
                     ] + hints + [
                 ]), 'header')),
             _p(urwid.AttrMap(urwid.Columns([
-                urwid.Text((' ' * 19) + crumbtrail, align='left'),
+                urwid.Text((' ' * 19) + crumbtrail, align='left', wrap='clip'),
                 ]), 'crumbs'))]
         #if update:
         #    self.contents['header'] = (self.topbar, None)

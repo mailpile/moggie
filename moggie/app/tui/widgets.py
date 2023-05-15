@@ -16,30 +16,29 @@ class PopUpManager(urwid.PopUpLauncher):
         super().__init__(content)
         self.tui_frame = tui_frame
         self.target = None
-        self.target_args = []
 
     def open_with(self, target, *target_args):
-        self.target = target
-        self.target_args = target_args
+        self.target = target(self.tui_frame, *target_args)
+        urwid.connect_signal(self.target, 'close',
+            lambda b: self.close_pop_up())
         return self.open_pop_up()
 
     def create_pop_up(self):
-        target, args = self.target, self.target_args
-        if self.target:
-            pop_up = self.target(self.tui_frame, *self.target_args)
-            urwid.connect_signal(pop_up, 'close', lambda b: self.close_pop_up())
-            return pop_up
-        return None
+        return self.target
 
     def get_pop_up_parameters(self):
-        # FIXME: Make this dynamic somehow?
+        def _w(attr, default):
+            if hasattr(self.target, attr):
+                return getattr(self.target, attr)()
+            else:
+                return default
         cols, rows = self.tui_frame.screen.get_cols_rows()
-        wwidth = min(cols, self.target.WANTED_WIDTH)
+        wwidth = min(cols, _w('wanted_width', self.target.WANTED_WIDTH))
         return {
             'left': (cols//2)-(wwidth//2),
             'top': 2,
             'overlay_width': wwidth,
-            'overlay_height': self.target.WANTED_HEIGHT}
+            'overlay_height': _w('wanted_height', self.target.WANTED_HEIGHT)}
 
 
 class Selectable(urwid.WidgetWrap):
@@ -63,11 +62,25 @@ class Selectable(urwid.WidgetWrap):
             return key
 
 
-class CloseButton(Selectable):
-    PLACEHOLDER = urwid.Text('   ')
-    def __init__(self, on_select=None):
-        Selectable.__init__(self, urwid.Text(('subtle', '[x]')),
+class SimpleButton(Selectable):
+    LABEL = 'OK'
+    def __init__(self, label=None, on_select=None):
+        Selectable.__init__(self,
+            urwid.Text(('subtle', '[%s]' % (label or self.LABEL))),
             on_select={'enter': on_select})
+
+
+class CloseButton(SimpleButton):
+    PLACEHOLDER = urwid.Text('   ')
+    LABEL = 'x'
+    def __init__(self, on_select=None):
+        super().__init__(on_select=on_select)
+
+
+class CancelButton(SimpleButton):
+    LABEL = 'Cancel'
+    def __init__(self, on_select=None):
+        super().__init__(on_select=on_select)
 
 
 class QuestionDialog(urwid.WidgetWrap):
