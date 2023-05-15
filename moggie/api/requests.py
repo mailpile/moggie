@@ -123,6 +123,7 @@ class RequestBrowse(RequestBase):
 class RequestEmail(RequestBase):
     def __init__(self,
             metadata=[], text=False, data=False, full_raw=False, parts=None,
+            username=None, password=None,
             req_id=None):
         self.update({
             'req_type': 'email',
@@ -131,6 +132,8 @@ class RequestEmail(RequestBase):
             'data': data,
             'parts': parts,
             'full_raw': full_raw,
+            'username': username,
+            'password': password
         }, req_id=req_id)
 
 
@@ -212,9 +215,13 @@ class RequestChangePassphrase(RequestBase):
 
 
 class RequestCommand(RequestBase):
-    def __init__(self, command=None, args=None, req_id=None):
+    def __init__(self,
+            command=None, args=None, username=None, password=None,
+            req_id=None):
         self.update({
             'req_type': 'cli:%s' % command,
+            'username': username,
+            'password': password,
             'args': args
         }, req_id=req_id)
 

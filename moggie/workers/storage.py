@@ -56,6 +56,7 @@ class StorageWorker(BaseWorker):
     PEEK_BYTES = 8192
     BLOCK = 8192
 
+    PARSE_CACHE_MIN = 200
     PARSE_CACHE_TTL = 180
 
     def __init__(self, status_dir, backend,
@@ -148,14 +149,26 @@ class StorageWorker(BaseWorker):
             self.backend.info(key,
                 details=details, recurse=recurse, relpath=relpath))
 
+    def pue_to_needinfo(self, pue):
+        logging.debug('Need unlock, raising NeedInfoException')
+        needs, neo = [], NeedInfoException
+        if pue.username:
+            needs.append(neo.Need('Username', 'username'))
+        if pue.password:
+            needs.append(
+                neo.Need('Password', 'password', datatype='password'))
+        return neo(str(pue), need=needs)
+
     def api_mailbox(self, key, skip, limit, username, password, method=None):
+        cache_key = '%s/%s/%s' % (key, username, password)
+
         self._expire_parse_cache()
-        if key in self.parsed_mailboxes:
-            while (not self.parsed_mailboxes[key][1]
+        if cache_key in self.parsed_mailboxes:
+            while (not self.parsed_mailboxes[cache_key][1]
                     and self.background_thread is not None):
                 time.sleep(0.1)
             logging.debug('%s: Returning from self.parsed_mailboxes' % key)
-            pm = self.parsed_mailboxes[key][-1]
+            pm = self.parsed_mailboxes[cache_key][-1]
             beg = skip
             end = skip + (limit or (len(pm)-skip))
             return self.reply_json(pm[beg:end])
@@ -164,6 +177,8 @@ class StorageWorker(BaseWorker):
             collect = []
             parser = self.backend.iter_mailbox(key,
                 skip=skip, username=username, password=password)
+
+            # Ideally, we wouldn't cache anything. But some ops are slow.
             parse_cache = [time.time(), False, collect]
 
             if limit is None:
@@ -171,7 +186,8 @@ class StorageWorker(BaseWorker):
                 logging.debug(
                     '%s: Returning %d messages (u)' % (key, len(collect)))
                 parse_cache[1] = True
-                self.parsed_mailboxes[key] = parse_cache
+                if len(collect) > self.PARSE_CACHE_MIN:
+                    self.parsed_mailboxes[cache_key] = parse_cache
                 return self.reply_json(collect)
 
             result = []
@@ -182,43 +198,46 @@ class StorageWorker(BaseWorker):
                 result.append(msg)
 
             logging.debug('%s: Returning %d messages' % (key, len(result)))
-            self.parsed_mailboxes[key] = parse_cache
+            self.parsed_mailboxes[cache_key] = parse_cache
             self.reply_json(result)
 
         except PleaseUnlockError as pue:
-            logging.debug('Need unlock, raising NeedInfoException')
-            needs, neo = [], NeedInfoException
-            if pue.username:
-                needs.append(neo.Need('Username', 'username'))
-            if pue.password:
-                needs.append(
-                    neo.Need('Password', 'password', datatype='password'))
-            raise neo(str(pue), need=needs)
+            raise self.pue_to_needinfo(pue)
 
         # Finish in background thread
         if limit and len(result) >= limit:
             def finish():
                 logging.debug('%s: Background completing scan' % key)
                 collect.extend(msg for msg in parser)
-                self.parsed_mailboxes[key][1] = True
+                parse_cache[1] = True
                 self.background_thread = None
             self._background(finish)
         else:
-            self.parsed_mailboxes[key][1] = True
+            parse_cache[1] = True
 
     async def async_email(self, loop, metadata,
-            text=False, data=False, full_raw=False, parts=None):
+            text=False, data=False, full_raw=False, parts=None,
+            username=None, password=None):
         return await self.async_call(loop, 'email',
-            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts)
+            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts,
+            username, password)
 
     def email(self, metadata,
-            text=False, data=False, full_raw=False, parts=None):
+            text=False, data=False, full_raw=False, parts=None,
+            username=None, password=None):
         return self.call('email',
-            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts)
+            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts,
+            username, password)
 
-    def api_email(self, metadata, text, data, full_raw, parts, method=None):
+    def api_email(self, metadata, text, data, full_raw, parts,
+            username, password, method=None):
         metadata = Metadata(*(metadata[:Metadata.OFS_HEADERS] + [b'']))
-        parsed = self.backend.parse_message(metadata)
+        try:
+            parsed = self.backend.parse_message(metadata,
+                username=username, password=password)
+        except PleaseUnlockError as pue:
+            raise self.pue_to_needinfo(pue)
+
         if text:
             parsed.with_text()
         if data or parts:

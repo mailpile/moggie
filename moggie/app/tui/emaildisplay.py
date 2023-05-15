@@ -15,7 +15,8 @@ class EmailDisplay(urwid.ListBox):
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
-    def __init__(self, tui_frame, ctx_src_id, metadata, parsed=None):
+    def __init__(self, tui_frame, ctx_src_id, metadata,
+            username=None, password=None, parsed=None):
         self.tui_frame = tui_frame
         self.ctx_src_id = ctx_src_id
         self.metadata = Metadata(*metadata)
@@ -29,7 +30,8 @@ class EmailDisplay(urwid.ListBox):
         self.widgets = urwid.SimpleListWalker(
             list(self.headers()) + [self.email_body])
 
-        self.search_obj = RequestEmail(self.metadata, text=True)
+        self.search_obj = RequestEmail(self.metadata,
+            username=username, password=password, text=True)
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
         urwid.ListBox.__init__(self, self.widgets)

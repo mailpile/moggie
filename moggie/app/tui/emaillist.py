@@ -222,7 +222,9 @@ class EmailList(urwid.Pile):
 
     def show_email(self, metadata):
         self.tui_frame.col_show(self,
-            EmailDisplay(self.tui_frame, self.ctx_src_id, metadata))
+            EmailDisplay(self.tui_frame, self.ctx_src_id, metadata,
+                username=self.search_obj.username,
+                password=self.search_obj.password))
         try:
             self.tui_frame.columns.set_focus_path([1])
         except IndexError:
@@ -246,6 +248,12 @@ class EmailList(urwid.Pile):
         try:
             self.suggestions.incoming_message(message)
             self.walker.add_emails(message['skip'], message['emails'])
+
+            # This gets echoed back to us, if the request was retried
+            # due to access controls. We may need to pass this back again
+            # in order to read mail.
+            self.search_obj.username = message.get('username')
+            self.search_obj.password = message.get('password')
 
             self.want_more = (message['limit'] == len(message['emails']))
             self.loading = 0

@@ -22,6 +22,7 @@ from upagekite.httpd import HTTPD, url, async_url
 from upagekite.web import process_post, http_require, access_requires
 from upagekite.websocket import websocket, ws_broadcast
 
+from ..api.exceptions import reraise
 from ..app.cli import CLI_COMMANDS
 from ..app.core import AppCore
 from ..util.dumbcode import to_json, from_json
@@ -287,13 +288,17 @@ class AppWorker(PublicWorker):
 
     async def async_api_request(self, access, request_obj):
         if self._sock:
-            return await self.app.api_request(
+            result = await self.app.api_request(
                 None, access, request_obj, internal=True)
+            if 'exception' in result:
+                reraise(result)
+            else:
+                return result
 
-        # FIXME: It would be nice if this were async too...
         if (access is True) or (access and
                 access.config_key == self.app.config.ACCESS_ZERO):
-            return self.call('rpc/api', request_obj)
+            loop = asyncio.get_event_loop(),
+            return await self.async_call(loop, 'rpc/api', request_obj)
         else:
             raise PermissionError('Access denied')
 

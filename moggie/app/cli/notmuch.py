@@ -440,7 +440,9 @@ FIXME: Document html and html formats!
                         text=(not raw or part),
                         data=(True if part else False),
                         parts=([part-1] if part else None),
-                        full_raw=(raw and not part))
+                        full_raw=(raw and not part),
+                        username=self.options['--username='][-1],
+                        password=self.options['--password='][-1])
                     query['context'] = self.context
                     msg = await self.worker.async_api_request(
                         self.access, query)
@@ -741,13 +743,13 @@ FIXME: Document html and html formats!
             if output not in valid_outputs:
                 raise Nonsense('Need --output=X, with X one of: %s'
                     % ', '.join(valid_outputs))
-            query = RequestMailbox(
-                context=self.context,
-                username=self.options['--username='][-1],
-                password=self.options['--password='][-1],
-                mailbox=self.terms[8:])
+            mailbox = self.terms[8:]
+            query = RequestMailbox(context=self.context, mailbox=mailbox)
         else:
             query = RequestSearch(context=self.context, terms=self.terms)
+
+        query['username'] = self.options['--username='][-1]
+        query['password'] = self.options['--password='][-1]
 
         if self.options.get('--offset=', [None])[-1]:
             query['skip'] = int(self.options['--offset='][-1])

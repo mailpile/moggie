@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import copy
 import logging
 import os
 import random
@@ -652,7 +653,9 @@ main app worker. Hints:
                 text=api_request.get('text', False),
                 data=api_request.get('data', False),
                 parts=api_request.get('parts', None),
-                full_raw=api_request.get('full_raw', False))
+                full_raw=api_request.get('full_raw', False),
+                username=api_request.get('username'),
+                password=api_request.get('password'))
         return ResponseEmail(api_request, await get_email())
 
     async def api_req_contexts(self, conn_id, access, api_request):
@@ -760,8 +763,14 @@ main app worker. Hints:
         return ResponsePing(api_request)  # FIXME
 
     async def api_req_cli(self, conn_id, access, api_req):
+        args = copy.copy(api_req['args'])
+        for k in ('username', 'password'):
+            v = api_req.get(k)
+            if v is not None:
+                args.append('--%s=%s' % (k, v))
+
         rbuf_cmd = await CLI_COMMANDS.get(api_req.command).MsgRunnable(
-            self.worker, access, api_req['args'])
+            self.worker, access, args)
         if rbuf_cmd is None:
             return ResponseCommand(api_req, 'text/error', 'No such command')
 

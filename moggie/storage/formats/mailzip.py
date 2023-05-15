@@ -25,15 +25,14 @@ class FormatMailzip(FormatBytes):
     @classmethod
     def Zipfile(self, parent, key, mode='r'):
         if hasattr(key, 'fileno'):
-            return zipfile.ZipFile(key, mode=mode)
+            return zipfile.AESZipFile(key, mode=mode)
         else:
             if isinstance(key, str):
                 key = bytes(key, 'utf-8')
-            return zipfile.ZipFile(parent.key_to_path(key), mode=mode)
+            return zipfile.AESZipFile(parent.key_to_path(key), mode=mode)
 
     @classmethod
     def Magic(cls, parent, key, info=None, is_dir=None):
-        print('Magic(%s, %s)' % (parent, key))
         if is_dir:
             return False
         try:
@@ -48,17 +47,39 @@ class FormatMailzip(FormatBytes):
 
     def __init__(self, parent, path, container, **kwargs):
         super().__init__(parent, path, container, **kwargs)
-        # FIXME: Crypto!
         self.zf = self.Zipfile(parent, path[0], mode='r')
+        password = kwargs.get('password')
+        if password:
+            self.unlock(None, password)
+
+    def unlock(self, ignored_username, password, ask_key=None, set_key=None):
+        if password:
+            if not isinstance(password, bytes):
+                password = bytes(password, 'utf-8')
+            self.password = password
+            self.zf.setpassword(password)
+        return self
 
     def __contains__(self, key):
-        return key in self.files
+        return key[1:] in self.zf
 
     def __getitem__(self, key):
         if isinstance(key, bytes):
             key = str(key, 'utf-8')
-        with self.zf.open(key, 'r') as fd:
-            return fd.read()
+        try:
+            logging.debug('Reading: %s' % key[1:])
+            with self.zf.open(key[1:], 'r') as fd:
+                return fd.read()
+        except RuntimeError as e:
+            logging.debug('Oops: %s' % e)
+            try:
+                p = str(self.path[0], 'utf-8')
+            except:
+                p = self.path[0]
+            raise PleaseUnlockError('Need password to decrypt %s (in %s)'
+                    % (os.path.basename(p), os.path.dirname(p)),
+                username=False,
+                resource=self.path)
 
     def __delitem__(self, key):
         raise IOError('FIXME: Cannot delete from mailzips yet')
@@ -73,17 +94,18 @@ class FormatMailzip(FormatBytes):
         raise IOError('FIXME: Cannot add to mailzips yet')
 
     def keys(self):
-        return sorted([i.filename
+        return sorted(['/' + i.filename
             for i in self.zf.infolist() if self.FILE_RE.search(i.filename)])
 
     def iter_email_metadata(self,
             skip=0, iterator=None, username=None, password=None):
         now = int(time.time())
         lts = 0
+        obj = ''
         try:
             for key in self.keys():
-                path = self.get_tagged_path(bytes(key, 'utf-8'))
                 obj = self[key]
+                path = self.get_tagged_path(bytes(key, 'utf-8'))
                 hend, hdrs = quick_msgparse(obj, 0)
                 lts, md = make_ts_and_Metadata(
                     now, lts, obj[:hend],
@@ -91,8 +113,7 @@ class FormatMailzip(FormatBytes):
                     hdrs)
                 yield(md)
         except (KeyError, ValueError, TypeError) as e:
-            import traceback
-            traceback.print_exc()
+            logging.exception('Failed to read mailbox')
             return
 
 

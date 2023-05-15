@@ -55,6 +55,8 @@ class ResponseMailbox(dict):
             'mailbox': request['mailbox'],
             'limit': request['limit'],
             'skip': request['skip'],
+            'username': request.get('username'),
+            'password': request.get('password'),
             'watched': watched,
             'emails': emails})
 
@@ -144,5 +146,8 @@ class ResponseCommand(dict):
         self.update({
             'req_type': request['req_type'],
             'req_id': request['req_id'],
+            'req_args': request['args'],
+            'username': request.get('username'),
+            'password': request.get('password'),
             'mimetype': mimetype,
             'data': data})

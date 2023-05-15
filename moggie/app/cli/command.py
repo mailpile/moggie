@@ -5,7 +5,7 @@ import time
 import sys
 
 from ... import config
-from ...api.exceptions import NeedInfoException
+from ...api.exceptions import APIException, NeedInfoException
 from ...config import AccessConfig
 from ...util.dumbcode import to_json, from_json
 
@@ -85,9 +85,9 @@ class CLICommand:
                 else:
                     reply_buffer.append(msg)
         try:
-            cmd_obj = cls(app.profile_dir, args,
+            cmd_obj = cls(app.profile_dir, copy.copy(args),
                 access=access, appworker=app, connect=False)
-            cmd_obj.set_msg_defaults(args)
+            cmd_obj.set_msg_defaults(copy.copy(args))
             cmd_obj.write_reply = reply
             cmd_obj.write_error = reply
             cmd_obj.stdin = []
@@ -261,14 +261,14 @@ class CLICommand:
         self.write_error(' '.join(args) + nl)
 
     async def repeatable_async_api_request(self, access, query):
-        nei = None
-        try:
-            return await self.worker.async_api_request(access, query)
-        except NeedInfoException as exc:
-            nei = exc
-
-        from getpass import getpass
         if self.stdin == sys.stdin:
+            nei = None
+            try:
+                return await self.worker.async_api_request(access, query)
+            except NeedInfoException as exc:
+                nei = exc
+
+            from getpass import getpass
             sys.stderr.write(str(nei) + '\n')
             for need in nei.need:
                 if need.datatype == 'password':
@@ -393,6 +393,8 @@ class CLICommand:
     async def web_run(self):
         try:
             return await self.run()
+        except APIException:
+            raise
         except PermissionError:
             logging.info('Access denied in %s' % self.NAME)
         except:

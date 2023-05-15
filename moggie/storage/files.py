@@ -10,6 +10,7 @@ from ..email.metadata import Metadata
 from ..email.parsemime import parse_message as ep_parse_message
 from ..email.util import quick_msgparse, make_ts_and_Metadata
 from ..util.dumbcode import *
+from ..util.mailpile import PleaseUnlockError
 
 from .base import BaseStorage
 from .formats import split_tagged_path, tag_path
@@ -119,7 +120,7 @@ class FileStorage(BaseStorage):
         except ValueError as e:
             return b''  # mmap() thows ValueError on empty file
 
-    def __getitem__(self, key):
+    def __getitem__(self, key, *unlock_args):
         try:
             paths = self.key_to_paths(key)
             ptr = [paths.pop(0)]
@@ -128,9 +129,15 @@ class FileStorage(BaseStorage):
             except IsADirectoryError:
                 cc = None
             for sub_type, sub_path in paths:
-                cc = FORMATS[sub_type](self, ptr, cc)[sub_path]
+                sc = FORMATS[sub_type](self, ptr, cc)
+                if unlock_args:
+                    logging.debug('unlock_args=%s' % (unlock_args,))
+                    sc = self.unlock_mailbox(sc, *unlock_args)
+                cc = sc[sub_path]
                 ptr.append((sub_type, sub_path))
             return cc
+        except PleaseUnlockError:
+            raise
         except OSError:
             pass
         raise KeyError('Not found or access denied for %s' % key)
@@ -274,6 +281,20 @@ class FileStorage(BaseStorage):
                     return cls(self, paths, self[filepath])
         return None
 
+    def unlock_mailbox(self, mailbox, username, password, context, sec_ttl):
+        if hasattr(mailbox, 'unlock'):
+            _unlock_kwa = {}
+            if self.ask_secret:
+                def _ak(resource):
+                    return self.ask_secret(context, resource)
+                _unlock_kwa['ask_key'] = _ak
+            if self.set_secret:
+                def _sk(resource, key):
+                    self.set_secret(context, resource, key, sec_ttl)
+                _unlock_kwa['set_key'] = _sk
+            mailbox.unlock(username, password, **_unlock_kwa)
+        return mailbox
+
     def iter_mailbox(self, key,
             skip=0, limit=None,
             username=None, password=None, context=None, secret_ttl=None):
@@ -284,17 +305,9 @@ class FileStorage(BaseStorage):
             if mailbox is None:
                 logging.debug('Failed to open mailbox: %s' % key)
             else:
-                if hasattr(mailbox, 'unlock'):
-                    _unlock_kwa = {}
-                    if self.ask_secret:
-                        def _ak(resource):
-                            return self.ask_secret(context, resource)
-                        _unlock_kwa['ask_key'] = _ak
-                    if self.set_secret:
-                        def _sk(resource, key):
-                            self.set_secret(context, resource, key, secret_ttl)
-                        _unlock_kwa['set_key'] = _sk
-                    mailbox.unlock(username, password, **_unlock_kwa)
+                if username or password:
+                    self.unlock_mailbox(
+                        mailbox, username, password, context, secret_ttl)
                 parser = mailbox.iter_email_metadata(skip=skip)
         if limit is None:
             yield from parser
@@ -321,7 +334,8 @@ class FileStorage(BaseStorage):
                 failed.append(ptr)
         return failed
 
-    def message(self, metadata, with_ptr=False):
+    def message(self, metadata, with_ptr=False,
+            username=None, password=None, context=None, secret_ttl=None):
         """
         Returns a slice of bytes that map to the message on disk.
         Works for both maildir and mbox messages.
@@ -329,6 +343,11 @@ class FileStorage(BaseStorage):
         ptr = metadata.pointers[0]  # Filesystem pointers are always first
         if ptr.ptr_type != Metadata.PTR.IS_FS:
             raise KeyError('Not a filesystem pointer: %s' % ptr)
+
+        if username or password:
+            gi_args = (username, password, context, secret_ttl)
+        else:
+            gi_args = set()
 
         # FIXME: We need to check whether this is actually the right message, or
         #        whether the mailbox has changed from under us. If it has, we
@@ -341,17 +360,18 @@ class FileStorage(BaseStorage):
             if ptr.ptr_type == Metadata.PTR.IS_FS:
                 try:
                     if with_ptr:
-                        return ptr, self[ptr.ptr_path]
+                        return ptr, self.__getitem__(ptr.ptr_path, *gi_args)
                     else:
-                        return self[ptr.ptr_path]
+                        return self.__getitem__(ptr.ptr_path, *gi_args)
+                except PleaseUnlockError:
+                    raise
                 except (KeyError, OSError) as e:
-                    print('%s' % e)
-                    pass
+                    logging.exception('Loading e-mail failed')
 
         raise KeyError('Not found: %s' % dumb_decode(ptr.ptr_path))
 
-    def parse_message(self, metadata):
-        msg = self.message(metadata)
+    def parse_message(self, metadata, **kwargs):
+        msg = self.message(metadata, **kwargs)
         return ep_parse_message(msg, fix_mbox_from=(msg[:5] == b'From '))
 
 
