@@ -59,10 +59,11 @@ class TuiConnManager:
         self.handlers[pattern] = handlers
         return _id
 
-    def del_handler(self, _id):
+    def del_handler(self, *_ids):
         for pattern in self.handlers:
-            if _id in self.handlers[pattern]:
-                del self.handlers[pattern][_id]
+            for _id in _ids:
+                if _id in self.handlers[pattern]:
+                    del self.handlers[pattern][_id]
 
     def send(self, message, bridge_name=None):
         if self.connecting is not None:

@@ -144,9 +144,10 @@ class TuiFrame(urwid.Frame):
                 icon=EMOJI.get('browsing', '-'))
 
     def show_mailbox(self, which, context=None, history=True):
-        ctx_id, ctx_src_id = self.context_list.get_context_and_src_ids(context)
-        self.col_show(self.all_columns[0],
-            EmailList(self, RequestMailbox(ctx_id, which), ctx_src_id))
+        _, ctx_src_id = self.context_list.get_context_and_src_ids(context)
+        terms = 'mailbox:%s' % which
+        self.col_show(self.all_columns[0], EmailList(self, ctx_src_id, terms))
+
         if history:
             self.context_list.add_history(
                 os.path.basename(which),
@@ -154,13 +155,13 @@ class TuiFrame(urwid.Frame):
                 icon=EMOJI.get('mailbox', '-'))
 
     def show_search_result(self, terms, context=None, history=True):
+        # FIXME: The app should return an error and we retry
         if self.is_locked:
             self.topbar.open_with(UnlockDialog)
             return
 
-        ctx_id, ctx_src_id = self.context_list.get_context_and_src_ids(context)
-        self.col_show(self.all_columns[0],
-            EmailList(self, RequestSearch(ctx_id, terms), ctx_src_id))
+        _, ctx_src_id = self.context_list.get_context_and_src_ids(context)
+        self.col_show(self.all_columns[0], EmailList(self, ctx_src_id, terms))
         if history:
             self.context_list.add_history(
                 terms,

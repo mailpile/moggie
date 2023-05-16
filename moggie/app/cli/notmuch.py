@@ -93,11 +93,13 @@ class CommandSearch(CLICommand):
 
        * `summary` - A summary of threads matching the search
        * `threads` - A list of thread IDs matching the search
-       * `messages` - A list of moggie messagee IDs matching the search
+       * `messages` - A list of moggie message IDs matching the search
        * `files` - A list of file paths matching the search
        * `tags` - A list of tags found on messages matching the search
        * `emails` - Entire e-mails matching the search
        * `thread_emails` - Entire e-mails from threads matching the search
+       * `metadata` - Moggie's metadata about the messages
+       * `thread_metadata` - Metadata for entire threads matching the search
 
     Supported formats:
 
@@ -169,6 +171,7 @@ FIXME: Document html and html formats!
     def __init__(self, *args, **kwargs):
         self.displayed = {}
         self.default_output = 'summary'
+        self.with_result_meta = False
         self.fake_tid = int(time.time() * 1000)
         self.raw_results = None
         self.exporter = None
@@ -202,6 +205,15 @@ FIXME: Document html and html formats!
                 'maildir', 'mailzip', 'zip', 'mbox'):
             self.default_output = 'emails'
 
+        output = self.options['--output=']
+        if 'result-meta' in output:
+            self.with_result_meta = True
+            output.remove('result-meta')
+        if len(output) > 1:
+            output.remove('default')
+        if len(output) > 1:
+            raise Nonsense('Please only request one type of output')
+
         if ((self.options.get('--zip-password=') or [None])[-1] and
                self.options['--format='][-1] not in ('zip', 'mailzip')):
             raise Nonsense('Encryption is only supported with ZIP formats')
@@ -212,6 +224,14 @@ FIXME: Document html and html formats!
     async def as_metadata(self, md):
         if md is not None:
             yield ('%s', Metadata(*md).parsed())
+
+    async def as_threads_metadata(self, thread):
+        if thread is not None:
+            hits = thread['hits']
+            for md in thread['messages']:
+                md = Metadata(*md).parsed()
+                md['is_hit'] = md['idx'] in hits
+                yield ('%s', md)
 
     def _as_thread(self, result):
         if 'thread' in result:
@@ -702,6 +722,9 @@ FIXME: Document html and html formats!
         elif output == 'metadata':
             self.write_error = lambda e: None
             return self.as_metadata
+        elif output == 'threads_metadata':
+            self.write_error = lambda e: None
+            return self.as_threads_metadata
         elif output == 'emails':
             self.write_error = lambda e: None
             return self.as_emails
@@ -760,6 +783,8 @@ FIXME: Document html and html formats!
             query['threads'] = True
             query['only_ids'] = False
             self.batch = 2000
+        elif output == 'threads_metadata':
+            query['threads'] = True
         elif output == 'threads':
             query['threads'] = True
             query['only_ids'] = True

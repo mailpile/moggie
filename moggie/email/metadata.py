@@ -166,6 +166,11 @@ class Metadata(list):
         except (AttributeError, IndexError, TypeError):
             return None
 
+    @classmethod
+    def FromParsed(cls, p):
+        # FIXME: This is incomplete
+        return cls(p['ts'], p['idx'], p['ptrs'], p['raw_headers'])
+
     def parsed(self, force=False):
         if force or self._parsed is None:
             self._parsed = {

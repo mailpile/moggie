@@ -100,7 +100,9 @@ class ContextList(urwid.ListBox):
             if isinstance(message_obj, dict):
                 message_obj['context'] = context['key']
             if isinstance(message_obj, RequestCommand):
-                message_obj['args'][:0] = ['--context=%s' % context['key']]
+                context_arg = ['--context=%s' % context['key']]
+                if message_obj['args'][:1] != context_arg:
+                    message_obj['args'][:0] = context_arg
 
             bridge = context['source']
         else:

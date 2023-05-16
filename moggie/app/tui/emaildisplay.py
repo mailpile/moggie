@@ -19,18 +19,17 @@ class EmailDisplay(urwid.ListBox):
             username=None, password=None, parsed=None):
         self.tui_frame = tui_frame
         self.ctx_src_id = ctx_src_id
-        self.metadata = Metadata(*metadata)
-        self.parsed = self.metadata.parsed()
+        self.metadata = metadata
         self.email = parsed
-        self.uuid = self.metadata.uuid_asc
-        self.crumb = self.parsed.get('subject', 'FIXME')
+        self.uuid = self.metadata['uuid']
+        self.crumb = self.metadata.get('subject', '(no subject)')
 
         self.rendered_width = self.COLUMN_NEEDS
         self.email_body = urwid.Text('(loading...)')
         self.widgets = urwid.SimpleListWalker(
             list(self.headers()) + [self.email_body])
 
-        self.search_obj = RequestEmail(self.metadata,
+        self.search_obj = RequestEmail(Metadata.FromParsed(self.metadata),
             username=username, password=password, text=True)
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
@@ -39,14 +38,16 @@ class EmailDisplay(urwid.ListBox):
     def headers(self):
         for field in ('Date:', 'To:', 'Cc:', 'From:', 'Reply-To:', 'Subject:'):
             fkey = field[:-1].lower()
-            if fkey not in self.parsed:
+            if fkey not in self.metadata:
                 continue
 
-            value = self.parsed[fkey]
+            value = self.metadata[fkey]
             if not isinstance(value, list):
                 value = [value]
 
             for val in value:
+                if isinstance(val, dict):
+                    val = AddressInfo(**val)
                 if isinstance(val, AddressInfo):
                     if val.fn:
                         val = '%s <%s>' % (val.fn, val.address)
