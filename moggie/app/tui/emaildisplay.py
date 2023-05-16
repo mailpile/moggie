@@ -1,10 +1,12 @@
+import logging
 import re
 import sys
 import urwid
 
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
-from ...api.requests import RequestEmail
+from ...api.requests import RequestCommand
+from ...util.dumbcode import to_json
 
 from .widgets import *
 
@@ -29,11 +31,22 @@ class EmailDisplay(urwid.ListBox):
         self.widgets = urwid.SimpleListWalker(
             list(self.headers()) + [self.email_body])
 
-        self.search_obj = RequestEmail(Metadata.FromParsed(self.metadata),
-            username=username, password=password, text=True)
+        self.search_obj = self.get_search_obj(metadata, username, password)
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
         urwid.ListBox.__init__(self, self.widgets)
+
+        me = 'emaildisplay'
+        _h = self.tui_frame.conn_manager.add_handler
+        self.cm_handler_ids = [
+            _h(me, ctx_src_id, 'cli:parse', self.incoming_parse)]
+
+    def cleanup(self):
+        self.tui_frame.conn_manager.del_handler(*self.cm_handler_ids)
+        del self.tui_frame
+        del self.metadata
+        del self.widgets
+        del self.email
 
     def headers(self):
         for field in ('Date:', 'To:', 'Cc:', 'From:', 'Reply-To:', 'Subject:'):
@@ -64,27 +77,41 @@ class EmailDisplay(urwid.ListBox):
                 field = ''
         yield(urwid.Divider())
 
-    def cleanup(self):
-        del self.tui_frame
-        del self.email
-
     def render(self, size, focus=False):
         self.rendered_width = size[0]
         return super().render(size, focus=focus)
 
-    def handle_bridge_messages(self, bridge_name, message):
+    def get_search_obj(self, metadata, username, password):
+        parse_args = [
+            # Reset to the bare minimum, we can as for more if the user
+            # wants it (and as the app evolves).
+            '--with-nothing=Y',
+            '--with-headers=Y',
+            '--with-structure=Y',
+            '--with-text=Y',
+            '--ignore-index=N',
+            # We convert the HTML to text here, so we can wrap lines.
+            '--with-html-text=N',
+            '--with-html-clean=N',
+            '--with-html=Y']
+        if username:
+            parse_args.append('--username=%s' % username)
+        if password:
+            parse_args.append('--password=%s' % password)
+        parse_args.append(to_json(metadata))
+        return RequestCommand('parse', args=parse_args)
+
+    def incoming_parse(self, source, message):
         from moggie.security.html import html_to_markdown
-        # FIXME: Make this less messy
 
         def _to_md(txt):
             return html_to_markdown(txt,
                 no_images=True,
                 wrap=min(self.COLUMN_WANTS, self.rendered_width-1))
 
-        if (message.get('req_type') != self.search_obj['req_type'] or
-                message.get('req_id') != self.search_obj['req_id']):
-            return
-        self.email = message['email']
+        for data in message['data']:
+            if isinstance(data, dict):
+                self.email = data['parsed']
 
         email_txts = {'text/plain': '', 'text/html': ''}
         for ctype, fmt in (

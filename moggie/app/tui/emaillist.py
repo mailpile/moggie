@@ -66,7 +66,13 @@ class EmailListWalker(urwid.ListWalker):
         for msg in self.visible:
             tf = _thread_first(msg)
             tf['_tts'] = max(tf.get('_tts') or 0, msg['ts'])
-            msg['_prefix'] = ' ' * _depth(msg)
+            depth = _depth(msg)
+            if depth > 8:
+                prefix = '  %d> ' % depth
+                prefix += ' ' * (9 - len(prefix))
+            else:
+                prefix = ' ' * depth
+            msg['_prefix'] = prefix
 
         def _sort_key(msg):
             return (-_thread_first(msg)['_tts'], msg['ts'], msg['idx'])
@@ -232,9 +238,8 @@ class EmailList(urwid.Pile):
             update_parent=self.update_content)
         self.widgets = []
 
-        self.conn_manager = tui_frame.conn_manager
         me = 'emaillist'
-        _h = self.conn_manager.add_handler
+        _h = self.tui_frame.conn_manager.add_handler
         self.cm_handler_ids = [
             _h(me, ctx_src_id, 'cli:search', self.incoming_result),
             _h(me, ctx_src_id, 'cli:count', self.incoming_count)]
@@ -245,23 +250,14 @@ class EmailList(urwid.Pile):
         self.load_more()
 
     def cleanup(self):
-        self.conn_manager.del_handler(*self.cm_handler_ids)
+        self.tui_frame.conn_manager.del_handler(*self.cm_handler_ids)
         self.search_obj = None
         del self.tui_frame
-        del self.conn_manager
         del self.walker.emails
         del self.emails
         del self.listbox
         del self.widgets
         del self.suggestions
-
-    def _get_terms(self):
-        if self.search_obj['req_type'] == 'cli:search':
-            terms = [a[4:] for a in self.search_obj['args'] if a[:4] == '--q=']
-            terms = ' '.join(terms)
-        else:
-            terms = self.search_obj.get('terms', 'FIXME')
-        return terms
 
     def make_search_obj(self):
         search_args = [
@@ -278,7 +274,7 @@ class EmailList(urwid.Pile):
     def set_crumb(self, update=False):
         self.crumb = self.search_obj.get('mailbox', None)
         if not self.crumb:
-            terms = self._get_terms()
+            terms = self.terms
             if terms.startswith('in:'):
                 terms = terms[3].upper() + terms[4:]
             elif terms == 'all:mail':
@@ -351,7 +347,7 @@ class EmailList(urwid.Pile):
                     '--limit=%d' % self.want_emails]
             if self.total_available is None:
                 self.tui_frame.send_with_context(
-                    RequestCommand('count', args=[self._get_terms()]),
+                    RequestCommand('count', args=[self.terms]),
                     self.ctx_src_id)
         elif self.search_obj['req_type'] == 'mailbox':
             self.search_obj['limit'] = None
@@ -366,9 +362,6 @@ class EmailList(urwid.Pile):
         self.set_crumb(update=True)
 
     def incoming_result(self, source, message):
-        if (not self.search_obj
-                or message.get('req_id') != self.search_obj['req_id']):
-            return
         try:
             self.walker.set_emails(message['data'])
 

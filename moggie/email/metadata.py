@@ -4,7 +4,7 @@ import re
 import time
 
 from ..storage.formats import tag_path, split_tagged_path
-from ..util.dumbcode import dumb_decode, dumb_encode_asc, dumb_encode_bin
+from ..util.dumbcode import dumb_decode, dumb_encode_asc, dumb_encode_bin, from_json
 from .headers import parse_header
 
 
@@ -168,8 +168,13 @@ class Metadata(list):
 
     @classmethod
     def FromParsed(cls, p):
-        # FIXME: This is incomplete
-        return cls(p['ts'], p['idx'], p['ptrs'], p['raw_headers'])
+        if isinstance(p, str):
+            p = from_json(p)
+        if isinstance(p, dict):
+            return cls(p['ts'], p['idx'], p['ptrs'], p['raw_headers'])
+        elif isinstance(p, list):
+            return cls(*p)
+        raise ValueError('Could not parse metadata %s' % p)
 
     def parsed(self, force=False):
         if force or self._parsed is None:

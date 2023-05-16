@@ -30,12 +30,13 @@ import time
 
 from .command import Nonsense, CLICommand, AccessConfig
 from .openpgp import CommandOpenPGP
+from ...api.requests import RequestSearch, RequestEmail
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
-from ...api.requests import RequestSearch, RequestEmail
 from ...security.html import HTMLCleaner
 from ...security.css import CSSCleaner
+from ...util.dumbcode import from_json
 
 
 def _html_quote(t):
@@ -1791,8 +1792,21 @@ These are the %d searchable keywords for this message:
     async def gather_emails(self):
         for search in self.searches:
             worker = self.connect()
-            request = RequestSearch(context=self.context, terms=search)
-            result = await self.worker.async_api_request(self.access, request)
+
+            metadata = None
+            if isinstance(search, (dict, list)):
+                # Metadata as dict!
+                metadata = search
+            elif search[:1] in ('{', '[') and search[-1:] in (']', '}'):
+                metadata = search
+
+            if metadata:
+                result = {'emails': [Metadata.FromParsed(metadata)]}
+            else:
+                request = RequestSearch(context=self.context, terms=search)
+                result = await self.repeatable_async_api_request(
+                    self.access, request)
+
             if result and 'emails' in result:
                 for metadata in result['emails']:
                     req = RequestEmail(metadata=metadata, full_raw=True)
