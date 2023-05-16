@@ -1,3 +1,4 @@
+import asyncio
 import inspect
 import logging
 import os
@@ -164,8 +165,9 @@ class BaseWorker(Process):
 
                 async def async_wrap(*args, **kwargs):
                     if self.url or not allow_local:
+                        loop = asyncio.get_event_loop()
                         result = await self.async_call(
-                            prefix + name, *args, **kwargs)
+                            loop, prefix + name, *args, **kwargs)
                     else:
                         result = dict_wrap(False, *args, **kwargs)
                     return result
@@ -585,12 +587,12 @@ class BaseWorker(Process):
 
         if remote:
             parts[-1] = path
-            conn = lambda **kw: http1x_connect(*parts, **kw)
+            conn_method = lambda **kw: http1x_connect(*parts, **kw)
         else:
-            conn = lambda **kw: self._conn(path, **kw)
+            conn_method = lambda **kw: self._conn(path, **kw)
 
         if upload:
-            conn = conn(
+            conn = conn_method(
                 method='POST',
                 headers=(self._auth_header
                     + 'Content-Length: %d\r\n' % len(upload)),
@@ -606,7 +608,7 @@ class BaseWorker(Process):
                 logging.warning('Upload(%s) failed: %s' % (path, e))
                 raise
         else:
-            conn = conn(method=method, headers=self._auth_header,
+            conn = conn_method(method=method, headers=self._auth_header,
                 prep_only=prep_only)
         if prep_only:
             return upload, conn
