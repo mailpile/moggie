@@ -193,8 +193,10 @@ class HTMLCleaner(HTMLParser):
         """
         def _tagless(c):
             return re.sub(r'<[^>]+>', '', c[:80])
+
         m = self.RE_WEBSITE.match(_tagless(b).lower())
-        page_domain = m.group(2) if m else ''
+        page_domain = m.group(2) if m else None
+
         danger = []
         for i, (a, v) in enumerate(attrs):
             if (a == 'href') and v:
@@ -202,18 +204,25 @@ class HTMLCleaner(HTMLParser):
                 #        which requires Javascript to undo? This IS how users
                 #        get phished, so extra steps here are justified.
                 self.a_hrefs.append(v)
-                if not (v.startswith('http://')
-                        or v.startswith('https://')
-                        or v.startswith('mailto:')
-                        or v.startswith('cid:')):
+                ok, parts = True, v.split('/')
+                if not (parts and parts[0] in (
+                        'http:', 'https:', 'mailto:', 'cid:')):
+                    # Invailid proto, distrust
+                    ok = False
+
+                if ok and page_domain:
+                    # If domain is in description, make sure it matches URL
+                    dp = 2 if parts[0] in ('http:', 'https:') else 1
+                    ok = parts[dp].endswith(page_domain)
+
+                if ok and parts[0] in ('http:', 'https:'):
+                    # HTTP and HTTPS URLs should not have @-signs in the
+                    # hostname part, that's both a very common phishing
+                    # technique, and a bad practice otherwise.
+                    ok = (len(parts) > 2) and ('@' not in parts[2])
+
+                if not ok:
                     danger.append(i)
-                elif m:
-                    ok, parts = False, v.split('/')
-                    for p in parts:
-                        if p.endswith(page_domain):
-                            ok = True
-                    if not ok:
-                        danger.append(i)
         if danger:
             for i in reversed(danger):
                 a, v = attrs.pop(i)
@@ -674,7 +683,8 @@ if __name__ == '__main__':
   <a href="http://spamsite/">https://<b>www.google.com</b>/</a>
   <a href="http://google.com.spamsite/">https://www.google.com/</a>
   <a href="https://www.google.com/">google.com</a>
-  <a href="https://www.google.com/">www.google.com</a>
+  <a href="https://www.google.com/things/and/stuff">www.google.com</a>
+  <a href="https://www.google.com@evil.com/">click me</a>
   <a href="javascript:alert('evil')">hooray</a>
   <ul onclick="evil javascript;">
     <li>One
