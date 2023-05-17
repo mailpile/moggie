@@ -1,9 +1,10 @@
 from ...config import APPNAME, APPVER
 
 EMOJI = {
-    'mailbox': '\U0001F4C1',
-    'search':  '\U0001F50E',
-    'lock':    '\U0001F512'}
+    'mailbox':    '\U0001F4C1',
+    'search':     '\U0001F50E',
+    'attachment': '\U0001F4CE',
+    'lock':       '\U0001F512'}
 
 
 ENVELOPES = ("""\
@@ -53,8 +54,6 @@ def palette(config):
             ('sidebar',        'light gray',  'black',     ''),
             ('content',        'light gray',  'black',     ''),
             ('email',          'brown',       'black',     ''),
-            ('active',         'light blue',  'black',     ''),
-            ('active',         'white',       'brown',     ''),
             ('hotkey',         'brown',       'black',     ''),
             ('act_hk',         'black',       'brown',     ''),
             ('crumbs',         'white',       'dark blue', ''),
@@ -67,19 +66,23 @@ def palette(config):
             ('list_attrs',     'dark gray',   'black',     ''),
             ('list_subject',   'light gray',  'black',     ''),
             ('list_date',      'dark gray',   'black',     ''),
-            ('check_from',     'light green', 'black', ''),
+            ('check_from',     'light green', 'black',     ''),
             ('check_attrs',    'dark green',  'black',     ''),
             ('check_subject',  'light green', 'black',     ''),
             ('check_date',     'dark green',  'black',     ''),
             ('email_key_from', 'dark gray',   'black',     ''),
             ('email_val_from', 'light blue',  'black',     ''),
+            ('email_key_att',  'dark gray',   'black',     ''),
+            ('email_val_att',  'light blue',  'black',     ''),
             ('email_key_to',   'dark gray',   'black',     ''),
             ('email_val_to',   'dark gray',   'black',     ''),
             ('email_key_cc',   'dark gray',   'black',     ''),
             ('email_val_cc',   'dark gray',   'black',     ''),
             ('email_key_date', 'dark gray',   'black',     ''),
             ('email_val_date', 'dark gray',   'black',     ''),
-            ('email_key_subject', 'dark gray',   'black',  ''),
-            ('email_val_subject', 'light green', 'black',  ''),
+            ('email_key_subj', 'dark gray',   'black',  ''),
+            ('email_val_subj', 'light green', 'black',  ''),
+            ('active',         'light blue',  'black',     ''),
+            ('active',         'white',       'brown',     ''),
             ('focus',          'white',       'dark blue', '')]
 

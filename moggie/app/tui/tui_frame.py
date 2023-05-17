@@ -2,6 +2,7 @@
 # from a high level and holds everything together.
 
 import asyncio
+import copy
 import datetime
 import logging
 import json
@@ -15,13 +16,13 @@ from ..suggestions import Suggestion, SuggestionWelcome
 
 from .decorations import EMOJI
 from .browser import Browser
+from .changepassdialog import ChangePassDialog
 from .contextlist import ContextList
 from .emaillist import EmailList
-from .changepassdialog import ChangePassDialog
-from .unlockdialog import UnlockDialog
 from .retrydialog import RetryDialog
 from .searchdialog import SearchDialog
 from .suggestionbox import SuggestionBox
+from .unlockdialog import UnlockDialog
 from .widgets import *
 
 
@@ -60,7 +61,7 @@ class TuiFrame(urwid.Frame):
         self.topbar = PopUpManager(self, self.topbar_pile)
 
         self.update_topbar(update=False)
-        self.update_columns(update=False, focus=False)
+        self.update_columns(update=False)
 
         urwid.Frame.__init__(self, self.columns, header=self.topbar)
         self.contents['header'] = (self.topbar, None)
@@ -210,9 +211,13 @@ class TuiFrame(urwid.Frame):
         now = time.time()
 
         maxwidth = self.render_cols_rows[0] - 2
-        crumbtrail = ': '.join(self.crumbs)
-        if len(crumbtrail) > maxwidth:
-            crumbtrail = '...' + crumbtrail[-(maxwidth-3):]
+        crumbs = copy.copy(self.crumbs)
+        for i, crumb in enumerate(crumbs):
+            if i < len(self.crumbs)-1 and crumb.endswith(')'):
+                crumbs[i] = crumb.rsplit(' (', 1)[0]
+        crumbtrail = ': '.join(crumbs)
+        if len(crumbtrail) > (maxwidth-20):
+            crumbtrail = '...' + crumbtrail[-(maxwidth-23):]
 
         pad = ' ' if maxwidth > 80 else ''
 
@@ -294,21 +299,22 @@ class TuiFrame(urwid.Frame):
 
     def focus_last_column(self):
         try:
-            self.columns.set_focus_path(
-                [len(self.all_columns) - self.hidden - 1])
-        except IndexError:
-            pass
+            last = len(self.all_columns) - self.hidden - 1
+            self.columns.set_focus_path([last])
+            logging.debug('Set focus path? last=%d' % last)
+        except IndexError as e:
+            logging.debug('Set focus path failed: %s' % e)
 
     def col_show(self, ref, widget):
         self.col_remove(ref, ofs=1, update=False)
         self.all_columns.append(widget)
-        self.update_columns(focus=False)
+        self.update_columns()
         self.focus_last_column()
 
     def col_replace(self, ref, widget):
         self.col_remove(ref, update=False)
         self.all_columns.append(widget)
-        self.update_columns(focus=False)
+        self.update_columns()
         self.focus_last_column()
 
     def col_remove(self, ref, ofs=0, update=True):
@@ -324,15 +330,21 @@ class TuiFrame(urwid.Frame):
                 self.update_columns()
                 self.focus_last_column()
 
-    def update_columns(self, update=True, focus=True):
+    def update_columns(self, update=True):
         cols, rows = self.screen.get_cols_rows()
+        try:
+            focus_path = self.get_focus_path()
+        except AttributeError:
+            focus_path = None
 
+        logging.debug('updating columns')
         self.hidden = 0
         widgets = []
         widgets.extend(self.all_columns)
         while sum(col.COLUMN_NEEDS for col in widgets) > cols:
             widgets = widgets[1:]
             self.hidden += 1
+            focus_path = None
 
         # Add our cute fillers, if we have screen real-estate to burn.
         used = sum(col.COLUMN_NEEDS for col in widgets)
@@ -363,6 +375,11 @@ class TuiFrame(urwid.Frame):
         self.update_topbar(update=update)
         if update:
             self.contents['body'] = (self.columns, None)
+            try:
+                if focus_path:
+                    self.set_focus_path(focus_path)
+            except:
+                logging.exception('hmm')
 
     def unhandled_input(self, key):
         try:

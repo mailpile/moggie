@@ -83,6 +83,7 @@ class SuggestionBox(urwid.Pile):
 
         self.widgets = widgets
         self.contents = [(w, ('pack', None)) for w in self.widgets]
+        self.set_focus(0)
 
     def __len__(self):
         return len(self.widgets)

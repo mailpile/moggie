@@ -9,6 +9,8 @@ from ...api.requests import RequestCommand
 from ...util.dumbcode import to_json
 
 from .widgets import *
+from .messagedialog import MessageDialog
+from .decorations import EMOJI
 
 
 class EmailDisplay(urwid.ListBox):
@@ -28,28 +30,53 @@ class EmailDisplay(urwid.ListBox):
 
         self.rendered_width = self.COLUMN_NEEDS
         self.email_body = urwid.Text('(loading...)')
-        self.widgets = urwid.SimpleListWalker(
-            list(self.headers()) + [self.email_body])
+        self.widgets = urwid.SimpleListWalker([])
+        urwid.ListBox.__init__(self, self.widgets)
+        self.update_content()
+
+        self.set_focus(len(self.widgets)-1)
 
         self.search_obj = self.get_search_obj(metadata, username, password)
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
-
-        urwid.ListBox.__init__(self, self.widgets)
 
         me = 'emaildisplay'
         _h = self.tui_frame.conn_manager.add_handler
         self.cm_handler_ids = [
             _h(me, ctx_src_id, 'cli:parse', self.incoming_parse)]
 
+    def update_content(self, update=False):
+        self.widgets[:] = list(self.headers()) + [self.email_body]
+
     def cleanup(self):
         self.tui_frame.conn_manager.del_handler(*self.cm_handler_ids)
         del self.tui_frame
         del self.metadata
-        del self.widgets
         del self.email
 
+    def on_attachment(self, att, filename):
+        self.tui_frame.topbar.open_with(
+            MessageDialog, 'FIXME: Do things with %s' % filename)
+
     def headers(self):
-        for field in ('Date:', 'To:', 'Cc:', 'From:', 'Reply-To:', 'Subject:'):
+        att_label = EMOJI.get('attachment', 'Attachment')
+        fields = ['Date:', 'To:', 'Cc:', 'From:', 'Reply-To:', 'Subject:']
+        fwidth = max(len(f) for f in fields + [att_label])
+
+        def _on_attachment(att, filename):
+            return lambda e: self.on_attachment(att, filename)
+
+        def line(fkey, field, value, action=None):
+            fkey = fkey[:4]
+            field = urwid.Text(('email_key_'+fkey, field), align='right')
+            value = urwid.Text(('email_val_'+fkey, value))
+            if action is not None:
+                value = Selectable(value, on_select={'enter': action})
+            return urwid.Columns([
+                    ('fixed', fwidth, field),
+                    ('weight',     4, value),
+                ], dividechars=1)
+
+        for field in fields:
             fkey = field[:-1].lower()
             if fkey not in self.metadata:
                 continue
@@ -70,11 +97,21 @@ class EmailDisplay(urwid.ListBox):
                     val = str(val).strip()
                 if not val:
                     continue
-                yield urwid.Columns([
-                    ('fixed',  8, urwid.Text(('email_key_'+fkey, field), align='right')),
-                    ('weight', 4, urwid.Text(('email_val_'+fkey, val)))],
-                    dividechars=1)
+                yield line(fkey, field, val)
                 field = ''
+
+        if self.email:
+            for part in self.email.get('_PARTS', []):
+                filename = None
+                ctype = part.get('content-type', ['', {}])
+                disp = part.get('content-disposition', ['', {}])
+                if disp[0] == 'attachment':
+                    logging.debug('%s' % part)
+                    filename = ctype[1].get('name') or disp[1].get('filename')
+                if filename:
+                    yield line('att', att_label, filename,
+                        action=_on_attachment(part, filename))
+
         yield(urwid.Divider())
 
     def render(self, size, focus=False):
@@ -112,12 +149,14 @@ class EmailDisplay(urwid.ListBox):
         for data in message['data']:
             if isinstance(data, dict):
                 self.email = data['parsed']
+        if not self.email:
+            return
 
         email_txts = {'text/plain': '', 'text/html': ''}
         for ctype, fmt in (
                 ('text/plain', lambda t: t),
                 ('text/html',  _to_md)):
-            for part in self.email['_PARTS']:
+            for part in self.email.get('_PARTS', []):
                 if part['content-type'][0] == ctype:
                     email_txts[ctype] += fmt(part.get('_TEXT', ''))
 
@@ -134,4 +173,4 @@ class EmailDisplay(urwid.ListBox):
             r'\n\s*\n', '\n\n', email_text.replace('\r', ''), flags=re.DOTALL)
 
         self.email_body = urwid.Text(email_text.strip())
-        self.widgets[-1] = self.email_body
+        self.update_content()

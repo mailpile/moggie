@@ -4,7 +4,7 @@ import urwid
 from .decorations import ENVELOPES, HELLO, HELLO_CREDITS
 
 
-def emit_soon(widget, signal, seconds=0.75):
+def emit_soon(widget, signal, seconds=0.15):
     async def emitter(sec, sig):
         await asyncio.sleep(sec)
         widget._emit(sig)
@@ -65,8 +65,9 @@ class Selectable(urwid.WidgetWrap):
 class SimpleButton(Selectable):
     LABEL = 'OK'
     def __init__(self, label=None, on_select=None):
+        self.label = label or self.LABEL
         Selectable.__init__(self,
-            urwid.Text(('subtle', '[%s]' % (label or self.LABEL))),
+            urwid.Text(('subtle', '[%s]' % self.label)),
             on_select={'enter': on_select})
 
 

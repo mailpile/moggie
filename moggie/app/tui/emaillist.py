@@ -1,3 +1,11 @@
+# TODO:
+#   - Bring back "Add to the index" when viewing a mailbox (m2)
+#   - Add the ability to export selected messages to a file (m2)
+#   - Allow the user to toggle between message and thread views
+#   - Add "search refiners" shortcuts to further narrow a search
+#   - Make tagging/untagging work!
+#   - Experiment with a twitter-like people-centric view?
+#
 import datetime
 import logging
 import re
@@ -117,6 +125,7 @@ class EmailListWalker(urwid.ListWalker):
                 self.SUBJECT_RE.sub('', subj)))
             return md.get('_prefix', '') + subj
         try:
+            focused = (pos == self.focus)
             md = self.visible[pos]
             if isinstance(md, list):
                 md = Metadata(*md).parsed()
@@ -131,17 +140,19 @@ class EmailListWalker(urwid.ListWalker):
             else:
                 attrs = '(    )'
                 prefix = 'list'
-                dt = dt.strftime('%Y-%m-%d') if dt else ''
+                fmt = '%Y-%m-%d' if focused else '%Y-%m-%d'
+                dt = dt.strftime(fmt) if dt else ''
             frm = md.get('from', {})
             frm = frm.get('fn') or frm.get('address') or ''
             subj = _thread_subject(md, frm)
-            cols = urwid.Columns([
-              ('weight', 15, urwid.Text((prefix+'_from', frm), wrap='clip')),
+            wrap = 'clip'
+            widget = cols = urwid.Columns([
+              ('weight', 15, urwid.Text((prefix+'_from', frm), wrap=wrap)),
               (6,            urwid.Text((prefix+'_attrs', attrs))),
-              ('weight', 27, urwid.Text((prefix+'_subject', subj), wrap='clip')),
-              (10,           urwid.Text((prefix+'_date', dt), align='left'))],
+              ('weight', 27, urwid.Text((prefix+'_subject', subj), wrap=wrap)),
+              (10,           urwid.Text((prefix+'_date', dt), align='right'))],
               dividechars=1)
-            return Selectable(cols, on_select={
+            return Selectable(widget, on_select={
                 'enter': lambda x: self.parent.show_email(self.visible[pos]),
                 'x': lambda x: self.check(uuid),
                 ' ': lambda x: self.check(uuid, display=self.visible[pos])})
@@ -229,6 +240,7 @@ class EmailList(urwid.Pile):
         self.want_emails = 0
         self.total_available = None
         self.search_obj = self.make_search_obj()
+        self.count_obj = RequestCommand('count', args=[self.terms])
 
         self.walker = EmailListWalker(self)
         self.emails = self.walker.emails
@@ -246,12 +258,13 @@ class EmailList(urwid.Pile):
 
         urwid.Pile.__init__(self, [])
         self.set_crumb()
-        self.update_content()
         self.load_more()
+        self.update_content()
 
     def cleanup(self):
         self.tui_frame.conn_manager.del_handler(*self.cm_handler_ids)
         self.search_obj = None
+        self.count_obj = None
         del self.tui_frame
         del self.walker.emails
         del self.emails
@@ -284,9 +297,9 @@ class EmailList(urwid.Pile):
                 self.crumb += ' (%d results)' % self.total_available
         logging.debug('CRUMB: %s' % self.crumb)
         if update:
-            self.tui_frame.update_columns(focus=False)
+            self.tui_frame.update_columns()
 
-    def update_content(self):
+    def update_content(self, set_focus=False):
         self.widgets[0:] = []
         rows = self.tui_frame.max_child_rows()
 
@@ -294,6 +307,8 @@ class EmailList(urwid.Pile):
             message = 'Loading ...' if self.loading else 'No mail here!'
             cat = urwid.BoxAdapter(SplashCat(self.suggestions, message), rows)
             self.contents = [(cat, ('pack', None))]
+            if set_focus:
+                self.set_focus(0)
             return
         elif self.search_obj['req_type'] != 'search':
             pass
@@ -320,6 +335,8 @@ class EmailList(urwid.Pile):
         self.widgets.append(urwid.BoxAdapter(self.listbox, rows))
 
         self.contents = [(w, ('pack', None)) for w in self.widgets]
+        if set_focus:
+            self.set_focus(len(self.widgets)-1)
 
     def show_email(self, metadata):
         self.walker.expand(metadata)
@@ -347,8 +364,7 @@ class EmailList(urwid.Pile):
                     '--limit=%d' % self.want_emails]
             if self.total_available is None:
                 self.tui_frame.send_with_context(
-                    RequestCommand('count', args=[self.terms]),
-                    self.ctx_src_id)
+                    self.count_obj, self.ctx_src_id)
         elif self.search_obj['req_type'] == 'mailbox':
             self.search_obj['limit'] = None
         else:
@@ -357,12 +373,14 @@ class EmailList(urwid.Pile):
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
     def incoming_count(self, source, message):
-        for val in message['data'][0].values():
-            self.total_available = val
-        self.set_crumb(update=True)
+        if message['req_id'] == self.count_obj['req_id']:
+            for val in message['data'][0].values():
+                self.total_available = val
+            self.set_crumb(update=True)
 
     def incoming_result(self, source, message):
         try:
+            first = (0 == len(self.emails))
             self.walker.set_emails(message['data'])
 
             #self.suggestions.incoming_message(message)
@@ -378,4 +396,4 @@ class EmailList(urwid.Pile):
             self.loading = 0
         except:
             logging.exception('Failed to process message')
-        self.update_content()
+        self.update_content(set_focus=first)

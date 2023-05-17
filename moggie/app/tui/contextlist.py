@@ -130,8 +130,8 @@ class ContextList(urwid.ListBox):
         logging.debug('FIXME: Should show account details: %s' % account)
 
     def show_search(self, terms, ctx_src_id):
-        return self.tui_frame.show_search_result(terms, ctx_src_id,
-            history=False)
+        return self.tui_frame.show_search_result(
+            terms, ctx_src_id, history=False)
 
     def request_counts(self):
         self.tag_counted = time.time()
@@ -344,4 +344,3 @@ This is moggie!
                 on_select={'enter': lambda x: None}))
 
         self.walker[0:] = widgets
-
