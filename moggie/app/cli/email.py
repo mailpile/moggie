@@ -275,6 +275,8 @@ class CommandEmail(CLICommand):
         ('--reply-to=',  ['all'], 'X=(all*|sender)'),
         ('--forwarding=',     [], 'X=(inline*|attachment|bounce)'),
         ('--quoting=',        [], 'X=(html*|text|trim*|below), many allowed'),
+        ('--username=',   [None], 'Username with which to access email'),
+        ('--password=',   [None], 'Password with which to access email'),
     ],[
         (None, None, 'encryption'),
         ('--decrypt=',      [], 'X=(N|auto|false|true)'),
@@ -1091,6 +1093,8 @@ class CommandEmail(CLICommand):
                             metadata=metadata,
                             text=True,
                             data=with_data,
+                            username=self.options['--username='][-1],
+                            password=self.options['--password='][-1],
                             full_raw=with_data))
                     if msg and 'email' in msg:
                         emails.append(msg['email'])
@@ -1226,6 +1230,8 @@ class CommandParse(CLICommand):
         ('--format=',     ['text'], 'X=(text*|html|json|sexp)'),
         ('--stdin=',            [], None), # Allow lots to send stdin (internal)
         ('--input=',            [], 'Load e-mail from file X, "-" for stdin'),
+        ('--username=',     [None], 'Username with which to access the email'),
+        ('--password=',     [None], 'Password with which to access the email'),
         ('--allow-network',     [False], 'Allow outgoing network requests'),
         ('--forbid-filesystem', [False], 'Forbid loading local files'),
         ('--write-back',        [False], 'Write parse results to search index'),
@@ -1809,7 +1815,11 @@ These are the %d searchable keywords for this message:
 
             if result and 'emails' in result:
                 for metadata in result['emails']:
-                    req = RequestEmail(metadata=metadata, full_raw=True)
+                    req = RequestEmail(
+                            metadata=metadata,
+                            full_raw=True,
+                            username=self.options['--username='][-1],
+                            password=self.options['--password='][-1])
                     msg = await self.worker.async_api_request(self.access, req)
                     md = Metadata(*metadata)
                     if msg and 'email' in msg:

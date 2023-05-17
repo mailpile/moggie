@@ -88,8 +88,6 @@ class TuiConnManager:
             self.send(message, bridge_name)
 
     def handle_message(self, bridge_name, message):
-        logging.debug('Incoming(%s): %.512s' % (bridge_name, message))
-        #logging.debug('Handlers: %s' % self.handlers)
         try:
             message = from_json(message)
         except:
