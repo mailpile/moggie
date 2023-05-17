@@ -54,6 +54,7 @@ class EmailDisplay(urwid.ListBox):
         del self.email
 
     def on_attachment(self, att, filename):
+        logging.debug('FIXME: User selected part %s' % att)
         self.tui_frame.topbar.open_with(
             MessageDialog, 'FIXME: Do things with %s' % filename)
 
@@ -106,7 +107,6 @@ class EmailDisplay(urwid.ListBox):
                 ctype = part.get('content-type', ['', {}])
                 disp = part.get('content-disposition', ['', {}])
                 if disp[0] == 'attachment':
-                    logging.debug('%s' % part)
                     filename = ctype[1].get('name') or disp[1].get('filename')
                 if filename:
                     yield line('att', att_label, filename,

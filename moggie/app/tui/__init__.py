@@ -78,7 +78,6 @@ class TuiConnManager:
             targets = [bridge_name]
 
         message = to_json(message)
-        logging.debug('%s <= %s' % (targets, message))
         for target in targets:
             self.bridges[target].send(message)
 

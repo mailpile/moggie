@@ -1203,7 +1203,8 @@ class CommandParse(CLICommand):
     """moggie parse [options] <terms>
 
     This command will load and parse e-mails matching the search terms,
-    provided as files or standard input.
+    provided as files or standard input. Terms can also be full Moggie
+    metadata objects (for API use).
 
     The output is either a human readable report (text or HTML), or a
     JSON data structure explaining the contents, structure and technical

@@ -18,7 +18,7 @@ class MessageDialog(urwid.WidgetWrap):
         self.buttons = self.make_buttons()
         self.widgets = self.make_widgets()
 
-        self.message = self.wrap(message, self.WANTED_WIDTH-3)
+        self.message = self.wrap(message, self.WANTED_WIDTH-3) + '\n'
 
         self.pile = urwid.Pile([])
         self.update_pile()

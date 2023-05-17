@@ -163,7 +163,6 @@ class ContextList(urwid.ListBox):
         self.request_counts()
         self.update_parent()
         if self.first:
-            logging.debug('Launching default action?')
             self.activate_default_view()
 
     def incoming_counts(self, source, message):

@@ -301,9 +301,8 @@ class TuiFrame(urwid.Frame):
         try:
             last = len(self.all_columns) - self.hidden - 1
             self.columns.set_focus_path([last])
-            logging.debug('Set focus path? last=%d' % last)
         except IndexError as e:
-            logging.debug('Set focus path failed: %s' % e)
+            pass
 
     def col_show(self, ref, widget):
         self.col_remove(ref, ofs=1, update=False)
@@ -337,7 +336,6 @@ class TuiFrame(urwid.Frame):
         except AttributeError:
             focus_path = None
 
-        logging.debug('updating columns')
         self.hidden = 0
         widgets = []
         widgets.extend(self.all_columns)
