@@ -16,8 +16,8 @@ class RetryDialog(MessageDialog):
 
     def make_buttons(self):
         return [
-            CancelButton(lambda x: self._emit('close')),
-            SimpleButton('Retry', lambda x: self.on_ok())]
+            CancelButton(lambda x: self._emit('close'), style='popsubtle'),
+            SimpleButton('Retry', lambda x: self.on_ok(), style='popsubtle')]
 
     def make_widgets(self):
         e_args = [

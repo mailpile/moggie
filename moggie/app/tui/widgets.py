@@ -1,7 +1,7 @@
 import asyncio
 import urwid
 
-from .decorations import ENVELOPES, HELLO, HELLO_CREDITS
+from .decorations import ENVELOPES, HELLO, HELLO_CREDITS, FOCUS_MAP
 
 
 def emit_soon(widget, signal, seconds=0.15):
@@ -45,11 +45,7 @@ class Selectable(urwid.WidgetWrap):
     def __init__(self, contents, on_select=None):
         self.contents = contents
         self.on_select = on_select or {}
-        self._focusable = urwid.AttrMap(self.contents, '', dict(
-            ((a, 'focus') for a in [None,
-                'email', 'subtle', 'hotkey', 'active', 'act_hk',
-                'list_from', 'list_attrs', 'list_subject', 'list_date',
-                'check_from', 'check_attrs', 'check_subject', 'check_date'])))
+        self._focusable = urwid.AttrMap(self.contents, '', FOCUS_MAP)
         super(Selectable, self).__init__(self._focusable)
 
     def selectable(self):
@@ -64,24 +60,24 @@ class Selectable(urwid.WidgetWrap):
 
 class SimpleButton(Selectable):
     LABEL = 'OK'
-    def __init__(self, label=None, on_select=None):
+    def __init__(self, label=None, on_select=None, style=None):
         self.label = label or self.LABEL
         Selectable.__init__(self,
-            urwid.Text(('subtle', '[%s]' % self.label)),
+            urwid.Text((style or 'subtle', '[%s]' % self.label)),
             on_select={'enter': on_select})
 
 
 class CloseButton(SimpleButton):
     PLACEHOLDER = urwid.Text('   ')
     LABEL = 'x'
-    def __init__(self, on_select=None):
-        super().__init__(on_select=on_select)
+    def __init__(self, on_select=None, style=None):
+        super().__init__(on_select=on_select, style=style)
 
 
 class CancelButton(SimpleButton):
     LABEL = 'Cancel'
-    def __init__(self, on_select=None):
-        super().__init__(on_select=on_select)
+    def __init__(self, on_select=None, style=None):
+        super().__init__(on_select=on_select, style=style)
 
 
 class QuestionDialog(urwid.WidgetWrap):

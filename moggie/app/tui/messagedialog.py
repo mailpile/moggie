@@ -14,7 +14,8 @@ class MessageDialog(urwid.WidgetWrap):
         self.tui_frame = tui_frame
         self.doingit = False
 
-        self.close_button = CloseButton(lambda x: self._emit('close'))
+        self.close_button = CloseButton(
+            lambda x: self._emit('close'), style='popsubtle')
         self.buttons = self.make_buttons()
         self.widgets = self.make_widgets()
 
@@ -27,7 +28,7 @@ class MessageDialog(urwid.WidgetWrap):
             urwid.AttrWrap(urwid.Filler(self.pile), 'popbg')))
 
     def make_buttons(self):
-        return [SimpleButton('OK', lambda x: self.on_ok())]
+        return [SimpleButton('OK', lambda x: self.on_ok(), style='popsubtle')]
 
     def make_widgets(self):
         return []

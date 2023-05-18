@@ -41,7 +41,8 @@ Use an asterisk (*) to search for word fragments.
 
     def __init__(self, tui_frame):
         self.tui_frame = tui_frame
-        close_button = CloseButton(on_select=lambda b: self._emit('close'))
+        close_button = CloseButton(
+            on_select=lambda b: self._emit('close'), style='popsubtle')
 
         self.exact = urwid.CheckBox('Exact matches only', False)
         self.search_box = urwid.Edit('Search: ',

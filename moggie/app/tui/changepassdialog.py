@@ -124,7 +124,8 @@ A suggestion: %s
 
         self.disconnect = urwid.CheckBox('Close active sessions.', False)
 
-        self.close_button = CloseButton(lambda x: self._emit('close'))
+        self.close_button = CloseButton(
+            lambda x: self._emit('close'), style='popsubtle')
 
         if self.tui_frame.was_locked:
             self.old_pass = urwid.Edit('Old passphrase: ',

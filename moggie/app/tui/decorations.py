@@ -46,8 +46,7 @@ HELLO_CREDITS = """\
 # FIXME: generate different palettes based on the contents of our
 #        config file; we should let the user specify their own
 #        colors, and also provide light/dark themes.
-def palette(config):
-    return [
+DEFAULT_PALETTE = [
             (None,             'light gray',  'black',     ''),
             ('',               'light gray',  'black',     ''),
             ('body',           'light gray',  'black',     ''),
@@ -80,9 +79,28 @@ def palette(config):
             ('email_val_cc',   'dark gray',   'black',     ''),
             ('email_key_date', 'dark gray',   'black',     ''),
             ('email_val_date', 'dark gray',   'black',     ''),
-            ('email_key_subj', 'dark gray',   'black',  ''),
-            ('email_val_subj', 'light green', 'black',  ''),
+            ('email_key_subj', 'dark gray',   'black',     ''),
+            ('email_val_subj', 'light green', 'black',     ''),
             ('active',         'light blue',  'black',     ''),
             ('active',         'white',       'brown',     ''),
-            ('focus',          'white',       'dark blue', '')]
+            ('focus1',         'white',       'dark blue', ''),
+            ('focus2',         'white',       'brown', '')]
 
+def palette(config):
+    return DEFAULT_PALETTE
+
+
+FOCUS_NONE = ('', 'body', 'sidebar', 'content', 'focus1', 'focus2')
+FOCUS_BG_COLOR_MAP = {
+    'black':     'focus1',
+    'brown':     'focus1',
+    'dark blue': 'focus2'}
+
+def make_focus_map():
+    focus_map = {}
+    for name, fg, bg, _ in DEFAULT_PALETTE:
+        if name not in FOCUS_NONE:
+            focus_map[name] = FOCUS_BG_COLOR_MAP.get(bg, 'focus1')
+    return focus_map
+
+FOCUS_MAP = make_focus_map()
