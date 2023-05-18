@@ -60,6 +60,7 @@ DEFAULT_PALETTE = [
             ('popsubtle',      'light gray',  'dark blue', ''),
             ('header',         'light gray',  'black',     ''),
             ('top_hk',         'brown',       'black',     ''),
+            ('col_hk',         'black',       'dark blue', ''),
             ('subtle',         'dark gray',   'black',     ''),
             ('list_from',      'light gray',  'black',     ''),
             ('list_attrs',     'dark gray',   'black',     ''),

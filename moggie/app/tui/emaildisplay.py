@@ -19,6 +19,11 @@ class EmailDisplay(urwid.ListBox):
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
+    VIEW_EMAIL = 1
+    VIEW_REPORT = 2
+    VIEW_SOURCE = 3
+    VIEWS = (VIEW_EMAIL, VIEW_REPORT, VIEW_SOURCE)
+
     MESSAGE_MISSING = """\
 Message is missing
 
@@ -33,41 +38,40 @@ However, Moggie has yet to receive a copy.
         self.tui_frame = tui_frame
         self.ctx_src_id = ctx_src_id
         self.metadata = metadata
+        self.username = username
+        self.password = password
         self.email = parsed
+        self.view = self.VIEW_EMAIL
+        self.has_attachments = None
         self.uuid = self.metadata['uuid']
         self.crumb = self.metadata.get('subject', '(no subject)')
 
+        self.column_hks = [
+            ('col_hk', 'V:'), 'Change View']
+
         self.rendered_width = self.COLUMN_NEEDS
         self.widgets = urwid.SimpleListWalker([])
+        self.header_lines = list(self.headers())
         self.email_display = self.no_body('Loading ...')
         urwid.ListBox.__init__(self, self.widgets)
         self.update_content()
 
         self.set_focus(len(self.widgets)-1)
 
-        self.search_obj = self.get_search_obj(metadata, username, password)
+        self.search_obj = self.get_search_obj()
         self.send_email_request()
 
         me = 'emaildisplay'
         _h = self.tui_frame.conn_manager.add_handler
         self.cm_handler_ids = [
+            _h(me, ctx_src_id, 'cli:show', self.incoming_parse),
             _h(me, ctx_src_id, 'cli:parse', self.incoming_parse)]
 
-    def no_body(self, message):
-        rows = self.tui_frame.max_child_rows() - (len(self.widgets) or 10)
-        return urwid.BoxAdapter(
-            SplashCat(decoration=ENVELOPES, message=message),
-            rows)
-
-    def update_content(self, update=False):
-        self.widgets[:] = list(self.headers()) + [self.email_display]
-
-    def send_email_request(self, fmt=None):
+    def send_email_request(self):
         if self.metadata.get('missing'):
             self.email_display = self.no_body(self.MESSAGE_MISSING)
             self.update_content()
 
-        self.search_obj.set_arg('--format=', fmt)
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
     def cleanup(self):
@@ -76,10 +80,15 @@ However, Moggie has yet to receive a copy.
         del self.metadata
         del self.email
 
-    def on_attachment(self, att, filename):
-        logging.debug('FIXME: User selected part %s' % att)
-        self.tui_frame.topbar.open_with(
-            MessageDialog, 'FIXME: Do things with %s' % filename)
+    def keypress(self, size, key):
+        # FIXME: Should probably be using CommandMap !
+        if key == 'V':
+            self.toggle_view()
+            return None
+        return super().keypress(size, key)
+
+    def update_content(self, update=False):
+        self.widgets[:] = self.header_lines + [self.email_display]
 
     def headers(self):
         att_label = EMOJI.get('attachment', 'Attachment')
@@ -133,6 +142,7 @@ However, Moggie has yet to receive a copy.
                 field = ''
 
         if self.email:
+            self.has_attachments = []
             for part in self.email.get('_PARTS', []):
                 filename = None
                 ctype = part.get('content-type', ['', {}])
@@ -142,6 +152,7 @@ However, Moggie has yet to receive a copy.
                 if filename:
                     yield line('att', att_label, filename,
                         action=_on_attachment(part, filename))
+                    self.has_attachments.append(filename)
 
         yield(urwid.Divider())
 
@@ -149,34 +160,54 @@ However, Moggie has yet to receive a copy.
         self.rendered_width = size[0]
         return super().render(size, focus=focus)
 
-    def get_search_obj(self, metadata, username, password):
-        parse_args = [
-            # Reset to the bare minimum, we can as for more if the user
-            # wants it (and as the app evolves).
-            '--with-nothing=Y',
-            '--with-headers=Y',
-            '--with-structure=Y',
-            '--with-text=Y',
-            '--ignore-index=N',
-            # We convert the HTML to text here, so we can wrap lines.
-            '--with-html-text=N',
-            '--with-html-clean=N',
-            '--with-html=Y']
-        if username:
-            parse_args.append('--username=%s' % username)
-        if password:
-            parse_args.append('--password=%s' % password)
-        parse_args.append(to_json(metadata))
-        return RequestCommand('parse', args=parse_args)
+    def toggle_view(self):
+        next_view = (self.VIEWS.index(self.view) + 1)  % len(self.VIEWS)
+        self.view = self.VIEWS[next_view]
+        logging.debug('Requesting view %s' % self.view)
+        self.search_obj = self.get_search_obj()
+        self.send_email_request()
+
+    def get_search_obj(self):
+        if self.view == self.VIEW_REPORT:
+            command = 'parse'
+            parse_args = ['--with-everything=Y', '--format=text']
+        elif self.view == self.VIEW_SOURCE:
+            command = 'show'
+            parse_args = ['--part=0']
+        else:
+            command = 'parse'
+            parse_args = [
+                # Reset to the bare minimum, we can as for more if the user
+                # wants it (and as the app evolves).
+                '--with-nothing=Y',
+                '--with-headers=Y',
+                '--with-structure=Y',
+                '--with-text=Y',
+                '--ignore-index=N',
+                # We convert the HTML to text here, so we can wrap lines.
+                '--with-html-text=N',
+                '--with-html-clean=N',
+                '--with-html=Y']
+        if self.username:
+            parse_args.append('--username=%s' % self.username)
+        if self.password:
+            parse_args.append('--password=%s' % self.password)
+        parse_args.append(to_json(self.metadata))
+        return RequestCommand(command, args=parse_args)
 
     def empty_body(self):
         if self.metadata.get('missing'):
             return self.no_body(self.MESSAGE_MISSING)
+        elif self.has_attachments:
+            return self.no_body('This message only has attachments:\n\n'
+                + '\n'.join(self.has_attachments) + '\n')
         else:
             return self.no_body('Empty message')
 
     def incoming_parse(self, source, message):
-        logging.debug('msg=%.2000s' % (message,))
+        logging.debug('msg=%.2048s' % message)
+        if message['req_id'] != self.search_obj['req_id']:
+            return
 
         self.email_display = None
         if message['mimetype'] == 'application/moggie-internal':
@@ -185,9 +216,10 @@ However, Moggie has yet to receive a copy.
                     self.email = data['parsed']
                     break
             if self.email:
+                self.header_lines = list(self.headers())
                 self.email_display = self.parsed_email_to_text()
 
-        elif message['mimetype'] == 'text/plain':
+        elif message['mimetype'] in ('text/plain', 'message/rfc822'):
             if message['data'].strip():
                 self.email_display = urwid.Text(message['data'])
             else:
@@ -231,3 +263,14 @@ However, Moggie has yet to receive a copy.
             return urwid.Text(email_text.strip())
         else:
             return self.empty_body()
+
+    def no_body(self, message):
+        rows = self.tui_frame.max_child_rows() - len(self.header_lines)
+        return urwid.BoxAdapter(
+            SplashCat(decoration=ENVELOPES, message=message),
+            rows)
+
+    def on_attachment(self, att, filename):
+        logging.debug('FIXME: User selected part %s' % att)
+        self.tui_frame.topbar.open_with(
+            MessageDialog, 'FIXME: Do things with %s' % filename)

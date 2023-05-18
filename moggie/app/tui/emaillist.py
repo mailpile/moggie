@@ -228,12 +228,14 @@ class EmailList(urwid.Pile):
             self.view = self.VIEW_MESSAGES if mailbox else self.VIEW_THREADS
 
         self.global_hks = {
+            ' ': True,
             'J': [lambda *a: None, ('top_hk', 'J:'), 'Read Next '],
             'K': [lambda *a: None, ('top_hk', 'K:'), 'Previous  ']}
 
         self.column_hks = [
-            #('top_hk', 'A:'), 'Add To Index']
-            [('top_hk', 'V:'), 'Change View']]
+           #('top_hk', 'A:'), 'Add To Index', ' '
+           #('col_hk', 'V:'), 'Change View',
+            ]
 
         self.loading = 0
         self.want_more = True
@@ -271,6 +273,30 @@ class EmailList(urwid.Pile):
         del self.listbox
         del self.widgets
         del self.suggestions
+
+    def keypress(self, size, key):
+        # FIXME: Should probably be using CommandMap !
+        if key in (' ',):
+            # FIXME: Is there a better way?
+            size = self.tui_frame.screen.get_cols_rows()
+            return self.listbox.keypress(size, key)
+        if key == 'J':
+            # FIXME: Is there a better way?
+            size = self.tui_frame.screen.get_cols_rows()
+            self.listbox.keypress(size, 'down')
+            self.listbox.keypress(size, 'enter')
+            return None
+        if key == 'K':
+            # FIXME: Is there a better way?
+            size = self.tui_frame.screen.get_cols_rows()
+            self.listbox.keypress(size, 'up')
+            self.listbox.keypress(size, 'enter')
+            return None
+        if key == 'V':
+            return None  # FIXME: Toggle view
+        if key == 'A':
+            return None  # FIXME: Add mailbox to index!
+        return super().keypress(size, key)
 
     def make_search_obj(self):
         search_args = [

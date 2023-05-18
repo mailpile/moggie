@@ -65,7 +65,9 @@ class MessageDialog(urwid.WidgetWrap):
         else:
             current_pos = first - 1
         for i, w in enumerate(self.pile.contents):
-            if (i > current_pos) and hasattr(w[0], 'keypress'):
+            if ((i > current_pos)
+                    and hasattr(w[0], 'selectable')
+                    and w[0].selectable()):
                 try:
                     self.pile.set_focus(i)
                     return True

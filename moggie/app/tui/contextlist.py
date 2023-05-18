@@ -41,7 +41,7 @@ class ContextList(urwid.ListBox):
         self.walker = urwid.SimpleListWalker([])
         self.v_history = []
         self.v_history_max = 4
-        self.hotkeys = {}
+        self.global_hks = {}
 
         self.order = []
         self.contexts = {}
@@ -62,6 +62,19 @@ class ContextList(urwid.ListBox):
         cm.add_handler(me, '*', self.counts_obj, self.incoming_counts)
         cm.add_handler(me, '*', 'pong', self.incoming_pong)
         cm.send(self.search_obj)
+
+    def cleanup(self):
+        pass
+
+    def keypress(self, size, key):
+        if key in self.global_hks:
+            hk = self.global_hks[key]
+            if isinstance(hk, list):
+                hk = hk[0]
+            if hk:
+                hk()
+                return None
+        return super().keypress(size, key)
 
     def expand(self, i, activate=True):
         self.expanded = i
@@ -189,16 +202,16 @@ class ContextList(urwid.ListBox):
         def _sel_ctx(which):
             # This goes through the main frame in case it wants to know
             # things have changed and coordinate with other UI elements.
-            return lambda x: self.tui_frame.set_context(which)
+            return lambda *x: self.tui_frame.set_context(which)
         def _sel_email(account):
-            return lambda x: self.show_account(account)
+            return lambda *x: self.show_account(account)
         def _sel_search(terms, ctx_src_id):
-            return lambda x: self.show_search(terms, ctx_src_id)
+            return lambda *x: self.show_search(terms, ctx_src_id)
         def _sel_mailbox(path, ctx_src_id):
-            return lambda x: self.tui_frame.show_mailbox(
+            return lambda *x: self.tui_frame.show_mailbox(
                 path, ctx_src_id, history=False)
         def _sel_history(*args):
-            return lambda x: self.show_history(*args)
+            return lambda *x: self.show_history(*args)
 
         def _friendly_count(tc):
             if tc < 1:
@@ -209,7 +222,7 @@ class ContextList(urwid.ListBox):
                 return ' %dk' % (tc // 1000)
             return 'oo'
 
-        self.hotkeys = {}
+        self.global_hks = {}
         self.crumb = '(moggie is unconfigured)'
         widgets = []
         if self.v_history:
@@ -298,7 +311,7 @@ class ContextList(urwid.ListBox):
                             os = search and {'enter': _sel_search(
                                 search, ctx_src_id)}
                             if sc and os:
-                                self.hotkeys[sc] = os['enter']
+                                self.global_hks[sc] = os['enter']
                             sc = (' %s:' % sc) if sc else '   '
                             widgets.append(Selectable(
                                 urwid.Text([
@@ -319,7 +332,7 @@ class ContextList(urwid.ListBox):
                         if count <= len(self.TAG_KEYS):
                             hk = self.TAG_KEYS[count-1]
                             sc = (' %s:' % hk)
-                            self.hotkeys[hk] = action
+                            self.global_hks[hk] = action
                         count += 1
                         name = tag[:1].upper() + tag[1:]
                         widgets.append(Selectable(

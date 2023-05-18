@@ -60,7 +60,6 @@ class TuiFrame(urwid.Frame):
         self.topbar_pile = urwid.Pile([])
         self.topbar = PopUpManager(self, self.topbar_pile)
 
-        self.update_topbar(update=False)
         self.update_columns(update=False)
 
         urwid.Frame.__init__(self, self.columns, header=self.topbar)
@@ -215,24 +214,29 @@ class TuiFrame(urwid.Frame):
         for i, crumb in enumerate(crumbs):
             if i < len(self.crumbs)-1 and crumb.endswith(')'):
                 crumbs[i] = crumb.rsplit(' (', 1)[0]
+        crumbshift = max(0, 17 - len(crumbs[0] if crumbs else ''))
         crumbtrail = ': '.join(crumbs)
-        if len(crumbtrail) > (maxwidth-20):
-            crumbtrail = '...' + crumbtrail[-(maxwidth-23):]
+        if len(crumbtrail) > (maxwidth-crumbshift):
+            crumbtrail = '...' + crumbtrail[-(maxwidth-crumbshift-3):]
+        crumbtrail = (' ' * crumbshift) + crumbtrail
+        crumblen = len(crumbtrail)
 
         pad = ' ' if maxwidth > 80 else ''
-
         global_hks = []
-        column_hks = []
-        selection_hks = []
         for col in self.all_columns:
             if hasattr(col, 'global_hks'):
                 for hk in col.global_hks.values():
-                    global_hks.extend(hk[1:])  # hk[0] is the callback
-        for wdgt in self.columns.get_focus_widgets():
+                    if isinstance(hk, list):
+                        global_hks.extend(hk[1:])
+
+        column_hints = []
+        fpath = self.columns.get_focus_path()
+        if fpath:
+            wdgt = self.all_columns[self.hidden + fpath[0]]
             if hasattr(wdgt, 'column_hks'):
-                column_hks.extend(wdgt.column_hks)
-            if hasattr(wdgt, 'selection_hks'):
-                selection_hks.extend(wdgt.selection_hks)
+                if wdgt.column_hks:
+                    tw = urwid.Text(wdgt.column_hks)
+                    column_hints.append(('fixed', len(tw.text), tw))
 
         ntime = datetime.datetime.now()
         if maxwidth > 150:
@@ -258,17 +262,17 @@ class TuiFrame(urwid.Frame):
         else:
             clock = cfmt % ntime.strftime(clock_a) + self.locked_emoji()
 
-        hints = []
+        global_hints = []
         nage = 0
         if self.notifications:
             nage = now - self.notifications[-1]['ts']
         if 0 < nage <= 30:
             msg = self.notifications[-1]['message']
-            hints = [('weight', len(msg),
+            global_hints = [('weight', len(msg),
                 urwid.Text(msg, align='left', wrap='clip'))]
         else:
             nage = 0
-            hints.append(('weight', len(clock),
+            global_hints.append(('weight', len(clock),
                 urwid.Text(('subtle', clock), align='center')))
 
         if not nage or (maxwidth > 70 + 8*(3+len(global_hks))):
@@ -276,10 +280,10 @@ class TuiFrame(urwid.Frame):
             search = [] if self.is_locked else [('top_hk', '/:'), 'Search ']
             search = []  # FIXME
             unlock = [('top_hk', '/:'), 'Unlock '] if self.is_locked else []
-            hints.extend([
+            global_hints.extend([
                 ('fixed', 23+6*len(global_hks), urwid.Text(
                     global_hks + search + unlock + [
-                        ('top_hk', '?:'), 'Help ',
+#FIXME:                 ('top_hk', '?:'), 'Help ',
                         ('top_hk', 'q:'), 'Quit'+pad],
                     align='right', wrap='clip'))])
 
@@ -288,12 +292,11 @@ class TuiFrame(urwid.Frame):
         _p = lambda w: (w, ('pack', None))
         self.topbar_pile.contents = [
             _p(urwid.AttrMap(urwid.Columns([
-                    ('fixed', len(mv), urwid.Text(mv, align='left')),
-                    ] + hints + [
-                ]), 'header')),
+                ('fixed', len(mv), urwid.Text(mv, align='left')),
+                ] + global_hints), 'header')),
             _p(urwid.AttrMap(urwid.Columns([
-                urwid.Text((' ' * 19) + crumbtrail, align='left', wrap='clip'),
-                ]), 'crumbs'))]
+                ('weight', crumblen, urwid.Text(crumbtrail, wrap='clip'))
+                ] + column_hints, dividechars=1), 'crumbs'))]
         #if update:
         #    self.contents['header'] = (self.topbar, None)
 
@@ -384,7 +387,7 @@ class TuiFrame(urwid.Frame):
             cols_rows = self.screen.get_cols_rows()
             if key == 'q':
                 self.ui_quit()
-            elif key == 'esc':
+            elif key in ('esc', 'backspace'):
                 if len(self.all_columns) > 1:
                     self.col_remove(self.all_columns[-1])
             elif key == 'left':
@@ -393,14 +396,18 @@ class TuiFrame(urwid.Frame):
             elif key == 'right':
                 self.columns.keypress(cols_rows, 'enter')
 
-            # FIXME: I am sure there must be a better way to do this.
+            # FIXME: Searching or unlocking is a global thing
             elif key == '/':
                 if self.is_locked:
                     self.topbar.open_with(UnlockDialog)
                 else:
                     self.topbar.open_with(SearchDialog)
+
+            # FIXME: This definitely belongs elsewhere!
             elif key == 'C':
                 self.ui_change_passphrase()
+
+            # hjkl navigation
             elif key == 'h':
                 if len(self.all_columns) > 1 and self.hidden:
                     self.col_remove(self.all_columns[-1])
@@ -412,19 +419,11 @@ class TuiFrame(urwid.Frame):
                 self.columns.keypress(cols_rows, 'up')
             elif key == 'l':
                 self.columns.keypress(cols_rows, 'right')
-            elif key == 'J':
-                self.all_columns[1].listbox.keypress(cols_rows, 'down')
-                self.all_columns[1].listbox.keypress(cols_rows, 'enter')
-            elif key == 'K':
-                self.all_columns[1].listbox.keypress(cols_rows, 'up')
-                self.all_columns[1].listbox.keypress(cols_rows, 'enter')
-            elif key in (' ',):
-                self.all_columns[1].listbox.keypress(cols_rows, key)
+
             else:
                 for col in self.all_columns:
-                    if hasattr(col, 'hotkeys') and key in col.hotkeys:
-                        col.hotkeys[key](None)
-                        return
+                    if hasattr(col, 'global_hks') and key in col.global_hks:
+                        return col.keypress(cols_rows, key)
                 return key
         except IndexError:
             return key
