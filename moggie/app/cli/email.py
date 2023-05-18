@@ -1566,7 +1566,14 @@ class CommandParse(CLICommand):
         if parsed.get('stdin'):
             report.append('# Parsed e-mail from standard input')
         elif parsed.get('search'):
-            report.append('# Parsed e-mail from search: %s' % parsed['search'])
+            s = '%s' % parsed['search']
+            if s[:1] == '{' and s[-1:] == '}':
+                s = '(internal metadata)'
+                report.append('# Parsed e-mail')
+            else:
+                if len(s) > 42:
+                    s = s[:40] + '..'
+                report.append('# Parsed e-mail from search: %s' % s)
 
         if self.settings.with_metadata:
             md = parsed.get('metadata')

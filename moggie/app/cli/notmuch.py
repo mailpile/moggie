@@ -157,8 +157,8 @@ FIXME: Document html and html formats!
         ('--limit=',            [''], 'Output at most X results'),
         ('--tabs',           [False], 'Separate with tabs instead of spaces'),
         ('--entire-thread=',      [], 'X=(true|false)'),
-        ('--username=',       [None], ''),  # FIXME
-        ('--password=',       [None], ''),  # FIXME
+        ('--username=',       [None], 'Username with which to access email'),
+        ('--password=',       [None], 'Password with which to access email'),
     ],[
         (None, None, 'output'),
         ('--format=',       ['text'], 'X=(text*|text0|json|sexp|zip|maildir|mbox|..)'),
@@ -1057,6 +1057,8 @@ class CommandShow(CommandSearch):
         ('--context=',     ['default'], 'The context for scope and settings'),
         ('--q=',                    [], 'Search terms (used by web API)'),
         ('--deduplicate=', ['mailbox'], 'X=(no|mailbox|address)'),
+        ('--username=',         [None], 'Username with which to access email'),
+        ('--password=',         [None], 'Password with which to access email'),
     ],[
         (None, None, 'output'),
         ('--format=',   ['text'], 'X=(text*|text0|json|sexp)'),
@@ -1107,6 +1109,23 @@ class CommandShow(CommandSearch):
                 raise PermissionError('Access denied')
 
         self.threads = {}
+
+    async def results(self, query, limit, formatter):
+        # This is a shortcut for API use, where we pass already cooked
+        # metadata to show - this lets us avoid the search.
+        metadata = None
+        if isinstance(self.terms, (dict, list)):
+            # Metadata as dict!
+            metadata = self.terms
+        elif self.terms[:1] in ('{', '[') and self.terms[-1:] in (']', '}'):
+            metadata = self.terms
+        if metadata:
+            metadata = Metadata.FromParsed(metadata)
+            async for fd in formatter(metadata):
+                yield fd
+        else:
+            async for result in super().results(query, limit, formatter):
+                yield result
 
     async def emit_result_sexp(self, result, first=False, last=False):
         if result is None:
@@ -1178,6 +1197,8 @@ class CommandShow(CommandSearch):
                 if (details[2] == 'text') or (details[3] == 'json'):
                     self.mimetype += '; charset="utf-8"'
                 self.options['--part='] = [details[1]]
+            elif details == ['0']:
+                self.mimetype = 'message/rfc822'
             else:
                 self.mimetype = 'application/octet-stream'
 
