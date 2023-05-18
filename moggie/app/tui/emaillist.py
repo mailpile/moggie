@@ -139,7 +139,7 @@ class EmailListWalker(urwid.ListWalker):
                 dt = dt.strftime('%Y-%m  ✓') if dt else ''
             else:
                 attrs = '(    )'
-                prefix = 'list'
+                prefix = 'list' if md.get('is_hit', True) else 'more'
                 fmt = '%Y-%m-%d' if focused else '%Y-%m-%d'
                 dt = dt.strftime(fmt) if dt else ''
             frm = md.get('from', {})
