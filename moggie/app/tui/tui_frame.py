@@ -207,18 +207,23 @@ class TuiFrame(urwid.Frame):
 
     def update_topbar(self, update=True):
         # FIXME: Calculate/hint hotkeys based on what our columns suggest?
+        maxwidth = self.render_cols_rows[0] - 2
         now = time.time()
 
-        maxwidth = self.render_cols_rows[0] - 2
+        self.crumbs = []
+        for widget in self.all_columns:
+            if hasattr(widget, 'crumb'):
+                self.crumbs.append(widget.crumb)
+
         crumbs = copy.copy(self.crumbs)
         for i, crumb in enumerate(crumbs):
-            if i < len(self.crumbs)-1 and crumb.endswith(')'):
-                crumbs[i] = crumb.rsplit(' (', 1)[0]
+            if i < len(self.crumbs)-1 and maxwidth < 100:
+                if crumb.endswith(')'):
+                    crumbs[i] = crumb = crumb.rsplit(' (', 1)[0]
+                if '/' in crumb:
+                    crumbs[i] = crumb.rsplit('/')[-1]
         crumbshift = max(0, 17 - len(crumbs[0] if crumbs else ''))
-        crumbtrail = ': '.join(crumbs)
-        if len(crumbtrail) > (maxwidth-crumbshift):
-            crumbtrail = '...' + crumbtrail[-(maxwidth-crumbshift-3):]
-        crumbtrail = (' ' * crumbshift) + crumbtrail
+        crumbtrail = (' ' * crumbshift) + ': '.join(crumbs)
         crumblen = len(crumbtrail)
 
         pad = ' ' if maxwidth > 80 else ''
@@ -231,12 +236,17 @@ class TuiFrame(urwid.Frame):
 
         column_hints = []
         fpath = self.columns.get_focus_path()
-        if fpath:
+        try:
             wdgt = self.all_columns[self.hidden + fpath[0]]
             if hasattr(wdgt, 'column_hks'):
-                if wdgt.column_hks:
-                    tw = urwid.Text(wdgt.column_hks)
+                hks = wdgt.column_hks
+                if not isinstance(hks, list):
+                    hks = hks()
+                if hks:
+                    tw = urwid.Text(hks)
                     column_hints.append(('fixed', len(tw.text), tw))
+        except IndexError:
+            pass
 
         ntime = datetime.datetime.now()
         if maxwidth > 150:
@@ -358,11 +368,6 @@ class TuiFrame(urwid.Frame):
         if used + self.filler3.COLUMN_NEEDS < cols:
             widgets.append(self.filler3)
             used += self.filler3.COLUMN_NEEDS
-
-        self.crumbs = []
-        for widget in self.all_columns:
-            if hasattr(widget, 'crumb'):
-                self.crumbs.append(widget.crumb)
 
         def _b(w):
             if hasattr(w, 'rows'):

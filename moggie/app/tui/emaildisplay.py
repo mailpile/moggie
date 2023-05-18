@@ -23,6 +23,10 @@ class EmailDisplay(urwid.ListBox):
     VIEW_REPORT = 2
     VIEW_SOURCE = 3
     VIEWS = (VIEW_EMAIL, VIEW_REPORT, VIEW_SOURCE)
+    VIEW_CRUMBS = {
+        VIEW_EMAIL: 'E-mail',
+        VIEW_REPORT: 'E-mail Analysis',
+        VIEW_SOURCE: 'E-mail Source'}
 
     MESSAGE_MISSING = """\
 Message is missing
@@ -44,9 +48,11 @@ However, Moggie has yet to receive a copy.
         self.view = self.VIEW_EMAIL
         self.has_attachments = None
         self.uuid = self.metadata['uuid']
-        self.crumb = self.metadata.get('subject', '(no subject)')
+        self.crumb = self.VIEW_CRUMBS[self.view]
 
         self.column_hks = [
+            ('col_hk', 'r:'), 'Reply', ' ',
+            ('col_hk', 'F:'), 'Forward', ' ',
             ('col_hk', 'V:'), 'Change View']
 
         self.rendered_width = self.COLUMN_NEEDS
@@ -82,6 +88,14 @@ However, Moggie has yet to receive a copy.
 
     def keypress(self, size, key):
         # FIXME: Should probably be using CommandMap !
+        if key == 'F':
+            self.on_forward()
+            return None
+        if key == 'r':
+            self.on_reply()
+            return None
+        if key == 'R':
+            self.on_reply(group=False)
         if key == 'V':
             self.toggle_view()
             return None
@@ -163,17 +177,21 @@ However, Moggie has yet to receive a copy.
     def toggle_view(self):
         next_view = (self.VIEWS.index(self.view) + 1)  % len(self.VIEWS)
         self.view = self.VIEWS[next_view]
-        logging.debug('Requesting view %s' % self.view)
         self.search_obj = self.get_search_obj()
         self.send_email_request()
 
     def get_search_obj(self):
-        if self.view == self.VIEW_REPORT:
-            command = 'parse'
-            parse_args = ['--with-everything=Y', '--format=text']
-        elif self.view == self.VIEW_SOURCE:
+        if self.view == self.VIEW_SOURCE:
             command = 'show'
             parse_args = ['--part=0']
+
+        elif self.view == self.VIEW_REPORT:
+            command = 'parse'
+            parse_args = [
+                '--allow-network',
+                '--with-everything=Y',
+                '--format=text']
+
         else:
             command = 'parse'
             parse_args = [
@@ -229,6 +247,8 @@ However, Moggie has yet to receive a copy.
             self.email_display = self.no_body(
                 'Failed to load or parse message, sorry!')
 
+        self.crumb = self.VIEW_CRUMBS[self.view]
+        self.tui_frame.update_topbar()
         self.update_content()
 
     def parsed_email_to_text(self):
@@ -274,3 +294,13 @@ However, Moggie has yet to receive a copy.
         logging.debug('FIXME: User selected part %s' % att)
         self.tui_frame.topbar.open_with(
             MessageDialog, 'FIXME: Do things with %s' % filename)
+
+    def on_forward(self):
+        logging.debug('FIXME: User wants to forward')
+        self.tui_frame.topbar.open_with(
+            MessageDialog, 'FIXME: Forwarding does not yet work!')
+
+    def on_reply(self, group=True):
+        logging.debug('FIXME: User wants to reply (group=%s)' % group)
+        self.tui_frame.topbar.open_with(
+            MessageDialog, 'FIXME: Repying does not yet work!')

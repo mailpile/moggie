@@ -19,6 +19,7 @@ from ..suggestions import Suggestion
 
 from .suggestionbox import SuggestionBox
 from .emaildisplay import EmailDisplay
+from .messagedialog import MessageDialog
 from .widgets import *
 
 
@@ -221,21 +222,19 @@ class EmailList(urwid.Pile):
         self.ctx_src_id = ctx_src_id
         self.terms = terms
         self.view = view
+        self.is_mailbox = False
 
         if self.view is None:
+            if self.terms.startswith('mailbox:'):
+                self.is_mailbox = self.terms[8:]
             # FIXME: This is lame! Mailboxes should also have nice things
-            mailbox = self.terms.startswith('mailbox:')
-            self.view = self.VIEW_MESSAGES if mailbox else self.VIEW_THREADS
+            self.view = (
+                self.VIEW_MESSAGES if self.is_mailbox else self.VIEW_THREADS)
 
         self.global_hks = {
             ' ': True,
             'J': [lambda *a: None, ('top_hk', 'J:'), 'Read Next '],
             'K': [lambda *a: None, ('top_hk', 'K:'), 'Previous  ']}
-
-        self.column_hks = [
-           #('top_hk', 'A:'), 'Add To Index', ' '
-           #('col_hk', 'V:'), 'Change View',
-            ]
 
         self.loading = 0
         self.want_more = True
@@ -292,10 +291,15 @@ class EmailList(urwid.Pile):
             self.listbox.keypress(size, 'up')
             self.listbox.keypress(size, 'enter')
             return None
+        if key == 'E':
+            self.on_export()
+            return None
         if key == 'V':
-            return None  # FIXME: Toggle view
+            self.on_toggle_view()
+            return None
         if key == 'A':
-            return None  # FIXME: Add mailbox to index!
+            self.on_add_to_index()
+            return None
         return super().keypress(size, key)
 
     def make_search_obj(self):
@@ -311,7 +315,7 @@ class EmailList(urwid.Pile):
         return RequestCommand('search', args=search_args)
 
     def set_crumb(self, update=False):
-        self.crumb = self.search_obj.get('mailbox', None)
+        self.crumb = self.is_mailbox
         if not self.crumb:
             terms = self.terms
             if terms.startswith('in:'):
@@ -321,7 +325,6 @@ class EmailList(urwid.Pile):
             self.crumb = terms
             if self.total_available is not None:
                 self.crumb += ' (%d results)' % self.total_available
-        logging.debug('CRUMB: %s' % self.crumb)
         if update:
             self.tui_frame.update_columns()
 
@@ -344,7 +347,7 @@ class EmailList(urwid.Pile):
         # Inject suggestions above the list of messages, if any are
         # present. This can change dynamically as the backend sends us
         # hints.
-        if self.walker.selected and 'mailbox' in self.search_obj:
+        if self.walker.selected and self.is_mailbox:
             self.widgets.append(urwid.Columns([
                 ('weight', 1, urwid.Text(('subtle',
                     'NOTE: You are operating directly on a mailbox!\n'
@@ -419,3 +422,29 @@ class EmailList(urwid.Pile):
         except:
             logging.exception('Failed to process message')
         self.update_content(set_focus=first)
+
+    def column_hks(self):
+        hks = []
+        if self.emails:
+            hks.extend([' ', ('col_hk', 'E:'), 'Export'])
+        if self.is_mailbox:
+            hks.extend([' ', ('col_hk', 'A:'), 'Add to Index'])
+        else:
+            # FIXME: Mailboxes should have multiple views too
+            hks.extend([' ', ('col_hk', 'V:'), 'Change View'])
+
+        # FIXME: Saving searches!
+
+        return hks
+
+    def on_toggle_view(self):
+        self.tui_frame.topbar.open_with(
+            MessageDialog, 'FIXME: Toggling views does not work yet')
+
+    def on_export(self):
+        self.tui_frame.topbar.open_with(
+            MessageDialog, 'FIXME: Exporting mail does not work yet')
+
+    def on_add_to_index(self):
+        self.tui_frame.topbar.open_with(
+            MessageDialog, 'FIXME: Adding to the index does not work yet')

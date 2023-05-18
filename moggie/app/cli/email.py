@@ -1720,6 +1720,22 @@ Dates and times in header span %d seconds from %d time zones.
 
                 report.append('## DKIM verification\n\n%s' % status.rstrip())
 
+            if self.settings.with_keywords:
+                kw = parsed.get('_KEYWORDS')
+                if not kw:
+                    report.append('## Keywords unavailable')
+                else:
+                    special = [k for k in kw if ':' in k]
+                    others = [k for k in kw if ':' not in k]
+                    report.append("""## Keywords
+
+These are the %d searchable keywords for this message:
+
+%s\n\n%s""" % (
+                        len(special) + len(others),
+                        _wrap(', '.join(special)),
+                        _wrap(', '.join(others))))
+
             if self.settings.with_headers:
                 from moggie.email.headers import ADDRESS_HEADERS, SINGLETONS
 
@@ -1754,22 +1770,6 @@ Dates and times in header span %d seconds from %d time zones.
                     if part['content-type'][0] == 'text/html':
                         report[-1] += ('\n\n'
                             + _indent(part['_HTML_CLEAN'].strip(), code=True))
-
-            if self.settings.with_keywords:
-                kw = parsed.get('_KEYWORDS')
-                if not kw:
-                    report.append('## Keywords unavailable')
-                else:
-                    special = [k for k in kw if ':' in k]
-                    others = [k for k in kw if ':' not in k]
-                    report.append("""## Keywords
-
-These are the %d searchable keywords for this message:
-
-%s\n\n%s""" % (
-                        len(special) + len(others),
-                        _wrap(', '.join(special)),
-                        _wrap(', '.join(others))))
 
         return '\n\n'.join(report) + '\n\n'
 
