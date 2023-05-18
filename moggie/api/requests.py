@@ -227,6 +227,16 @@ class RequestCommand(RequestBase):
 
     command = property(lambda s: s['req_type'].split(':', 1)[-1])
 
+    def set_arg(self, name, value):
+        if name[:2] != '--':
+            name = '--%s' % name
+        if name[-1:] != '=':
+            name += '='
+        args = [a for a in self.get('args', []) if not a.startswith(name)]
+        if value is not None:
+            args.append('%s%s' % (name, value))
+        self['args'] = args
+
 
 def to_api_request(_input):
     cls = {

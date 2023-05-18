@@ -68,7 +68,6 @@ class MessageDialog(urwid.WidgetWrap):
             if (i > current_pos) and hasattr(w[0], 'keypress'):
                 try:
                     self.pile.set_focus(i)
-                    logging.debug('Focused %s ?' % w[0])
                     return True
                 except IndexError:
                     pass

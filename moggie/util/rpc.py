@@ -11,6 +11,9 @@ from .http import http1x_connect
 from ..api.requests import RequestPing
 
 
+DEBUG_TRACE = False
+
+
 class JsonRpcClient:
     PEEK_BYTES = 4096
 
@@ -126,8 +129,9 @@ class BridgeWorker:
                     if self.pending:
                         for message in self.pending:
                             await self.ws.send(message)
-                        logging.debug('%s: Sent %d messages'
-                            % (self, len(self.pending)))
+                        if DEBUG_TRACE:
+                            logging.debug('%s: Sent %d messages'
+                                % (self, len(self.pending)))
                         self.pending = []
                     else:
                         await self.ws.send(to_json(RequestPing()))
@@ -163,7 +167,8 @@ class BridgeWorker:
                     reconn_delay = 0
                     async for message in ws:
                         self.message_sink(self.name, message)
-                        logging.debug('%s: Message received' % self)
+                        if DEBUG_TRACE:
+                            logging.debug('%s: Message received' % self)
             except (OSError, websockets.exceptions.ConnectionClosed) as e:
                 await self.on_close(e)
             except Exception as e:

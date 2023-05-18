@@ -100,6 +100,9 @@ class ContextList(urwid.ListBox):
             if isinstance(message_obj, dict):
                 message_obj['context'] = context['key']
             if isinstance(message_obj, RequestCommand):
+                # We are only setting a default context here, which could be
+                # overridden by a --context= arg appended later on. This
+                # is deliberate and is why we are not using .set_arg().
                 context_arg = ['--context=%s' % context['key']]
                 if message_obj['args'][:1] != context_arg:
                     message_obj['args'][:0] = context_arg

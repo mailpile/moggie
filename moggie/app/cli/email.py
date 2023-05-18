@@ -1233,6 +1233,7 @@ class CommandParse(CLICommand):
         ('--input=',            [], 'Load e-mail from file X, "-" for stdin'),
         ('--username=',     [None], 'Username with which to access the email'),
         ('--password=',     [None], 'Password with which to access the email'),
+        ('--or',           [False], 'Use OR instead of AND with search terms'),
         ('--allow-network',     [False], 'Allow outgoing network requests'),
         ('--forbid-filesystem', [False], 'Forbid loading local files'),
         ('--write-back',        [False], 'Write parse results to search index'),
@@ -1536,7 +1537,7 @@ class CommandParse(CLICommand):
 
     def configure2(self, args):
         if args:
-            self.searches.append(' '.join(args))
+            self.searches.append(self.combine_terms(args))
         self.searches.extend(self.options['--input='])
         self.options['--input='] = []
         return []

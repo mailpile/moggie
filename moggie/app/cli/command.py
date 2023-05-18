@@ -150,6 +150,12 @@ class CLICommand:
             self.app = AsyncRPCBridge(self.ev_loop, 'cli', self.worker, self)
             self.ev_loop.run_until_complete(self._await_connection())
 
+    def combine_terms(self, terms):
+        if self.options.get('--or', [False])[-1]:
+            return ' OR '.join('(%s)' % term for term in terms)
+        else:
+            return ' '.join(terms)
+
     def connect(self, args=[]):
         if not self.worker:
             from ...workers.app import AppWorker

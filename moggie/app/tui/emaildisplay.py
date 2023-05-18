@@ -10,7 +10,7 @@ from ...util.dumbcode import to_json
 
 from .widgets import *
 from .messagedialog import MessageDialog
-from .decorations import EMOJI
+from .decorations import EMOJI, ENVELOPES
 
 
 class EmailDisplay(urwid.ListBox):
@@ -18,6 +18,15 @@ class EmailDisplay(urwid.ListBox):
     COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
+
+    MESSAGE_MISSING = """\
+Message is missing
+
+Moggie is pretty sure this e-mail exists
+because other e-mails referenced it.
+
+However, Moggie has yet to receive a copy.
+"""
 
     def __init__(self, tui_frame, ctx_src_id, metadata,
             username=None, password=None, parsed=None):
@@ -29,23 +38,37 @@ class EmailDisplay(urwid.ListBox):
         self.crumb = self.metadata.get('subject', '(no subject)')
 
         self.rendered_width = self.COLUMN_NEEDS
-        self.email_body = urwid.Text('(loading...)')
         self.widgets = urwid.SimpleListWalker([])
+        self.email_display = self.no_body('Loading ...')
         urwid.ListBox.__init__(self, self.widgets)
         self.update_content()
 
         self.set_focus(len(self.widgets)-1)
 
         self.search_obj = self.get_search_obj(metadata, username, password)
-        self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
+        self.send_email_request()
 
         me = 'emaildisplay'
         _h = self.tui_frame.conn_manager.add_handler
         self.cm_handler_ids = [
             _h(me, ctx_src_id, 'cli:parse', self.incoming_parse)]
 
+    def no_body(self, message):
+        rows = self.tui_frame.max_child_rows() - (len(self.widgets) or 10)
+        return urwid.BoxAdapter(
+            SplashCat(decoration=ENVELOPES, message=message),
+            rows)
+
     def update_content(self, update=False):
-        self.widgets[:] = list(self.headers()) + [self.email_body]
+        self.widgets[:] = list(self.headers()) + [self.email_display]
+
+    def send_email_request(self, fmt=None):
+        if self.metadata.get('missing'):
+            self.email_display = self.no_body(self.MESSAGE_MISSING)
+            self.update_content()
+
+        self.search_obj.set_arg('--format=', fmt)
+        self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
     def cleanup(self):
         self.tui_frame.conn_manager.del_handler(*self.cm_handler_ids)
@@ -60,8 +83,14 @@ class EmailDisplay(urwid.ListBox):
 
     def headers(self):
         att_label = EMOJI.get('attachment', 'Attachment')
-        fields = ['Date:', 'To:', 'Cc:', 'From:', 'Reply-To:', 'Subject:']
-        fwidth = max(len(f) for f in fields + [att_label])
+        fields = {
+            'Date:': None,
+            'To:': None,
+            'Cc:': None,
+            'From:': '(unknown sender)',
+            'Reply-To:': None,
+            'Subject:': '(no subject)'}
+        fwidth = max(len(f) for f in [att_label] + list(fields.keys()))
 
         def _on_attachment(att, filename):
             return lambda e: self.on_attachment(att, filename)
@@ -77,9 +106,11 @@ class EmailDisplay(urwid.ListBox):
                     ('weight',     4, value),
                 ], dividechars=1)
 
-        for field in fields:
+        for field, default in fields.items():
             fkey = field[:-1].lower()
             if fkey not in self.metadata:
+                if default:
+                    yield line(fkey, field, default)
                 continue
 
             value = self.metadata[fkey]
@@ -96,9 +127,9 @@ class EmailDisplay(urwid.ListBox):
                         val = '<%s>' % val.address
                 else:
                     val = str(val).strip()
-                if not val:
+                if not val and not default:
                     continue
-                yield line(fkey, field, val)
+                yield line(fkey, field, val or default)
                 field = ''
 
         if self.email:
@@ -138,19 +169,42 @@ class EmailDisplay(urwid.ListBox):
         parse_args.append(to_json(metadata))
         return RequestCommand('parse', args=parse_args)
 
-    def incoming_parse(self, source, message):
-        from moggie.security.html import html_to_markdown
+    def empty_body(self):
+        if self.metadata.get('missing'):
+            return self.no_body(self.MESSAGE_MISSING)
+        else:
+            return self.no_body('Empty message')
 
+    def incoming_parse(self, source, message):
+        logging.debug('msg=%.2000s' % (message,))
+
+        self.email_display = None
+        if message['mimetype'] == 'application/moggie-internal':
+            for data in message['data']:
+                if isinstance(data, dict):
+                    self.email = data['parsed']
+                    break
+            if self.email:
+                self.email_display = self.parsed_email_to_text()
+
+        elif message['mimetype'] == 'text/plain':
+            if message['data'].strip():
+                self.email_display = urwid.Text(message['data'])
+            else:
+                self.email_display = self.empty_body()
+
+        if not self.email_display:
+            self.email_display = self.no_body(
+                'Failed to load or parse message, sorry!')
+
+        self.update_content()
+
+    def parsed_email_to_text(self):
+        from moggie.security.html import html_to_markdown
         def _to_md(txt):
             return html_to_markdown(txt,
                 no_images=True,
                 wrap=min(self.COLUMN_WANTS, self.rendered_width-1))
-
-        for data in message['data']:
-            if isinstance(data, dict):
-                self.email = data['parsed']
-        if not self.email:
-            return
 
         email_txts = {'text/plain': '', 'text/html': ''}
         for ctype, fmt in (
@@ -170,7 +224,10 @@ class EmailDisplay(urwid.ListBox):
             email_text = email_txts['text/plain']
 
         email_text = re.sub(
-            r'\n\s*\n', '\n\n', email_text.replace('\r', ''), flags=re.DOTALL)
+            r'\n\s*\n', '\n\n', email_text.replace('\r', ''), flags=re.DOTALL
+            ).strip()
 
-        self.email_body = urwid.Text(email_text.strip())
-        self.update_content()
+        if email_text:
+            return urwid.Text(email_text.strip())
+        else:
+            return self.empty_body()

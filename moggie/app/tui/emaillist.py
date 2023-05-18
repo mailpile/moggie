@@ -357,11 +357,7 @@ class EmailList(urwid.Pile):
 
         self.want_emails += (self.tui_frame.max_child_rows() * 2)
         if self.search_obj['req_type'] == 'cli:search':
-            self.search_obj['args'] = [
-                    a for a in self.search_obj.get('args', [])
-                    if not a.startswith('--limit=')
-                ] + [
-                    '--limit=%d' % self.want_emails]
+            self.search_obj.set_arg('--limit=', self.want_emails)
             if self.total_available is None:
                 self.tui_frame.send_with_context(
                     self.count_obj, self.ctx_src_id)

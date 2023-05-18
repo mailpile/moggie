@@ -376,8 +376,8 @@ class TuiFrame(urwid.Frame):
             try:
                 if focus_path:
                     self.set_focus_path(focus_path)
-            except:
-                logging.exception('hmm')
+            except IndexError:
+                pass
 
     def unhandled_input(self, key):
         try:

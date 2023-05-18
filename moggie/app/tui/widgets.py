@@ -98,11 +98,17 @@ class SplashCat(urwid.Filler):
     COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
-    def __init__(self, suggestions, message=''):
-        self.suggestions = suggestions
+    def __init__(self, suggestions=None, message='', decoration=None):
+        self.suggestions = suggestions or []
+
+        if decoration is None:
+            decoration = [HELLO, ('subtle', HELLO_CREDITS)]
+        elif isinstance(decoration, str):
+            decoration = [decoration]
+
         widgets = [
             ('weight', 3, urwid.Text(
-                [message, '\n', HELLO, ('subtle', HELLO_CREDITS), '\n'],
+                [message, '\n'] + decoration + ['\n'],
                 'center'))]
         if len(self.suggestions):
             widgets.append(('pack',  self.suggestions))

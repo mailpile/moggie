@@ -152,8 +152,10 @@ FIXME: Document html and html formats!
         (None, None, 'search'),
         ('--context=',   ['default'], 'The context for scope and settings'),
         ('--q=',                  [], 'Search terms (used by web API)'),
+        ('--or',             [False], 'Use OR instead of AND with search terms'),
         ('--offset=',          ['0'], 'Skip the first X results'),
         ('--limit=',            [''], 'Output at most X results'),
+        ('--tabs',           [False], 'Separate with tabs instead of spaces'),
         ('--entire-thread=',      [], 'X=(true|false)'),
         ('--username=',       [None], ''),  # FIXME
         ('--password=',       [None], ''),  # FIXME
@@ -184,7 +186,7 @@ FIXME: Document html and html formats!
         # option is mostly for use with the web-CLI.
         terms = self.strip_options(args)
         terms.extend(self.options['--q='])
-        self.terms = ' '.join(terms)
+        self.terms = self.combine_terms(terms)  # Respects --or
 
         fmt = self.options['--format='][-1]
         if fmt in ('json', 'jhtml'):
@@ -257,6 +259,7 @@ FIXME: Document html and html formats!
     async def as_summary(self, thread):
         if thread is None:
             return
+        sep = '\t' if self.options['--tabs'][-1] else ' '
         thread = self._as_thread(thread)
         if thread['hits']:
             tid = thread['thread']
@@ -278,6 +281,7 @@ FIXME: Document html and html formats!
                 (m['from']['fn'] or m['from']['address'])
                 for m in msgs.values() if 'from' in m)))
             info = {
+                '_sep': sep,
                 'thread': '%8.8d' % tid,
                 'timestamp': ts,
                 'date_relative': self._relative_date(ts),
@@ -289,16 +293,16 @@ FIXME: Document html and html formats!
                 'query': [self.sign_id('id:%s' % ','.join('%d' % mid for mid in msgs))] + [None],
                 'tags': tags}
             info['_url_thread'] = '/cli/show/%s' % info['query'][0]
-            info['_tag_list'] = ' (%s)' % (' '.join(tags)) if tags else ''
+            info['_tag_list'] = '%s(%s)' % (sep, ' '.join(tags)) if tags else ''
             info['_file_count'] = '(%d)' % fc if (fc > len(msgs)) else ''
             info['_id'] = (
                 ('id:%12.12d' % tid) if (len(msgs) == 1) else
                 ('thread:' + info['thread']))
             yield (
-                '%(_id)s %(date_relative)s'
-                ' [%(matched)s/%(total)s%(_file_count)s]'
-                ' %(authors)s;'
-                ' %(subject)s%(_tag_list)s',
+                '%(_id)s%(_sep)s%(date_relative)s'
+                '%(_sep)s[%(matched)s/%(total)s%(_file_count)s]'
+                '%(_sep)s%(authors)s;'
+                '%(_sep)s%(subject)s%(_tag_list)s',
                 info)
 
     async def as_messages(self, md):
@@ -1392,9 +1396,9 @@ class CommandTag(CLICommand):
     OPTIONS = [[
         (None, None, 'tagging'),
         ('--context=', ['default'], 'The context for scope and settings'),
-        ('--remove-all', [],
-                           'First strip all tags from matching messages'),
-        ('--big', [],
+        ('--remove-all',    [],'First strip all tags from matching messages'),
+        ('--or',       [False], 'Use OR instead of AND with search terms'),
+        ('--big',           [],
                'Override sanity checks and allow large, slow operations'),
     ],[
         (None, None, 'batch'),
@@ -1476,7 +1480,7 @@ class CommandTag(CLICommand):
             if not tags or not terms:
                 raise Nonsense('Nothing to do?')
 
-            terms = ' '.join(terms)
+            terms = self.combine_terms(terms)  # Respects --or
             if terms.startswith('META={'):
                 terms = from_json(terms[5:])
             self.tagops = [(tags, terms)]
