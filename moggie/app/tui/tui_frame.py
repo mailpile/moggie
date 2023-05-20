@@ -10,7 +10,7 @@ import os
 import time
 import urwid
 
-from ...config import APPNAME, APPVER, AppConfig
+from ...config import APPNAME, APPVER
 from ...api.requests import *
 from ..suggestions import Suggestion, SuggestionWelcome
 
@@ -133,20 +133,22 @@ class TuiFrame(urwid.Frame):
         self.context_list.expand(i)
         self.update_columns()
 
-    def show_browser(self, which, context=None, history=True):
+    def show_browser(self, which=True, context=None, history=True):
         ctx_id, ctx_src_id = self.context_list.get_context_and_src_ids(context)
-        self.col_show(self.all_columns[0],
-            Browser(self, RequestBrowse(ctx_id, which), ctx_src_id))
+        self.col_show(self.all_columns[0], Browser(self, ctx_src_id, which))
         if history:
+            label = 'Browse' if which is True else os.path.basename(which)
             self.context_list.add_history(
-                os.path.basename(which),
+                label,
                 lambda: self.show_browser(which, context),
                 icon=EMOJI.get('browsing', '-'))
 
-    def show_mailbox(self, which, context=None, history=True):
+    def show_mailbox(self, which, context=None, history=True, keep=None):
         _, ctx_src_id = self.context_list.get_context_and_src_ids(context)
         terms = 'mailbox:%s' % which
-        self.col_show(self.all_columns[0], EmailList(self, ctx_src_id, terms))
+        self.col_show(
+            keep or self.all_columns[0],
+            EmailList(self, ctx_src_id, terms))
 
         if history:
             self.context_list.add_history(
@@ -279,7 +281,7 @@ class TuiFrame(urwid.Frame):
         if 0 < nage <= 30:
             msg = self.notifications[-1]['message']
             global_hints = [('weight', len(msg),
-                urwid.Text(msg, align='left', wrap='clip'))]
+                urwid.Text(msg, align='left', wrap='ellipsis'))]
         else:
             nage = 0
             global_hints.append(('weight', len(clock),
@@ -305,7 +307,7 @@ class TuiFrame(urwid.Frame):
                 ('fixed', len(mv), urwid.Text(mv, align='left')),
                 ] + global_hints), 'header')),
             _p(urwid.AttrMap(urwid.Columns([
-                ('weight', crumblen, urwid.Text(crumbtrail, wrap='clip'))
+                ('weight', crumblen, urwid.Text(crumbtrail, wrap='ellipsis'))
                 ] + column_hints, dividechars=1), 'crumbs'))]
         #if update:
         #    self.contents['header'] = (self.topbar, None)
@@ -318,6 +320,7 @@ class TuiFrame(urwid.Frame):
             pass
 
     def col_show(self, ref, widget):
+        logging.debug('Adding %s' % widget)
         self.col_remove(ref, ofs=1, update=False)
         self.all_columns.append(widget)
         self.update_columns()

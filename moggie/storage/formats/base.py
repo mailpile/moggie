@@ -12,7 +12,7 @@ class FormatBytes:
 
     @classmethod
     def Magic(cls, parent, key, is_dir=None):
-        return (not is_dir)
+        return False  # Bytes are boring - was: (not is_dir)
 
     def __init__(self, parent, path, container):
         if hasattr(container, 'fileno'):

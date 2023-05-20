@@ -2,6 +2,7 @@
 #       add an export command, for exporting messages from A to B
 
 import asyncio
+import copy
 import datetime
 import logging
 import os
@@ -879,6 +880,7 @@ class CommandBrowse(CLICommand):
         AccessConfig.GRANT_FS +
         AccessConfig.GRANT_NETWORK)
     WEBSOCKET = False
+    WEB_EXPOSE = True
     AUTO_START = False
     IGNORED = ['.', '..',
         'cur', 'new', 'tmp', 'wervd.ver',
@@ -888,11 +890,28 @@ class CommandBrowse(CLICommand):
         '.fetchmailrc', '.password-store', 'etc', 'passwd']
     OPTIONS = [[
         ('--format=',     ['text'], 'X=(text*|json|sexp)'),
+        ('--tabs',         [False], 'Use tabs to separate output columns'),
         ('--context=', ['default'], 'X=<ctx>, import messages into a specific context'),
         ('--username=',     [None], 'X=<U>, username required to access the data (if any)'),
         ('--password=',     [None], 'X=<P>, password requried to access the data (if any)'),
         ('--ifnewer=',         [0], 'X=<ts>, ignore files unchanged since timestamp'),
         ('--ignore=',      IGNORED, '')]]
+
+    SRC_ORDER = {
+        'config': 0,
+        'spool': 1,
+        'home': 2,
+        'fs': 10,
+        'mailpilev1': 20,
+        'thunderbird': 30}
+
+    SRC_DESCRIPTIONS = {
+        '': 'Files and folders',
+        'fs': 'Files and folders',
+        'spool': 'This is the local incoming Unix mail spool',
+        'home': 'Your home directory',
+        'mailpilev1': 'Legacy Mailpile v1 data',
+        'thunderbird': 'Accounts and mailboxes configured in Thunderbird'}
 
     def configure(self, args):
         self.paths = self.strip_options(args)
@@ -901,6 +920,8 @@ class CommandBrowse(CLICommand):
                 p = p[:-1]
             if os.path.basename(p) in self.IGNORED:
                 raise Nonsense('Invalid path: %s' % p)
+        if not self.paths:
+            self.paths = [True]  # Request the default browse list
         return []
 
     def emit_text(self, path, results):
@@ -908,11 +929,18 @@ class CommandBrowse(CLICommand):
             self.print('%s' % results)
             return
 
-        width = 15
-        for child in results:
-            width = max(len(child['path']), width)
-        fmt = '%%(path)-%ds %%(size)10s %%(mtime)10s %%(magic)s' % width
+        tabs = self.options['--tabs'][-1]
+        if tabs:
+            fmt = '%(tag)s\t%(path)s\t%(size)s\t%(mtime)s\t%(magic)s'
+        else:
+            width = 15
+            for child in results:
+                width = max(len(child['path']), width)
+            fmt = (
+                '  %%(path)-%ds %%(size)10s %%(mtime)10s %%(magic)s') % width
 
+        first = True
+        explanations = copy.copy(self.SRC_DESCRIPTIONS)
         for child in results:
             if not isinstance(child, dict):
                 self.print('%s' % child)
@@ -921,8 +949,21 @@ class CommandBrowse(CLICommand):
             magic = child.get('magic', [])
             if child.get('is_dir'):
                 magic.append('dir')
+            for attr in ('size', 'mtime'):
+                if attr not in child:
+                    child[attr] = ''
+            child['src'] = child.get('src', 'fs')
             child['magic'] = ','.join(sorted(magic))
+
+            if child['src'] in explanations and not tabs:
+                if not first:
+                    self.print()
+                self.print(explanations[child['src']] + ':')
+                del explanations[child['src']]
+                first = False
             self.print(fmt % child)
+        if not tabs:
+            self.print()
 
     async def run(self):
         ctx_id = self.get_context()
@@ -932,8 +973,10 @@ class CommandBrowse(CLICommand):
         def _prune(results):
             if 'info' in results:
                 results = [r for r in results['info']
-                    if r.get('exists')
-                    and os.path.basename(r['path']) not in ignored]
+                    if r['path'][:5] in ('imap:', b'imap:')
+                    or (r.get('exists') and
+                        (r.get('magic') or r.get('has_children')) and
+                        os.path.basename(r['path']) not in ignored)]
                 for r in results:
                     for d in ('mode', 'owner', 'group', 'exists'):
                         if d in r:
@@ -947,8 +990,9 @@ class CommandBrowse(CLICommand):
         fmt = self.options['--format='][-1]
         results = {}
         for path in self.paths:
-            while path.endswith('/') and len(path) > 1:
-                path = path[:-1]
+            if path is not True:
+                while path.endswith('/') and len(path) > 1:
+                    path = path[:-1]
             results[path] = _prune(
                 await self.worker.async_api_request(self.access,
                     RequestBrowse(
@@ -957,6 +1001,8 @@ class CommandBrowse(CLICommand):
                         ifnewer=int(self.options['--ifnewer='][-1]),
                         username=self.options['--username='][-1],
                         password=self.options['--password='][-1])))
+
+            results[path].sort(key=self.sort_key)
             if fmt == 'text':
                 self.emit_text(path, results[path])
 
@@ -965,6 +1011,12 @@ class CommandBrowse(CLICommand):
         elif fmt == 'sexp':
             self.print_sexp(results)
 
+    def sort_key(self, result):
+        return (
+            self.SRC_ORDER.get(result.get('src', 'fs'), 999),
+            '/.' in result['path'],
+            result['path'].lower(),
+            result.get('mtime', 0))
 
 ## FIXME - Are these still what we want/need? ##
 

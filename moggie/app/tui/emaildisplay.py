@@ -239,7 +239,7 @@ However, Moggie has yet to receive a copy.
 
         elif message['mimetype'] in ('text/plain', 'message/rfc822'):
             if message['data'].strip():
-                self.email_display = urwid.Text(message['data'])
+                self.email_display = urwid.Text(message['data'], wrap='any')
             else:
                 self.email_display = self.empty_body()
 

@@ -11,10 +11,12 @@ class SuggestionBox(urwid.Pile):
 
     def __init__(self, tui_frame,
             update_parent=None,
-            fallbacks=None, suggestions=None, max_suggestions=3):
+            fallbacks=None, suggestions=None, max_suggestions=3,
+            omit_actions=None):
 
         self.tui_frame = tui_frame
         self.update_parent = update_parent or (lambda: None)
+        self.omit_actions = omit_actions or []
         self.max_suggestions = max_suggestions
         self.widgets = []
         urwid.Pile.__init__(self, self.widgets)
@@ -32,7 +34,8 @@ class SuggestionBox(urwid.Pile):
             if _id in SuggestionBox.DISMISSED:
                 continue
             sg_obj = SUGGESTIONS[_id].If_Wanted(context, None)
-            if sg_obj is not None:
+            if ((sg_obj is not None) and
+                    (sg_obj.UI_ACTION not in self.omit_actions)):
                 suggest.append(sg_obj)
                 if len(suggest) >= self.max_suggestions:
                     break
@@ -53,6 +56,8 @@ class SuggestionBox(urwid.Pile):
             act = suggestion.action()  # FIXME
             if act == Suggestion.UI_QUIT:
                 self.tui_frame.ui_quit()
+            elif act == Suggestion.UI_BROWSE:
+                self.tui_frame.show_browser()
             elif act == Suggestion.UI_ENCRYPT:
                 self.tui_frame.ui_change_passphrase()
             elif isinstance(act, RequestBase):
@@ -83,7 +88,8 @@ class SuggestionBox(urwid.Pile):
 
         self.widgets = widgets
         self.contents = [(w, ('pack', None)) for w in self.widgets]
-        self.set_focus(0)
+        if widgets:
+            self.set_focus(0)
 
     def __len__(self):
         return len(self.widgets)

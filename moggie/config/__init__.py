@@ -920,12 +920,12 @@ class AppConfig(ConfigParser):
             self.save()
 
     def detect_local_accounts(self):
+        import socket
+        from .paths import user_mail_spool
         try:
-            import getpass, os, socket
-            user = getpass.getuser()
-            spool = os.path.join('/var/mail', user)
+            spool = user_mail_spool()
             hostname = socket.gethostname()
-            if os.path.exists(spool) and hostname:
+            if spool and hostname:
                 local_email = '%s@%s' % (user, hostname)
                 local_acct_id = self.ACCOUNT_PREFIX + ' 0'
                 self.add_section(local_acct_id)

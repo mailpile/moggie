@@ -96,7 +96,7 @@ def CommandMuttalike(wd, args):
     try:
         draft = MessageDraft.FromArgs(args, unhandled_cb=_process)
 
-        tui_exclusive = ('-f', '-p', '-y', '-Z')
+        tui_exclusive = ('-f', '-p', '-Z')
         for a in (arg for arg in tui_exclusive if arg in tui_args):
             for b in tui_exclusive:
                 if a != b and (b in tui_args):

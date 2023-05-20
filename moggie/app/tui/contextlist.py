@@ -138,6 +138,7 @@ class ContextList(urwid.ListBox):
 
     def show_overview(self, context):
         logging.debug('FIXME: Should show context %s' % context)
+        self.tui_frame.show_browser(history=False)
 
     def show_connections(self, context):
         logging.debug('FIXME: Should show context connections')

@@ -126,7 +126,7 @@ class TuiConnManager:
 
 
 def Main(workdir, tui_args, send_draft):
-    for arg in ('-E', '-p', '-R', '-y', '-Z'):
+    for arg in ('-E', '-p', '-R', '-Z'):
         if arg in tui_args:
             raise Nonsense('FIXME: Unimplemented: moggie %s' % (arg,))
 
@@ -166,6 +166,9 @@ def Main(workdir, tui_args, send_draft):
                 initial_state['show_browser'] = target
             else:
                 initial_state['show_mailbox'] = target
+
+        elif '-y' in tui_args:
+            initial_state['show_browser'] = True
 
         tui_frame.set_initial_state(initial_state)
         urwid.MainLoop(urwid.AttrMap(tui_frame, 'body'),

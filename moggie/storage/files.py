@@ -205,8 +205,9 @@ class FileStorage(BaseStorage):
             pass
 
     def info(self, key=None,
-            details=False, recurse=0, relpath=None,
+            details=False, recurse=None, relpath=None,
             limit=None, skip=0):
+        userhome = os.path.expanduser(b'~')
         paths = self.key_to_paths(key)
         path = paths.pop(0)
         try:
@@ -226,8 +227,23 @@ class FileStorage(BaseStorage):
             except UnicodeDecodeError:
                 return t
 
+        # Add source info, just like config.paths.mail_path_suggestions
+        src = ('home'
+            if (path.startswith(userhome+b'/') or path == userhome)
+            else '')
+        if src == 'home':
+            if b'/share/Mailpile/' in path or b'/.mailpile/' in path:
+                src = 'mailpilev1'
+            elif path.startswith(os.path.expanduser(b'~/.thunderbird/')):
+                src = 'thunderbird'
+        elif path.startswith(b'/var/'):
+            src = 'spool'
+        else:
+            src = 'fs'
+
         is_dir = os.path.isdir(path)
         info = {
+            'src': src,
             'path': _utf8(path),
             'exists': True,
             'is_dir': is_dir,
@@ -244,18 +260,22 @@ class FileStorage(BaseStorage):
             relpath = True
 
         if is_dir and (details is True or 'contents' in details):
-            info['contents'] = c = []
-            maildir = 0
+            c = []
             rp = self.relpath(path) if relpath else path
             for p in self.listdir(key):
                 subpath = os.path.join(rp, p)
                 if recurse:
                     rec_next = max(0, recurse - 1)
-                    det_next = 'magic' if (not rec_next) else True
+                    det_next = True # 'magic' if (not rec_next) else True
                     c.append(self.info(subpath,
                         details=det_next, relpath=relpath, recurse=rec_next))
                 else:
                     c.append(_utf8(subpath))
+                if (len(c) > 2) and (recurse == 0):
+                    break
+            info['has_children'] = (len(c) > 2)
+            if (recurse != 0):
+                info['contents'] = c
 
         if details is True or 'magic' in details:
             magic = []

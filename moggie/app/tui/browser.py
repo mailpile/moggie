@@ -1,41 +1,36 @@
 import logging
+import os
 import urwid
 
-from ...api.requests import RequestBrowse
+from ...api.requests import RequestCommand
 from ..suggestions import Suggestion
 
+from .decorations import EMOJI
 from .suggestionbox import SuggestionBox
 from .widgets import *
 
 
 class BrowserListWalker(urwid.ListWalker):
     def __init__(self, parent):
+        from ..cli.admin import CommandBrowse
         self.focus = 0
-        self.paths = []
+        self.paths = {}
+        self.visible = []
         self.selected = set()
         self.selected_all = False
         self.parent = parent
+        self.src_ord = CommandBrowse.SRC_ORDER
+        self.src_desc = CommandBrowse.SRC_DESCRIPTIONS
 
     def __len__(self):
-        return sum(1 for path in self.paths if path[0])
-
-    def add_paths(self, parent, paths):
-        def _mk_path(p):
-            displayed = 1
-            return [displayed, indent, path]
-        self.paths.extend(_mk_path(path) for path in paths)
-        self.paths.sort()
-        self._modified()
+        return len(self.visible)
 
     def set_focus(self, focus):
         self.focus = focus
-        #if focus > len(self.paths) - 100:
-        #    self.parent.load_more()
 
     def next_position(self, pos):
-        if pos + 1 < len(self.paths):
+        if pos + 1 < len(self.visible):
             return pos + 1
-        #self.parent.load_more()
         raise IndexError
 
     def prev_position(self, pos):
@@ -45,26 +40,121 @@ class BrowserListWalker(urwid.ListWalker):
 
     def positions(self, reverse=False):
         if reverse:
-            return reversed(range(0, len(self.paths)))
-        return range(0, len(self.paths))
+            return reversed(range(0, len(self.visible)))
+        return range(0, len(self.visible))
+
+    SECTION  = 0
+    PATH     = 1
+    VISIBLE  = 2
+    FIRST    = 3
+    INDENT   = 4
+    SRC      = 5
+    NAME     = 6
+    INFO     = 7
+    LOADED   = 8
+    EXPANDED = 9
+
+    def add_paths(self, paths):
+        _so = self.src_ord
+        self.paths.update(dict((p['path'], [
+                _so.get(p['src'], 99), p['path'],  # Sort by src/path
+                True,     # 2 == Visible?
+                False,    # 3 == First?
+                '',       # 4 == Indent
+                p['src'], # 5 == Source
+                p['path'],# 6 == Friendly name
+                p,        # 7 == Info
+                False,    # 8 == Loaded?
+                False     # 9 == Expanded?
+            ]) for p in paths if p['path'] not in self.paths))
+
+        visible = [p for p in self.paths.values() if p[self.VISIBLE]]
+        visible.sort()
+
+        psrc, ppath, pslashes = '-', '-', 0
+        for p in visible:
+            src, name = p[self.SRC], p[self.PATH]
+            p[self.FIRST] = (src != psrc)
+            if (src == psrc) and name.startswith(ppath):
+                indent = sum(1 for c in name if c == '/') - pslashes
+                name = os.path.basename(name)
+            else:
+                indent, psrc, ppath = 0, src, name
+                pslashes = sum(1 for c in name[:-1] if c == '/')
+
+            if src == 'mailpilev1':
+                name = name.split('Mailpile/', 1)[-1]
+            elif src == 'thunderbird' and name[:5] != 'imap:':
+                name = name.split('.thunderbird/', 1)[-1]
+
+            p[self.INDENT] = '  ' * max(0, indent)
+            p[self.NAME] = name
+
+        self.visible[:] = visible
+        self._modified()
+        logging.debug('Visible items are now %d' % len(self.visible))
 
     def __getitem__(self, pos):
+        def _cb(cb, *args):
+            return lambda x: cb(*args)
         try:
-            filename = self.paths[pos][-1]
+            first, indent, src, name, info = (
+                self.visible[pos][self.FIRST:self.INFO+1])
+
+            magic = info.get('magic')
+            icon = EMOJI.get(magic[0]) if magic else ''
+            if not icon:
+                icon = EMOJI.get(
+                    'folder' if info.get('is_dir') else 'file', '')
+
+            n = urwid.Text(('browse_name', '  %s%s%s' % (indent, icon, name)),
+                           wrap='ellipsis')
+            i = urwid.Text(('browse_info', '???'), align='right', wrap='clip')
             cols = urwid.Columns([
-              ('weight', 15, urwid.Text(('browse_file', filename), wrap='clip')),
-              (10,           urwid.Text(('_date', dt), align='left'))],
-              dividechars=1)
-            return Selectable(cols, on_select={
-                'enter': lambda x: self.parent.open_path(filename),
-                'x': lambda x: self.check(filename)})
+                    ('weight', 15, n),
+                    ('fixed', 10, i),
+                ], dividechars=1)
+            sel = Selectable(cols, on_select={
+                'enter': _cb(self.on_browse, pos, info)})
+            if first:
+                return urwid.Pile([
+                    urwid.Text(('browse_label', '\n' + self.src_desc[src])),
+                    sel])
+            else:
+                return sel
         except IndexError:
-            pass
+            raise
         except:
             logging.exception('Failed to load message')
         raise IndexError
 
-    def check(self, path, display=None):
+    def on_browse(self, pos, path_info):
+        entry = self.visible[pos]
+        logging.debug('Toggle %s' % entry)
+
+        if entry[self.LOADED]:
+            # This is a little bit weird, but I think
+            # it is weird in a useful way?
+            show = not entry[self.EXPANDED]
+            for e in self.paths.values():
+                if e[self.PATH].startswith(entry[self.PATH] + '/'):
+                    if e[self.LOADED]:
+                        e[self.EXPANDED] = show
+                    else:
+                        e[self.VISIBLE] = show
+            entry[self.EXPANDED] = show
+            self.add_paths({})
+        else:
+            entry[self.LOADED] = entry[self.EXPANDED] = True
+            self.parent.browse(path_info)
+
+        if path_info.get('magic'):
+            self.parent.tui_frame.show_mailbox(
+                path_info['path'], keep=self.parent)
+
+    def on_check(self, pos, path_info):
+        return
+
         had_any = (len(self.selected) > 0)
         if path in self.selected and not display:
             self.selected.remove(path)
@@ -78,19 +168,19 @@ class BrowserListWalker(urwid.ListWalker):
 
         self._modified()
         # FIXME: There must be a better way to do this...
-        self.parent.keypress((100,), 'down')
+        #self.parent.keypress((100,), 'down')
 
 
 class SuggestAddToIndex(Suggestion):
     MESSAGE = 'Add these messages to the search index'
 
-    def __init__(self, tui_frame, search_obj, ctx_src_id):
+    def __init__(self, tui_frame, browse_obj, ctx_src_id):
         Suggestion.__init__(self, context, None)  # FIXME: Config?
         self.tui_frame = tui_frame
         self.ctx_src_id = ctx_src_id
         self.request_add = RequestAddToIndex(
-            context=search_obj['context'],
-            search=search_obj)
+            context=browse_obj['context'],
+            search=browse_obj)
         self._message = self.MESSAGE
         self.adding = False
 
@@ -107,74 +197,69 @@ class SuggestAddToIndex(Suggestion):
 
 
 class Browser(urwid.Pile):
-    COLUMN_NEEDS = 40
-    COLUMN_WANTS = 70
+    COLUMN_NEEDS = 25
+    COLUMN_WANTS = 50
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
-    def __init__(self, tui_frame, search_obj, ctx_src_id):
-        self.ctx_src_id = ctx_src_id
-        self.search_obj = search_obj
+    def __init__(self, tui_frame, ctx_src_id, browse_path):
         self.tui_frame = tui_frame
-        self.conn_manager = tui_frame.conn_manager
+        self.ctx_src_id = ctx_src_id
+        self.browse_path = browse_path
+        self.crumb = browse_path if isinstance(browse_path, str) else 'Browse'
 
-        self.crumb = search_obj.get('mailbox', None)
-        if not self.crumb:
-            terms = search_obj.get('terms', 'FIXME')
-            if terms.startswith('in:'):
-                terms = terms[3].upper() + terms[4:]
-            elif terms == 'all:mail':
-                terms = 'All Mail'
-            self.crumb = terms
-
-        self.global_hks = {
-            'J': [lambda *a: None, ('top_hk', 'J:'), 'Read Next '],
-            'K': [lambda *a: None, ('top_hk', 'K:'), 'Previous  ']}
-
-        self.column_hks = [('top_hk', 'A:'), 'Add To Index']
+        self.column_hks = []  #('col_hk', 'A:'), 'Add To Index']
 
         self.walker = BrowserListWalker(self)
-        self.paths = self.walker.paths
         self.listbox = urwid.ListBox(self.walker)
+        self.browse_obj = self.get_browse_obj()
         self.suggestions = SuggestionBox(self.tui_frame,
-            update_parent=self.update_content)
+            update_parent=self.update_content,
+            omit_actions=[Suggestion.UI_BROWSE])
         self.widgets = []
+        self.paths = self.walker.paths
+        self.loading = True
 
-        self.cm_handler_id = self.conn_manager.add_handler(
-            'browser', ctx_src_id, search_obj, self.incoming_message)
-
-        self.loading = 0
-        self.want_more = True
-        self.load_more()
+        _ah = self.tui_frame.conn_manager.add_handler
+        self.cm_handler_ids = [
+            _ah('browser', ctx_src_id, 'cli:browse', self.incoming_message)]
+        self.tui_frame.send_with_context(self.browse_obj, self.ctx_src_id)
 
         urwid.Pile.__init__(self, [])
         self.update_content()
 
+    def cleanup(self):
+        self.tui_frame.conn_manager.del_handler(*self.cm_handler_ids)
+        self.browse_obj = None
+        del self.tui_frame
+        del self.walker.paths
+        del self.walker.visible
+        del self.walker
+        del self.paths
+        del self.listbox
+        del self.widgets
+
+    def get_browse_obj(self):
+        if isinstance(self.browse_path, str):
+            return RequestCommand('browse', args=[self.browse_path])
+        else:
+            return RequestCommand('browse', args=[])
+
+    def browse(self, path_info):
+        self.browse_obj['args'] = [path_info['path']]
+        self.tui_frame.send_with_context(self.browse_obj, self.ctx_src_id)
+
     def update_content(self):
-        self.widgets[0:] = []
         rows = self.tui_frame.max_child_rows()
 
         if not self.paths:
-            message = 'Loading ...' if self.loading else 'No mail here!'
+            message = 'Loading ...' if self.loading else 'Nothing here!'
             cat = urwid.BoxAdapter(SplashCat(self.suggestions, message), rows)
             self.contents = [(cat, ('pack', None))]
             return
-        elif self.search_obj['req_type'] != 'search':
-            pass
-            #self.suggestions.set_suggestions([
-            #    SuggestAddToIndex(self, self.search_obj, self.ctx_src_id)])
 
-        # Inject suggestions above the list of messages, if any are
-        # present. This can change dynamically as the backend sends us
-        # hints.
-        if self.walker.selected and 'mailbox' in self.search_obj:
-            self.widgets.append(urwid.Columns([
-                ('weight', 1, urwid.Text(('subtle',
-                    'NOTE: You are operating directly on a mailbox!\n'
-                    '      Tagging will add emails to the search index.\n'
-                    '      Deletion cannot be undone.'))),
-                ('fixed', 3, CloseButton(None))]))
-        elif len(self.suggestions):
+        self.widgets = []
+        if len(self.suggestions):
             self.widgets.append(self.suggestions)
 
         rows -= sum(w.rows((60,)) for w in self.widgets)
@@ -183,49 +268,21 @@ class Browser(urwid.Pile):
             rows -= 1
         self.widgets.append(urwid.BoxAdapter(self.listbox, rows))
 
-        self.contents = [(w, ('pack', None)) for w in self.widgets]
-
-    def cleanup(self):
-        self.conn_manager.del_handler(self.cm_handler_id)
-        self.search_obj = None
-        del self.tui_frame
-        del self.conn_manager
-        del self.walker.emails
-        del self.walker
-        del self.paths
-        del self.listbox
-        del self.widgets
-
-    def show_email(self, metadata):
-        self.tui_frame.col_show(self,
-            EmailDisplay(self.tui_frame, self.ctx_src_id, metadata))
-        try:
-            self.tui_frame.columns.set_focus_path([1])
-        except IndexError:
-            pass
-
-    def load_more(self):
-        now = time.time()
-        if (self.loading > now - 5) or not self.want_more:
-            return
-        self.loading = time.time()
-        self.search_obj.update({
-            'skip': len(self.paths),
-            'limit': min(max(500, 2*len(self.paths)), 10000)})
-        self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
+        self.contents[:] = [(w, ('pack', None)) for w in self.widgets]
 
     def incoming_message(self, source, message):
-        logging.debug('[%s] => %.128s' % (source, message))
-        if (not self.search_obj
-                or message.get('req_id') != self.search_obj['req_id']):
+        if (not self.browse_obj
+                or message.get('req_id') != self.browse_obj['req_id']):
             return
-        try:
-            self.suggestions.incoming_message(message)
-            self.walker.add_emails(message['skip'], message['emails'])
 
-            self.want_more = (message['limit'] == len(message['emails']))
-            self.loading = 0
-            self.load_more()
-        except:
-            logging.exception('Failed to process message')
+        for result in message.get('data', []):
+            if not isinstance(result, dict):
+                continue
+            try:
+                for section, paths in result.items():
+                    self.walker.add_paths(paths)
+            except:
+                logging.exception('Add paths failed')
+
+        self.loading = 0
         self.update_content()

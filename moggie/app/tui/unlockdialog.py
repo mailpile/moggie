@@ -23,7 +23,7 @@ Enter your passphrase (or password) to unlock the app.
         self.tui_frame = tui_frame
 
         self.unlock_box = urwid.Edit('Passphrase: ',
-            multiline=True, mask='*', allow_tab=False, wrap='clip')
+            multiline=True, mask='*', allow_tab=False, wrap='ellipsis')
         urwid.connect_signal(
             self.unlock_box, 'change', lambda b,t: self.unlock(t))
 

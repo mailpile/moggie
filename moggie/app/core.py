@@ -508,23 +508,34 @@ main app worker. Hints:
         # FIXME: Triage local/remote here? Hmm.
         # Note: This might return a "please login" if the mailbox
         #       is encrypted or on a remote server.
+        loop = asyncio.get_event_loop()
         path = api_request['path']
-        info = await self.storage.async_info(asyncio.get_event_loop(),
-            path, details=True, recurse=1, relpath=False)
+        result = []
+        if path is True:
+            from ..config.paths import mail_path_suggestions
+            # FIXME: Security and access controls, please?
+            for suggest in mail_path_suggestions(local=True):
+                path = suggest['path']
+                if path.startswith('imap:'):
+                    info = {'magic': ['imap']}
+                else:
+                    info = await self.storage.async_info(loop,
+                        path, details=True, recurse=0, relpath=False)
+                if 'src' in info:
+                    del info['src']
+                suggest.update(info)
+                result.append(suggest)
+        else:
+            info = await self.storage.async_info(loop,
+                path, details=True, recurse=1, relpath=False)
 
-        children = []
-        if 'contents' in info:
-            children = info['contents']
-            del info['contents']
+            children = []
+            if 'contents' in info:
+                children = info['contents']
+                del info['contents']
 
-        def _key(r):
-            try:
-                return ('/.' in r['path'], r['path'].lower(), r['mtime'])
-            except (TypeError, KeyError):
-                return (False, 'bogus', 0)
+            result = [info] + children
 
-        result = [info] + children
-        result.sort(key=_key)
         return ResponseBrowse(api_request, result)
 
     async def api_req_mailbox(self, conn_id, access, api_request):

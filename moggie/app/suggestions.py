@@ -18,7 +18,7 @@ class Suggestion:
         self.config = config
 
     @classmethod
-    def If_Wanted(cls, context, config):
+    def If_Wanted(cls, context, config, **info):
         return cls(context, config)
 
     def message(self):
@@ -29,7 +29,7 @@ class Suggestion:
 
 
 class SuggestionWelcome(Suggestion):
-    MESSAGE = 'Use the arrow keys/enter to move/select, `q` to quit!'
+    MESSAGE = 'Use arrows/enter to move/select, `q` to quit!'
     UI_ACTION = Suggestion.UI_HELP
     ID = 0
 
@@ -55,10 +55,16 @@ class SuggestionEncrypt(Suggestion):
     ID = 3
 
     @classmethod
-    def If_Wanted(cls, context, config):
+    def If_Wanted(cls, context, config, **info):
+        # FIXME: The app does not actually have the config, nor should
+        #        if - we need to API-ify the suggestions for this to work
+        #        properly.
+        return None
+
         if config and config.get(config.SECRETS, 'passphrase'):
+            return cls(context, config)
+        else:
             return None
-        return cls(context, config)
 
 
 SUGGESTIONS = dict((s.ID, s) for s in [

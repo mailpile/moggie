@@ -41,8 +41,7 @@ class FormatMailzip(FormatBytes):
                     if cls.FILE_RE.search(name):
                         return True
             return False
-        except:
-            raise
+        except (zipfile.BadZipFile, IOError, OSError):
             return False
 
     def __init__(self, parent, path, container, **kwargs):

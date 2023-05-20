@@ -1,10 +1,19 @@
 from ...config import APPNAME, APPVER
 
 EMOJI = {
-    'mailbox':    '\U0001F4C1',
-    'search':     '\U0001F50E',
-    'attachment': '\U0001F4CE',
-    'lock':       '\U0001F512'}
+    'browsing':       '\U0001F4BB',  # Laptop
+   #'browsing':       '\U0001F5B4',  # Unicode hard disk
+    'imap':           '\U0001F4E7',  # E-mail emoji
+    'file':           '\U0001F4BE',  # Floppy disk
+    'folder':         '\U0001F4C1',  # Folder, closed
+    'mbox':           '\U0001F4EA',  # Mailbox, flag down
+    'maildir1.wervd': '\U0001F4EA',  # Mailbox, flag down
+    'maildir':        '\U0001F4EA',  # Mailbox, flag down
+    'mailzip':        '\U0001F4EA',  # Mailbox, flag down
+    'mailbox':        '\U0001F4EA',  # Mailbox, flag down
+    'search':         '\U0001F50E',  # Magnifying glass
+    'attachment':     '\U0001F4CE',  # Paperclip
+    'lock':           '\U0001F512'}  # Lock
 
 
 ENVELOPES = ("""\
@@ -86,10 +95,13 @@ DEFAULT_PALETTE = [
             ('email_val_date', 'dark gray',   'black',     ''),
             ('email_key_subj', 'dark gray',   'black',     ''),
             ('email_val_subj', 'light green', 'black',     ''),
+            ('browse_name',    'white',       'black',     ''),
+            ('browse_info',    'dark gray',   'black',     ''),
+            ('browse_label',   'dark gray',   'black',     ''),
             ('active',         'light blue',  'black',     ''),
             ('active',         'white',       'brown',     ''),
             ('focus1',         'white',       'dark blue', ''),
-            ('focus2',         'white',       'brown', '')]
+            ('focus2',         'white',       'brown',     '')]
 
 def palette(config):
     return DEFAULT_PALETTE

@@ -46,7 +46,7 @@ Use an asterisk (*) to search for word fragments.
 
         self.exact = urwid.CheckBox('Exact matches only', False)
         self.search_box = urwid.Edit('Search: ',
-            multiline=True, allow_tab=False, wrap='clip')
+            multiline=True, allow_tab=False, wrap='ellipsis')
         urwid.connect_signal(
             self.search_box, 'change', lambda b,t: self.search(t))
 

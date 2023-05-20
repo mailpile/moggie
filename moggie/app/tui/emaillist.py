@@ -41,6 +41,27 @@ class EmailListWalker(urwid.ListWalker):
     def __len__(self):
         return len(self.visible)
 
+    def set_focus(self, focus):
+        self.focus = focus
+        if focus > len(self.visible) - 50:
+            self.parent.load_more()
+
+    def next_position(self, pos):
+        if pos + 1 < len(self.visible):
+            return pos + 1
+        self.parent.load_more()
+        raise IndexError
+
+    def prev_position(self, pos):
+        if pos > 0:
+            return pos - 1
+        raise IndexError
+
+    def positions(self, reverse=False):
+        if reverse:
+            return reversed(range(0, len(self.visible)))
+        return range(0, len(self.visible))
+
     def expand(self, msg):
         self.expanded.add(msg['thread_id'])
         self.set_emails(self.emails)
@@ -95,27 +116,6 @@ class EmailListWalker(urwid.ListWalker):
                     self.focus = i
 
         self._modified()
-
-    def set_focus(self, focus):
-        self.focus = focus
-        if focus > len(self.visible) - 50:
-            self.parent.load_more()
-
-    def next_position(self, pos):
-        if pos + 1 < len(self.visible):
-            return pos + 1
-        self.parent.load_more()
-        raise IndexError
-
-    def prev_position(self, pos):
-        if pos > 0:
-            return pos - 1
-        raise IndexError
-
-    def positions(self, reverse=False):
-        if reverse:
-            return reversed(range(0, len(self.visible)))
-        return range(0, len(self.visible))
 
     def __getitem__(self, pos):
         def _thread_subject(md, frm):
