@@ -91,8 +91,9 @@ class TuiFrame(urwid.Frame):
 
         else:
             # What the default view is, depends on what the context
-            # has configured. Let the ContextList figure it out.
-            self.context_list.activate_default_view()
+            # has configured. Let the ContextList figure it out?
+            # Or is that terrible UX and we value consistency?
+            pass  # self.context_list.activate_default_view()
 
     async def topbar_clock(self):
         while True:
@@ -393,11 +394,11 @@ class TuiFrame(urwid.Frame):
     def unhandled_input(self, key):
         try:
             cols_rows = self.screen.get_cols_rows()
-            if key == 'q':
-                self.ui_quit()
-            elif key in ('esc', 'backspace'):
+            if key in ('q', 'esc', 'backspace'):
                 if len(self.all_columns) > 1:
                     self.col_remove(self.all_columns[-1])
+                elif key == 'q':
+                    self.ui_quit()
             elif key == 'left':
                 if len(self.all_columns) > 1 and self.hidden:
                     self.col_remove(self.all_columns[-1])

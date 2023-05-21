@@ -57,7 +57,7 @@ class SuggestionBox(urwid.Pile):
             if act == Suggestion.UI_QUIT:
                 self.tui_frame.ui_quit()
             elif act == Suggestion.UI_BROWSE:
-                self.tui_frame.show_browser()
+                self.tui_frame.show_browser(history=False)
             elif act == Suggestion.UI_ENCRYPT:
                 self.tui_frame.ui_change_passphrase()
             elif isinstance(act, RequestBase):

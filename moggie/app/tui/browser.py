@@ -109,12 +109,12 @@ class BrowserListWalker(urwid.ListWalker):
 
             n = urwid.Text(('browse_name', '  %s%s%s' % (indent, icon, name)),
                            wrap='ellipsis')
-            i = urwid.Text(('browse_info', '???'), align='right', wrap='clip')
-            cols = urwid.Columns([
-                    ('weight', 15, n),
-                    ('fixed', 10, i),
-                ], dividechars=1)
-            sel = Selectable(cols, on_select={
+            #i = urwid.Text(('browse_info', '???'), align='right', wrap='clip')
+            #cols = urwid.Columns([
+            #        ('weight', 15, n),
+            #        ('fixed', 10, i),
+            #    ], dividechars=1)
+            sel = Selectable(n, on_select={
                 'enter': _cb(self.on_browse, pos, info)})
             if first:
                 return urwid.Pile([
