@@ -15,10 +15,10 @@ class ThunderbirdConfig:
     def load(self):
         tbird = os.path.expanduser('~/.thunderbird')
         if not os.path.exists(tbird):
-            return None
+            return self
 
         self.loaded = 0
-        for profile in (os.path.join(tbird, d) for d in  os.listdir(tbird)):
+        for profile in (os.path.join(tbird, d) for d in os.listdir(tbird)):
             try:
                 with open(os.path.join(profile, 'prefs.js'), 'r') as prefs:
                     self.settings[profile] = self.parse(prefs.read())
