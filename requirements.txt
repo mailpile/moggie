@@ -1,4 +1,3 @@
-websockets
 setproctitle
 cryptography
 pycryptodomex
@@ -10,5 +9,4 @@ pyqrcode
 dkimpy
 aiodns
 PGPy
-sop
 pgpdump

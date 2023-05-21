@@ -4,12 +4,12 @@
 [submodule "submodules/python-passcrow"]
 	path = submodules/python-passcrow
 	url = https://github.com/mailpile/python-passcrow
-[submodule "submodules/pyqrcode"]
-	path = submodules/pyqrcode
-	url = https://github.com/mnooner256/pyqrcode
 [submodule "submodules/pyzipper"]
 	path = submodules/pyzipper
 	url = https://github.com/BjarniRunar/pyzipper
 [submodule "submodules/python-sop"]
 	path = submodules/python-sop
 	url = https://gitlab.com/dkg/python-sop.git
+[submodule "submodules/websockets"]
+	path = submodules/websockets
+	url = https://github.com/python-websockets/websockets
