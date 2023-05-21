@@ -29,21 +29,25 @@ what I am up to.
 
 ## Architectural overview
 
-Moggie currently masquerades as a "TUI" (text-(G)UI) app, but behind the scenes
-it is a collection of microservices using HTTP-based RPC calls to talk to each
-other. There are microservices for the search engine, the metadata store,
-filesystem operations, a master "application logic" process and one or more
-user-facing client processes.
+Moggie currently masquerades as a "TUI" (text-(G)UI) app, but behind the
+scenes it is a collection of microservices using HTTP-based RPC calls to
+talk to each other. There are microservices for the search engine, the
+metadata store, filesystem operations, PGP operations, and IMAP
+connects. A master "application logic" process implements an API and is
+responsible for coordination and access controls.
 
-The user-facing processes speak websocket to the "app" worker and I am
-evaluating whether JMAP is a suitable protocol for this channel. The plan is
-for Moggie to support a web user interface (like Mailpile), and integrate
-[PageKite](https://pagekite.net/) for easy remote access and collaboration.
+Moggie "clients" send on-off HTTP requests, or establish a longer lived
+websocket to the "app" worker. The plan is for Moggie to support a web
+user interface (like Mailpile), and integrate
+[PageKite](https://pagekite.net/) for easy remote access and
+collaboration.
 
-Data is stored on disk using binary records, most of which is AES encrypted.
-However, the keys are currently left in the clear in the config file until I've
-figured out the UX and integrated [Passcrow](https://passcrow.org/) for
-password recovery.
+Structured data is stored on disk using binary records, most of which is
+AES encrypted. Moggie's native "mailbox" format is a ZIP archive
+containing a Maildir directroy structure, which may be AES encrypted
+and/or compressed. Moggie's encryption keys are currently left in the
+clear in the config file until I've figured out the UX and integrated
+[Passcrow](https://passcrow.org/) for password recovery.
 
 
 ## Hacking Micro-Howto
@@ -52,8 +56,9 @@ First, brace yourself for nothing working: see Project Status above.
 
 Install Moggie:
 
-   1. apt install git python3-{appdirs,cryptography,urwid,websockets}
-                      python3-{numpy,setproctitle}
+   1. apt install git python3-{appdirs,cryptography,pycryptodome,urwid}
+                      python3-{numpy,setproctitle,websockets,pyqrcode,dkim}
+                      python3-{aiosmtplib,aiodns,pgpy,pgpdump,packaging}
    2. git clone https://github.com/BjarniRunar/moggie
    3. cd moggie
    4. git submodule init
