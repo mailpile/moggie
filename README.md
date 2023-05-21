@@ -56,9 +56,9 @@ First, brace yourself for nothing working: see Project Status above.
 
 Install Moggie:
 
-   1. apt install git python3-{appdirs,cryptography,pycryptodome,urwid}
-                      python3-{numpy,setproctitle,websockets,pyqrcode,dkim}
-                      python3-{aiosmtplib,aiodns,pgpy,pgpdump,packaging}
+   1. apt install git python3-{numpy,cryptography,pycryptodome,urwid}
+                      python3-{appdirs,setproctitle,pyqrcode,packaging}
+                      python3-{aiosmtplib,aiodns,dkim,pgpy,pgpdump}
    2. git clone https://github.com/BjarniRunar/moggie
    3. cd moggie
    4. git submodule init
