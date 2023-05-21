@@ -367,9 +367,11 @@ class BaseWorker(Process):
             self.url = None
             logging.debug('Launching %s(%s)' % (type(self).__name__, self.name,))
             self.start()
-            for t in range(1, 11):
-                if not self._load_url():
-                    time.sleep(0.05 * t)
+            for t in range(1, 25):
+                if self._load_url() and self._ping():
+                    break
+                logging.debug('Still not responding, waiting ...')
+                time.sleep(0.05 * t)
 
             if self.url and self._ping():
                 return self

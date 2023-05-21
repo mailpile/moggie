@@ -10,6 +10,7 @@ class Suggestion:
     UI_ACCOUNTS = 'accounts'
     UI_BROWSE = 'browse'
     UI_ENCRYPT = 'encrypt'
+    UI_DISMISS = 'dismiss'
 
     UI_ACTION = None
 
@@ -30,8 +31,14 @@ class Suggestion:
 
 class SuggestionWelcome(Suggestion):
     MESSAGE = 'Use arrows/enter to move/select, `q` to quit!'
-    UI_ACTION = Suggestion.UI_HELP
+    UI_ACTION = Suggestion.UI_DISMISS
     ID = 0
+
+    @classmethod
+    def If_Wanted(cls, context, config, **info):
+        if info.get('ui_moved'):
+            return None
+        return cls(context, config)
 
 
 class SuggestionAddAccount(Suggestion):

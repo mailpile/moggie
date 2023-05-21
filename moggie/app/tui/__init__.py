@@ -136,9 +136,16 @@ def Main(workdir, tui_args, send_draft):
     logging.debug('.. send_draft = %s' % (send_draft))
 
     app_bridges = []
-    app_worker = None
+    app_worker = conn_manager = None
     try:
-        app_worker = AppWorker(workdir).connect()
+        for tries in range(0, 5):
+            app_worker = AppWorker(workdir).connect()
+            if app_worker:
+                break
+            logging.error('Launch/connect failed, this should not happen')
+            time.sleep(0.25)
+        if not app_worker:
+            raise Nonsense('Failed to connect/launch app worker')
 
         # Request "locked" status from the app.
         app_crypto_status = app_worker.call('rpc/crypto_status')
@@ -183,10 +190,13 @@ def Main(workdir, tui_args, send_draft):
     except KeyboardInterrupt:
         pass
     finally:
-        conn_manager.close()
+        if conn_manager:
+            logging.debug('Stopping conn manager')
+            conn_manager.close()
         # FIXME: Should we kill the backend if another client is using it.
         #        Should we at least ask the user?
         if app_worker and app_worker.is_alive():
+            logging.debug('Stopping app worker')
             app_worker.quit()
         logging.info('Stopped %s v%s text UI with pid=%d'
             % (APPNAME, APPVER, os.getpid()))

@@ -131,6 +131,8 @@ class SplashMoreWide(urwid.Filler):
 
 
 class SplashMoreNarrow(SplashMoreWide):
-    COLUMN_NEEDS = 40
-    COLUMN_WANTS = 40
+    COLUMN_NEEDS = 30
+    COLUMN_WANTS = 30
+    COLUMN_FIT = 'weight'
+    COLUMN_STYLE = 'content'
     CONTENT = '\n\n\n\n' + ENVELOPES

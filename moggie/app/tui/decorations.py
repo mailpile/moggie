@@ -1,6 +1,7 @@
 from ...config import APPNAME, APPVER
 
 EMOJI = {
+    'hint':           '\U0001F4A1',  # Lightbulb
     'browsing':       '\U0001F4BB',  # Laptop
    #'browsing':       '\U0001F5B4',  # Unicode hard disk
     'imap':           '\U0001F4E7',  # E-mail emoji

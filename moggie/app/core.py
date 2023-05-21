@@ -183,7 +183,10 @@ main app worker. Hints:
             self.storage.quit()
             self.start_workers(start_encrypted=False)
 
-        self._get_openpgp_worker(self.config.CONTEXT_ZERO)
+        try:
+            self._get_openpgp_worker(self.config.CONTEXT_ZERO)
+        except KeyError:
+            pass
 
         return True
 

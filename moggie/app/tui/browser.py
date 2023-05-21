@@ -92,7 +92,6 @@ class BrowserListWalker(urwid.ListWalker):
 
         self.visible[:] = visible
         self._modified()
-        logging.debug('Visible items are now %d' % len(self.visible))
 
     def __getitem__(self, pos):
         def _cb(cb, *args):
@@ -117,8 +116,9 @@ class BrowserListWalker(urwid.ListWalker):
             sel = Selectable(n, on_select={
                 'enter': _cb(self.on_browse, pos, info)})
             if first:
+                prefix = '\n' if (pos > 0) else ''
                 return urwid.Pile([
-                    urwid.Text(('browse_label', '\n' + self.src_desc[src])),
+                    urwid.Text(('browse_label', prefix + self.src_desc[src])),
                     sel])
             else:
                 return sel
@@ -130,7 +130,6 @@ class BrowserListWalker(urwid.ListWalker):
 
     def on_browse(self, pos, path_info):
         entry = self.visible[pos]
-        logging.debug('Toggle %s' % entry)
 
         if entry[self.LOADED]:
             # This is a little bit weird, but I think
@@ -197,8 +196,8 @@ class SuggestAddToIndex(Suggestion):
 
 
 class Browser(urwid.Pile):
-    COLUMN_NEEDS = 25
-    COLUMN_WANTS = 50
+    COLUMN_NEEDS = 20
+    COLUMN_WANTS = 35
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
@@ -262,10 +261,7 @@ class Browser(urwid.Pile):
         if len(self.suggestions):
             self.widgets.append(self.suggestions)
 
-        rows -= sum(w.rows((60,)) for w in self.widgets)
-        if False and self.widgets:
-            self.widgets.append(urwid.Divider())
-            rows -= 1
+        rows -= sum(w.rows((30,)) for w in self.widgets)
         self.widgets.append(urwid.BoxAdapter(self.listbox, rows))
 
         self.contents[:] = [(w, ('pack', None)) for w in self.widgets]

@@ -209,7 +209,7 @@ class SuggestAddToIndex(Suggestion):
 
 
 class EmailList(urwid.Pile):
-    COLUMN_NEEDS = 40
+    COLUMN_NEEDS = 50
     COLUMN_WANTS = 70
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
@@ -373,10 +373,6 @@ class EmailList(urwid.Pile):
             EmailDisplay(self.tui_frame, self.ctx_src_id, metadata,
                 username=self.search_obj.get('username'),
                 password=self.search_obj.get('password')))
-        try:
-            self.tui_frame.columns.set_focus_path([1])
-        except IndexError:
-            pass
 
     def load_more(self):
         now = time.time()

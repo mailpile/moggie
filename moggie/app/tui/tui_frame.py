@@ -38,6 +38,7 @@ class TuiFrame(urwid.Frame):
         self.screen = screen
         self.is_locked = True
         self.was_locked = True
+        self.user_moved = False
         self.render_cols_rows = self.screen.get_cols_rows()
         self.conn_manager = conn_manager
 
@@ -84,7 +85,7 @@ class TuiFrame(urwid.Frame):
             pass  # FIXME
 
         elif show_browser:
-            self.show_browser(show_browser)
+            self.show_browser(show_browser, history=False)
 
         elif show_mailbox:
             self.show_mailbox(show_mailbox)
@@ -93,7 +94,8 @@ class TuiFrame(urwid.Frame):
             # What the default view is, depends on what the context
             # has configured. Let the ContextList figure it out?
             # Or is that terrible UX and we value consistency?
-            pass  # self.context_list.activate_default_view()
+            # self.context_list.activate_default_view()
+            self.columns.set_focus_path([1]) # Focus the cat!
 
     async def topbar_clock(self):
         while True:
@@ -297,7 +299,7 @@ class TuiFrame(urwid.Frame):
                 ('fixed', 23+6*len(global_hks), urwid.Text(
                     global_hks + search + unlock + [
 #FIXME:                 ('top_hk', '?:'), 'Help ',
-                        ('top_hk', 'q:'), 'Quit'+pad],
+                        ('top_hk', 'q:'), 'Exit'+pad],
                     align='right', wrap='clip'))])
 
         mv = '%s%s v%s ' % (pad, APPNAME, APPVER)
@@ -317,8 +319,8 @@ class TuiFrame(urwid.Frame):
         try:
             last = len(self.all_columns) - self.hidden - 1
             self.columns.set_focus_path([last])
-        except IndexError as e:
-            pass
+        except IndexError:
+            pass  #logging.exception('Focus last failed')
 
     def col_show(self, ref, widget):
         logging.debug('Adding %s' % widget)
@@ -391,10 +393,23 @@ class TuiFrame(urwid.Frame):
             except IndexError:
                 pass
 
+    def keypress(self, size, key):
+        if key in ('q', 'esc', 'left', 'right', 'up', 'down'):
+            self.user_moved = True
+        try:
+            return super().keypress(size, key)
+        except AttributeError:
+            logging.exception('FIXME: Urwid bug in keypress handler?')
+
     def unhandled_input(self, key):
         try:
+            if key in ('q', 'esc', 'left', 'right', 'up', 'down'):
+                self.user_moved = True
+
             cols_rows = self.screen.get_cols_rows()
-            if key in ('q', 'esc', 'backspace'):
+            if key == 'Q':
+                self.ui_quit()
+            elif key in ('q', 'esc', 'backspace'):
                 if len(self.all_columns) > 1:
                     self.col_remove(self.all_columns[-1])
                 elif key == 'q':

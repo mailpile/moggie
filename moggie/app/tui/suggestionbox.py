@@ -3,6 +3,7 @@ import urwid
 
 from ...api.requests import RequestBase
 from ..suggestions import *
+from .decorations import EMOJI
 from .widgets import *
 
 
@@ -33,7 +34,8 @@ class SuggestionBox(urwid.Pile):
         for _id in sorted(SUGGESTIONS.keys()):
             if _id in SuggestionBox.DISMISSED:
                 continue
-            sg_obj = SUGGESTIONS[_id].If_Wanted(context, None)
+            sg_obj = SUGGESTIONS[_id].If_Wanted(
+                context, None, ui_moved=self.tui_frame.user_moved)
             if ((sg_obj is not None) and
                     (sg_obj.UI_ACTION not in self.omit_actions)):
                 suggest.append(sg_obj)
@@ -52,10 +54,12 @@ class SuggestionBox(urwid.Pile):
         self.update_suggestions(self.get_suggestions())
 
     def _on_activate(self, suggestion):
-        def activate(i):
+        def activate(*ignored):
             act = suggestion.action()  # FIXME
             if act == Suggestion.UI_QUIT:
                 self.tui_frame.ui_quit()
+            elif act == Suggestion.UI_DISMISS:
+                self._on_dismiss(suggestion)()
             elif act == Suggestion.UI_BROWSE:
                 self.tui_frame.show_browser(history=False)
             elif act == Suggestion.UI_ENCRYPT:
@@ -65,7 +69,7 @@ class SuggestionBox(urwid.Pile):
         return activate
 
     def _on_dismiss(self, suggestion):
-        def dismiss(i):
+        def dismiss(*ignored):
             SuggestionBox.DISMISSED.add(suggestion.ID)
             self.update_suggestions(self.get_suggestions())
             self.update_parent()
@@ -75,7 +79,8 @@ class SuggestionBox(urwid.Pile):
         widgets = []
         for sgn in suggest:
             columns = [
-                ('fixed',  2, urwid.Text(('subtle', '->'), 'right')),
+                ('fixed',  2, urwid.Text(('subtle', EMOJI.get('hint', '->')),
+                                         align='left')),
                 ('weight', 1, Selectable(urwid.Text(('subtle', sgn.message())),
                     on_select={'enter': self._on_activate(sgn)}))]
             if sgn.ID is not None:
@@ -85,10 +90,13 @@ class SuggestionBox(urwid.Pile):
             else:
                 columns.append(('fixed',  3, CloseButton.PLACEHOLDER))
             widgets.append(urwid.Columns(columns, dividechars=1))
+        have_suggestions = bool(widgets)
+        if have_suggestions:
+            widgets.append(urwid.Divider())
 
         self.widgets = widgets
         self.contents = [(w, ('pack', None)) for w in self.widgets]
-        if widgets:
+        if have_suggestions:
             self.set_focus(0)
 
     def __len__(self):

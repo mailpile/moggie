@@ -908,10 +908,10 @@ class CommandBrowse(CLICommand):
     SRC_DESCRIPTIONS = {
         '': 'Files and folders',
         'fs': 'Files and folders',
-        'spool': 'This is the local incoming Unix mail spool',
+        'spool': 'Incoming system mail',
         'home': 'Your home directory',
         'mailpilev1': 'Legacy Mailpile v1 data',
-        'thunderbird': 'Accounts and mailboxes configured in Thunderbird'}
+        'thunderbird': 'Thunderbird data and accounts'}
 
     def configure(self, args):
         self.paths = self.strip_options(args)

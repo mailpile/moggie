@@ -1338,7 +1338,8 @@ class CommandParse(CLICommand):
                 p['_PATH_INFO'] = await validate_smtp_hops(p,
                     check_dns=allow_network)
             if settings.with_headers:
-                p['_RAW_HEADERS'] = str(data[:header_end], 'utf-8').rstrip()
+                p['_RAW_HEADERS'] = str(
+                    data[:header_end], 'utf-8', 'replace').rstrip()
             if settings.verify_dates:
                 from moggie.security.headers import validate_dates
                 p['_DATE_VALIDITY'] = validate_dates(md.timestamp, p)
