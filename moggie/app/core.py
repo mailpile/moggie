@@ -15,11 +15,10 @@ from ..config.helpers import DictItemProxy, EncodingListItemProxy
 from ..api.requests import *
 from ..api.responses import *
 from ..api.exceptions import *
-from ..storage.files import FileStorage
 from ..util.dumbcode import dumb_decode, to_json, from_json
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
-from ..workers.storage import StorageWorker
+from ..workers.storage import StorageWorkers
 from ..workers.search import SearchWorker
 from .cli import CLI_COMMANDS
 
@@ -213,14 +212,11 @@ main app worker. Hints:
                 logging.warning(
                     'Failed to start encrypting workers. Need login?')
 
-        self.storage = StorageWorker(self.worker.worker_dir,
-            FileStorage(
-                ask_secret=self._fs_ask_secret,
-                set_secret=self._fs_set_secret,
-                relative_to=os.path.expanduser('~'),
-                metadata=self.metadata),
+        self.storage = StorageWorkers(self.worker.worker_dir,
+            metadata=self.metadata,
+            ask_secret=self._fs_ask_secret,
+            set_secret=self._fs_set_secret,
             notify=notify_url,
-            name='fs',
             log_level=log_level).connect()
 
         if (self.storage and self.search and self.metadata

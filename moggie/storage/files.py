@@ -7,8 +7,6 @@ import os
 from collections import OrderedDict
 
 from ..email.metadata import Metadata
-from ..email.parsemime import parse_message as ep_parse_message
-from ..email.util import quick_msgparse, make_ts_and_Metadata
 from ..util.dumbcode import *
 from ..util.mailpile import PleaseUnlockError
 
@@ -19,6 +17,7 @@ from .formats.mbox import FormatMbox
 from .formats.maildir import FormatMaildir
 from .formats.mailzip import FormatMailzip
 from .formats.mailpilev1 import FormatMaildirWERVD
+from .mailboxes import MailboxStorageMixin
 
 
 # These are the file types we understand how to parse. Note that the
@@ -40,21 +39,18 @@ class FileMap(mmap.mmap):
     pass
 
 
-class FileStorage(BaseStorage):
-    def __init__(self, *args, **kwargs):
-        self.metadata = kwargs.get('metadata')
-        self.relative_to = kwargs.get('relative_to')
-        self.ask_secret = kwargs.get('ask_secret')
-        self.set_secret = kwargs.get('set_secret')
-        for k in ('metadata', 'relative_to', 'ask_secret', 'set_secret'):
-            if k in kwargs:
-                del kwargs[k]
-
+class FileStorage(BaseStorage, MailboxStorageMixin):
+    def __init__(self,
+            relative_to=None, metadata=None,
+            ask_secret=None, set_secret=None):
+        self.metadata = metadata
+        self.relative_to = relative_to
+        self.ask_secret = ask_secret
+        self.set_secret = set_secret
         if isinstance(self.relative_to, str):
             self.relative_to = self.relative_to.encode('utf-8')
 
-        BaseStorage.__init__(self, *args, **kwargs)
-
+        super().__init__()
         self.dict = None
 
     @classmethod
@@ -193,9 +189,6 @@ class FileStorage(BaseStorage):
     def dump(self):
         raise Exception('Not Implemented')
 
-    def capabilities(self):
-        return ['info', 'get', 'length', 'set', 'del']
-
     def listdir(self, key):
         try:
             for p in os.listdir(self.key_to_path(key)):
@@ -301,98 +294,8 @@ class FileStorage(BaseStorage):
                     return cls(self, paths, self[filepath])
         return None
 
-    def unlock_mailbox(self, mailbox, username, password, context, sec_ttl):
-        if hasattr(mailbox, 'unlock'):
-            _unlock_kwa = {}
-            if self.ask_secret:
-                def _ak(resource):
-                    return self.ask_secret(context, resource)
-                _unlock_kwa['ask_key'] = _ak
-            if self.set_secret:
-                def _sk(resource, key):
-                    self.set_secret(context, resource, key, sec_ttl)
-                _unlock_kwa['set_key'] = _sk
-            mailbox.unlock(username, password, **_unlock_kwa)
-        return mailbox
-
-    def iter_mailbox(self, key,
-            skip=0, limit=None,
-            username=None, password=None, context=None, secret_ttl=None):
-
-        parser = iter([])
-        if (limit is None) or (limit > 0):
-            mailbox = self.get_mailbox(key)
-            if mailbox is None:
-                logging.debug('Failed to open mailbox: %s' % key)
-            else:
-                if username or password:
-                    self.unlock_mailbox(
-                        mailbox, username, password, context, secret_ttl)
-                parser = mailbox.iter_email_metadata(skip=skip)
-        if limit is None:
-            yield from parser
-        else:
-            for msg in parser:
-                yield msg
-                limit -= 1
-                if limit <= 0:
-                    break
-
-    def delete_message(self, metadata=None, ptrs=None):
-        """
-        Delete the message from one or more locations.
-        Returns a list of pointers which could not be deleted.
-        """
-        failed = []
-        for ptr in (ptrs if (ptrs is not None) else metadata.pointers):
-            if ptr.ptr_type == Metadata.PTR.IS_FS:
-                try:
-                    del self[ptr.ptr_path]
-                except (KeyError, OSError):
-                    failed.append(ptr)
-            else:
-                failed.append(ptr)
-        return failed
-
-    def message(self, metadata, with_ptr=False,
-            username=None, password=None, context=None, secret_ttl=None):
-        """
-        Returns a slice of bytes that map to the message on disk.
-        Works for both maildir and mbox messages.
-        """
-        ptr = metadata.pointers[0]  # Filesystem pointers are always first
-        if ptr.ptr_type != Metadata.PTR.IS_FS:
-            raise KeyError('Not a filesystem pointer: %s' % ptr)
-
-        if username or password:
-            gi_args = (username, password, context, secret_ttl)
-        else:
-            gi_args = set()
-
-        # FIXME: We need to check whether this is actually the right message, or
-        #        whether the mailbox has changed from under us. If it has, we
-        #        need to (in coordination with the metadata index) rescan for
-        #        messages update the metadata. This is true for both mbox and
-        #        Maildir: Maildir files may get renamed if other apps change
-        #        read/unread status or assign tags. For mbox, messages can move
-        #        around within the file.
-        for ptr in metadata.pointers:
-            if ptr.ptr_type == Metadata.PTR.IS_FS:
-                try:
-                    if with_ptr:
-                        return ptr, self.__getitem__(ptr.ptr_path, *gi_args)
-                    else:
-                        return self.__getitem__(ptr.ptr_path, *gi_args)
-                except PleaseUnlockError:
-                    raise
-                except (KeyError, OSError) as e:
-                    logging.exception('Loading e-mail failed')
-
-        raise KeyError('Not found: %s' % dumb_decode(ptr.ptr_path))
-
-    def parse_message(self, metadata, **kwargs):
-        msg = self.message(metadata, **kwargs)
-        return ep_parse_message(msg, fix_mbox_from=(msg[:5] == b'From '))
+    def can_handle_ptr(self, ptr):
+        return (ptr.ptr_type == Metadata.PTR.IS_FS)
 
 
 if __name__ == "__main__":

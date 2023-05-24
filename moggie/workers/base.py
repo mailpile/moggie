@@ -1,4 +1,5 @@
 import asyncio
+import copy
 import inspect
 import logging
 import os
@@ -364,7 +365,7 @@ class BaseWorker(Process):
             except FileNotFoundError:
                 pass
 
-            self.url = None
+            self.url = self.url_parts = None
             logging.debug('Launching %s(%s)' % (type(self).__name__, self.name,))
             self.start()
             for t in range(1, 25):
@@ -855,6 +856,127 @@ class BaseWorker(Process):
             self.reply(self.HTTP_404)
 
 
+class WorkerPool:
+    def __init__(self, workers):
+        self.lock = threading.RLock()
+        self.count = 0
+        self.workers = []
+        self.caller_lock = threading.Lock()
+        self.caller_info = None
+        self.quit = lambda: self._proxy_all('quit', autostart=False)
+        self.join = lambda: self._proxy_all('join', autostart=False)
+        self.terminate = lambda: self._proxy_all('terminate', autostart=False)
+        for caps, cls, args, kwargs in workers:
+            self.add_worker(caps, cls, args, kwargs)
+
+    def add_worker(self, caps, cls, args, kwargs):
+        with self.lock:
+            kwargs = copy.copy(kwargs)
+            if 'name' in kwargs:
+                name = kwargs['name'] = '%s_%d' % (kwargs['name'], self.count)
+            else:
+                name = None
+
+            worker = cls(*args, **kwargs)
+            if name is None:
+                name = '%s_%d' % (worker.name, self.count)
+
+            self.workers.append([name, caps, worker, 0])
+            self.count += 1
+
+    def auto_add_worker(self, pop, which, capabilities):
+        logging.error('Worker not found: %s/%s' % (which, capabilities))
+        raise None
+
+    def with_worker(self, which=None, capabilities='', pop=False, wait=False):
+        for tries in range(0, 50):
+            worker = name = cap = None
+            with self.lock:
+                for i, (name, cap, worker, _) in enumerate(self.workers):
+                    if (((not which) or name.startswith(which))
+                            and (capabilities in cap)):
+                        worker = worker.connect(quick=True)
+                        if worker:
+                            if pop:
+                                return self.workers.pop(i)
+                            else:
+                                return worker
+
+            worker = self.auto_add_worker(pop, which, capabilities)
+            if worker or not wait:
+                return worker
+
+            # Busy waits are bad...?
+            time.sleep(0.05)
+
+    def choose_worker(self, pop, wait, fn, args, kwargs):
+        """
+        This function exists so subclasses can override it and make choices
+        based on the function name and arguments.
+        """
+        return self.with_worker(pop=pop, wait=wait)
+
+    def connect(self, *args, **kwargs):
+        # FIXME: This is a noop, real connect() happens later. This may
+        #        suck for error handling.
+        return self
+
+    def with_caller(self, caller):
+        if caller:
+            self.caller_lock.acquire()
+            self.caller_info = caller
+        return self
+
+    def get_caller(self):
+        if self.caller_info:
+            try:
+                return self.caller_info
+            finally:
+                self.caller_info = None
+                self.caller_lock.release()
+        return None
+
+    def call(self, fn, *args, **kwargs):
+        w_tuple = None
+        try:
+            w_tuple = self.choose_worker(True, True, fn, args, kwargs)
+            ci = self.get_caller()
+            if ci:
+                return w_tuple[2].with_caller(ci).call(fn, *args, **kwargs)
+            else:
+                return w_tuple[2].call(fn, *args, **kwargs)
+        finally:
+            if w_tuple:
+                self.workers.append(w_tuple)
+
+    async def async_call(self, loop, fn, *args, **kwa):
+        w_tuple = None
+        try:
+            for tries in range(0, 50):
+                w_tuple = self.choose_worker(True, False, fn, args, kwa)
+                if w_tuple:
+                    break
+                await asyncio.sleep(0.05)
+            ci = self.get_caller()
+            w = w_tuple[2]
+            if ci:
+                return await w.with_caller(ci).async_call(
+                    loop, fn, *args, **kwa)
+            else:
+                return await w.async_call(loop, fn, *args, **kwa)
+        finally:
+            if w_tuple:
+                self.workers.append(w_tuple)
+
+    def _proxy_all(self, method, autostart=True, args=set(), kwargs={}):
+        with self.lock:
+            for name, _, worker, _ in self.workers:
+                func = getattr(worker, method)
+                if func is not None:
+                    if worker.connect(autostart=autostart, quick=True):
+                        func(*args, **kwargs)
+
+
 if __name__ == '__main__':
     logging.basicConfig(level=logging.DEBUG)
 
@@ -877,7 +999,9 @@ if __name__ == '__main__':
                     logging.exception('Ping failed!')
             self.reply_json({pong: args})
 
-    tw = TestWorker('/tmp', name='moggie-test-worker').connect()
+    tw = WorkerPool([
+            ('test', TestWorker, ('/tmp',), {'name': 'moggie-test-worker'}),
+        ]).connect()
     if tw:
         try:
             r = tw.call('ping', None, '\0\1\2', 1.976, [1,2],
@@ -897,4 +1021,5 @@ if __name__ == '__main__':
             print('** Tests passed, waiting... **')
             tw.join()
         finally:
+            print('** Terminating **')
             tw.terminate()

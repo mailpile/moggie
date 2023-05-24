@@ -32,9 +32,6 @@ class BaseStorage:
                 'dict': [(k, dumb_encode_asc(self.dict[k])) for k in self.dict]
             }, compress=1)
 
-    def capabilities(self):
-        return ['dump', 'info', 'get', 'length', 'set', 'del']
-
     def info(self, key=None, details=False):
         obj = self.get(key) if (key is not None) else self
         info = {'exists': obj is not None}

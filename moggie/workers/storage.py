@@ -1,56 +1,92 @@
+# OK, so IMAP and other remote resources are ALSO storage.
+#
+# It makes sense to triage between them here, but it also makes sense
+# for that to be multiple workers in practice. Just one is asking for
+# ops to block.
+#
+# In fact, we are already blocking on IO as is, when scanning large
+# amounts of mail etc. It would be good to have a pool of workers here.
+# We also need to contextualize access, since although any context could
+# connect to any server - entering credentials in one shouldn't unlock
+# for the others.
+#
+# To keep the layering overhead to a minimum, choosing backends and
+# launching new ones as needed, should happen at the caller.
+#
 import logging
+import os
 import time
 import traceback
 import threading
 
 from ..api.exceptions import NeedInfoException
+from ..storage.files import FileStorage
+from ..storage.imap import ImapStorage
 from ..util.dumbcode import *
 from ..util.mailpile import PleaseUnlockError
 from ..email.metadata import Metadata
 
-from .base import BaseWorker
+from .base import BaseWorker, WorkerPool
 
 
-class StorageWorker(BaseWorker):
-    """
-    GET /capabilities
+class StorageWorkerApi:
+    def dump(self, compress=None):
+        if compress is not None:
+            return self.call('dump', qs={'compress': compress})
+        return self.call('dump')
 
-        Returns a JSON object describing the actual capabilities
-        of this storage server.
+    async def async_info(self, loop,
+            key=None, details=None, recurse=0, relpath=None):
+        return await self.async_call(loop,
+            'info', key, details, recurse, relpath)
 
-    GET /info/<key>
+    def info(self, key=None, details=None, recurse=0, relpath=None):
+        return self.call('info', key, details, recurse, relpath)
 
-        Returns a JSON object describing a given key. Contents vary
-        from one backend to another.
+    async def async_mailbox(self, loop, key,
+            skip=0, limit=None, username=None, password=None):
+        return await self.async_call(loop,
+            'mailbox', key, skip, limit, username, password,
+            hide_qs=True)  # Keep passwords out of web logs
 
-    GET /get/<key>[/d<start>[/d<end>]]
+    def mailbox(self, key, skip=0, limit=None, username=None, password=None):
+        return self.call(
+            'mailbox', key, skip, limit, username, password,
+            hide_qs=True)  # Keep passwords out of web logs
 
-        Streams the contents of a single key as binary data.
-        Ranges for partial downloads are supported.
+    async def async_email(self, loop, metadata,
+            text=False, data=False, full_raw=False, parts=None,
+            username=None, password=None):
+        return await self.async_call(loop, 'email',
+            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts,
+            username, password)
 
-    GET /json/<key>[/<key2> .. /<keyN>]
-    POST /json/*
+    def email(self, metadata,
+            text=False, data=False, full_raw=False, parts=None,
+            username=None, password=None):
+        return self.call('email',
+            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts,
+            username, password)
 
-        Returns a JSON object containing keys and values for any of the
-        requested keys found in the argument list. The data must itself
-        be valid JSON, or the output will not parse. Keys will be encoded
-        using "dumbcode" to preserve their types.
+    def get(self, key, *args, dumbcode=None):
+        if dumbcode is not None:
+            return self.call('get', key, *args, qs={'dumbcode': dumbcode})
+        return self.call('get', key, *args)
 
-    POST /set/<key>
+    def json(self, *keys):
+        return self.call('json', *keys)
 
-        Update the contents of a single key.
+    def set(self, key, value, **kwargs):
+        return self.call('set', key, value, **kwargs)
 
-    POST /append/<key>
+    def append(self, key, value):
+        return self.call('append', key, value)
 
-        Append to a single key. This method uses Python's + operator, so
-        it can also be used to increment or decrement integer values. If
-        types do not match, errors will result.
+    def delete(self, key):
+        return self.call('delete', key)
 
-    POST /del/<key>
 
-        Delete a key and the associated data.
-    """
-
+class StorageWorker(BaseWorker, StorageWorkerApi):
     KIND = 'storage'
 
     PEEK_BYTES = 8192
@@ -65,7 +101,6 @@ class StorageWorker(BaseWorker):
             name=name, notify=notify, log_level=log_level)
         self.backend = backend
         self.functions.update({
-            b'capabilities': (True,  self.api_capabilities),
             b'dump':         (True,  self.api_dump),
             b'info':         (True,  self.api_info),
             b'mailbox':      (True,  self.api_mailbox),
@@ -91,53 +126,6 @@ class StorageWorker(BaseWorker):
         self.background_thread = threading.Thread(target=task)
         self.background_thread.daemon = True
         self.background_thread.start()
-
-    def capabilities(self):
-        return self.call('capabilities')
-
-    def dump(self, compress=None):
-        if compress is not None:
-            return self.call('dump', qs={'compress': compress})
-        return self.call('dump')
-
-    async def async_info(self, loop,
-            key=None, details=None, recurse=0, relpath=None):
-        return await self.async_call(loop,
-            'info', key, details, recurse, relpath)
-
-    def info(self, key=None, details=None, recurse=0, relpath=None):
-        return self.call('info', key, details, recurse, relpath)
-
-    async def async_mailbox(self, loop, key,
-            skip=0, limit=None, username=None, password=None):
-        return await self.async_call(loop,
-            'mailbox', key, skip, limit, username, password,
-            hide_qs=True)  # Keep passwords out of web logs
-
-    def mailbox(self, key, skip=0, limit=None, username=None, password=None):
-        return self.call(
-            'mailbox', key, skip, limit, username, password,
-            hide_qs=True)  # Keep passwords out of web logs
-
-    def get(self, key, *args, dumbcode=None):
-        if dumbcode is not None:
-            return self.call('get', key, *args, qs={'dumbcode': dumbcode})
-        return self.call('get', key, *args)
-
-    def json(self, *keys):
-        return self.call('json', *keys)
-
-    def set(self, key, value, **kwargs):
-        return self.call('set', key, value, **kwargs)
-
-    def append(self, key, value):
-        return self.call('append', key, value)
-
-    def delete(self, key):
-        return self.call('delete', key)
-
-    def api_capabilities(self, **kwargs):
-        self.reply_json(self.backend.capabilities())
 
     def api_dump(self, **kwargs):
         self.reply(
@@ -214,20 +202,6 @@ class StorageWorker(BaseWorker):
             self._background(finish)
         else:
             parse_cache[1] = True
-
-    async def async_email(self, loop, metadata,
-            text=False, data=False, full_raw=False, parts=None,
-            username=None, password=None):
-        return await self.async_call(loop, 'email',
-            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts,
-            username, password)
-
-    def email(self, metadata,
-            text=False, data=False, full_raw=False, parts=None,
-            username=None, password=None):
-        return self.call('email',
-            metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts,
-            username, password)
 
     def api_email(self, metadata, text, data, full_raw, parts,
             username, password, method=None):
@@ -341,6 +315,59 @@ class StorageWorker(BaseWorker):
         self.reply_json({'deleted': key})
 
 
+class StorageWorkers(WorkerPool, StorageWorkerApi):
+    def __init__(self, worker_dir, storage=None, **kwargs):
+        if storage is None:
+            storage = FileStorage(
+                relative_to=os.path.expanduser('~'),
+                ask_secret=kwargs.get('ask_secret'),
+                set_secret=kwargs.get('set_secret'),
+                metadata=kwargs.get('metadata'))
+        self.fs = storage
+        fs_args = (worker_dir, self.fs)
+        fs_kwa = {
+            'name': 'fs',
+            'notify': kwargs.get('notify'),
+            'log_level': kwargs.get('log_level', logging.ERROR)}
+        self.fs_worker_spec = ('read', StorageWorker, fs_args, fs_kwa)
+
+        self.imap = ImapStorage(
+            ask_secret=kwargs.get('ask_secret'),
+            set_secret=kwargs.get('set_secret'),
+            metadata=kwargs.get('metadata'))
+        imap_args = (worker_dir, self.imap)
+        imap_kwa = {
+            'name': 'imap',
+            'notify': kwargs.get('notify'),
+            'log_level': kwargs.get('log_level', logging.ERROR)}
+        self.imap_worker_spec = ('imap', StorageWorker, imap_args, imap_kwa)
+
+        super().__init__([
+            ('read,write', StorageWorker, fs_args, fs_kwa)])
+
+    def auto_add_worker(self, pop, which, capabilities):
+        if 'write' in capabilities:
+            return None  # There can be only one!
+        with self.lock:
+            if 'imap' in capabilities:
+                self.add_worker(*self.imap_worker_spec)
+            else:
+                self.add_worker(*self.fs_worker_spec)
+            if pop:
+                return self.workers.pop(-1)
+            else:
+                return self.workers[-1][2]
+
+    def choose_worker(self, pop, wait, fn, args, kwargs):
+        caps = 'read'
+        if fn in ('set', 'append', 'delete'):
+            caps = 'write'
+        if args and isinstance(args[0], str) and args[0].startswith('imap:'):
+            caps = 'imap'
+        logging.debug('Should choose worker with %s %s%s' % (caps, fn, args))
+        return self.with_worker(capabilities=caps, pop=pop, wait=wait)
+
+
 if __name__ == '__main__':
     from ..storage.memory import CacheStorage as Storage
     logging.basicConfig(level=logging.DEBUG)
@@ -351,12 +378,15 @@ if __name__ == '__main__':
         dumb_encode_asc(b'hij'): {1: 2},
         dumb_encode_asc(b'123'): b'{"foo": "bar"}',
         dumb_encode_asc(b'456'): b'0123456789abcdef'})
-    print('%s' % objects.dict)
+    print('In storage: %s' % objects.dict)
 
-    sw = StorageWorker('/tmp', objects, name='moggie-test-storage').connect()
+    sw = StorageWorkers(
+            '/tmp', objects,
+            name='moggie-test-storage',
+            log_level=logging.DEBUG
+        ).connect()
     if sw:
         try:
-            print(sw.capabilities())
             print(sw.info(details=True))
             print(sw.info(b'123'))
             print(sw.info(b'abc'))

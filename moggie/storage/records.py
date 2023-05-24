@@ -433,9 +433,6 @@ class RecordStoreReadOnly:
             self.loaded = modified
         return self
 
-    def capabilities(self):
-        return ['get', 'length', 'set', 'del']
-
     def load_keys(self):
         beg = len(self.prefix)
         rec_size = (self.hash_size + self.int_size)

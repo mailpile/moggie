@@ -59,7 +59,7 @@ class Metadata(list):
 
     class PTR(list):
         IS_FS = 0
-        IS_REMOTE = 1000
+        IS_IMAP = 1
 
         OFS_PTR_TYPE = 0
         OFS_PTR_PATH = 1
