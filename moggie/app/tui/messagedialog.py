@@ -57,7 +57,7 @@ class MessageDialog(urwid.WidgetWrap):
         return len(self.message.splitlines()) + len(self.widgets) + 5
 
     def on_ok(self):
-        emit_soon(self, 'close')
+        self._emit('close')
 
     def focus_next(self, first=None):
         if first is None:

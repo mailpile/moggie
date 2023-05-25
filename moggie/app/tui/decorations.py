@@ -34,8 +34,8 @@ ENVELOPES = ("""\
 HELLO = ("""\
   _                        x
   \`*-.                    x
-   )  _`-.         %-8.8s
-  .  : `. .        v%-7.7s
+   )  _`-.          %-8.8s
+  .  : `. .         v%-7.7s
   : _   '  \               x
   ; *` _.   `*-._          x
   `-.-'          `-.       x
@@ -50,7 +50,7 @@ HELLO = ("""\
 """).replace('x', '') % (APPNAME, APPVER)
 
 HELLO_CREDITS = """\
-           cat by Blazej Kozlowski"""
+    cat by Blazej Kozlowski"""
 
 
 # FIXME: generate different palettes based on the contents of our

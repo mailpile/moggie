@@ -23,16 +23,16 @@ class RetryDialog(MessageDialog):
         e_args = [
             ('allow_tab', False),
             ('wrap', 'clip'),
-            ('multiline', True)]
+            ('multiline', False)]
         e_more = {
             'password': [('mask', '*')]}
 
         widgets = []
         for need in self.needed_info:
-            a = dict(e_args + e_more.get(need['datatype'], {}))
-            w = urwid.Edit(need['label'] + ': ', **a)
+            a = dict(e_args + e_more.get(need['datatype'], []))
+            w = EditLine(need['label'] + ': ', **a)
             widgets.append(w)
-            urwid.connect_signal(w, 'change', lambda b,t: self.on_input(t))
+            urwid.connect_signal(w, 'enter', lambda b: self.focus_next())
         widgets.append(urwid.Divider())
         return widgets
 
@@ -51,13 +51,8 @@ class RetryDialog(MessageDialog):
         logging.debug('Validated %d fields' % valid)
         return valid
 
-    def on_input(self, text):
-        if '\n' in text:
-            self.focus_next()
-        return text.replace('\n', '')
-
     def on_ok(self):
         completed = self.validate()
         if completed == len(self.needed_info):
+            self._emit('close')
             self.tui_frame.conn_manager.send(self.retry)
-            emit_soon(self, 'close')

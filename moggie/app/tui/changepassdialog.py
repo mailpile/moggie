@@ -88,11 +88,11 @@ A suggestion: %s
 
             elif newp1 == newp2:
                 # self.tui_frame.change(passphrase)
-                emit_soon(self, 'close')
                 self.update_pile(
                     'Updating passphrase and rotating keys...', focus=5)
                 self.tui_frame.change_passphrase(oldp, newp1,
                      disconnect=self.disconnect.get_state())
+                emit_soon(self, 'close', seconds=2)
 
             elif newp1 != newp2:
                 self.update_pile('New passphrases do not match!', focus=2)

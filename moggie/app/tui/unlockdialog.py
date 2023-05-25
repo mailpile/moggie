@@ -13,19 +13,18 @@ Enter your passphrase (or password) to unlock the app.
     signals = ['close']
 
     def unlock(self, passphrase):
-        if '\n' in passphrase:
-            passphrase = passphrase.replace('\n', '')
-            if passphrase:
-                self.tui_frame.unlock(passphrase)
-            self._emit('close')
+        passphrase = passphrase.replace('\n', '')
+        if passphrase:
+            self.tui_frame.unlock(passphrase)
+        self._emit('close')
 
     def __init__(self, tui_frame):
         self.tui_frame = tui_frame
 
-        self.unlock_box = urwid.Edit('Passphrase: ',
-            multiline=True, mask='*', allow_tab=False, wrap='ellipsis')
-        urwid.connect_signal(
-            self.unlock_box, 'change', lambda b,t: self.unlock(t))
+        self.unlock_box = EditLine('Passphrase: ',
+            multiline=False, mask='*', allow_tab=False, wrap='ellipsis')
+        urwid.connect_signal(self.unlock_box,
+            'enter', lambda *e: self.unlock(self.unlock_box.edit_text))
 
         fill = urwid.Filler(urwid.Pile([
             self.unlock_box,

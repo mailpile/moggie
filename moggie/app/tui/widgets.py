@@ -11,6 +11,16 @@ def emit_soon(widget, signal, seconds=0.15):
     asyncio.create_task(emitter(seconds, signal))
 
 
+class EditLine(urwid.Edit):
+    signals = ['enter'] + urwid.Edit.signals
+
+    def keypress(self, size, key):
+        if key == 'enter':
+            self._emit('enter')
+            return None
+        return super().keypress(size, key)
+
+
 class PopUpManager(urwid.PopUpLauncher):
     def __init__(self, tui_frame, content):
         super().__init__(content)
