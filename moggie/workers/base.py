@@ -124,6 +124,8 @@ class BaseWorker(Process):
         self._background_jobs = {'default': []}
         self._background_threads = {}
         self._background_job_lock = threading.Lock()
+        # FIXME: Check for stale url files; we just started up, so if one
+        #        exists and we cannot connect, nuke it!
 
     def expose_object(self, obj,
             prefix='', allow_local=True, arg_filter=None, exclude=[]):
@@ -886,25 +888,28 @@ class WorkerPool:
 
     def auto_add_worker(self, pop, which, capabilities):
         logging.error('Worker not found: %s/%s' % (which, capabilities))
-        raise None
+        return None
 
     def with_worker(self, which=None, capabilities='', pop=False, wait=False):
         for tries in range(0, 50):
             worker = name = cap = None
             with self.lock:
-                for i, (name, cap, worker, _) in enumerate(self.workers):
+                for i, (name, cap, worker, ts) in enumerate(self.workers):
                     if (((not which) or name.startswith(which))
                             and (capabilities in cap)):
-                        worker = worker.connect(quick=True)
+                        worker = worker.connect(quick=(ts > 0))
                         if worker:
                             if pop:
                                 return self.workers.pop(i)
                             else:
                                 return worker
 
+            logging.debug('Adding new worker: %s/%s' % (which, capabilities))
             worker = self.auto_add_worker(pop, which, capabilities)
             if worker or not wait:
-                return worker
+                w = (worker[2] if pop else worker).connect(quick=False)
+                if w or not wait:
+                    return worker
 
             # Busy waits are bad...?
             time.sleep(0.05)
@@ -945,6 +950,7 @@ class WorkerPool:
                 return w_tuple[2].with_caller(ci).call(fn, *args, **kwargs)
             else:
                 return w_tuple[2].call(fn, *args, **kwargs)
+            # FIXME: Handle ConnectionRefusedError?
         finally:
             if w_tuple:
                 self.workers.append(w_tuple)
@@ -964,6 +970,7 @@ class WorkerPool:
                     loop, fn, *args, **kwa)
             else:
                 return await w.async_call(loop, fn, *args, **kwa)
+            # FIXME: Handle ConnectionRefusedError?
         finally:
             if w_tuple:
                 self.workers.append(w_tuple)

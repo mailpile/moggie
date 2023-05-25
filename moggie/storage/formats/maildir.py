@@ -129,8 +129,7 @@ class FormatMaildir:
     def get_email_headers(self, sub, fn):
         return self.parent[os.path.join(self.basedir, sub, fn)]
 
-    def iter_email_metadata(self,
-            skip=0, iterator=None, username=None, password=None):
+    def iter_email_metadata(self, skip=0):
         lts = 0
         now = int(time.time())
         for sub, fn in self.full_keys(skip=skip):

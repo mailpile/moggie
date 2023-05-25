@@ -96,13 +96,15 @@ class FormatMailzip(FormatBytes):
         return sorted(['/' + i.filename
             for i in self.zf.infolist() if self.FILE_RE.search(i.filename)])
 
-    def iter_email_metadata(self,
-            skip=0, iterator=None, username=None, password=None):
+    def iter_email_metadata(self, skip=0):
         now = int(time.time())
         lts = 0
         obj = ''
         try:
             for key in self.keys():
+                if skip > 0:
+                    skip -= 1
+                    continue
                 obj = self[key]
                 path = self.get_tagged_path(bytes(key, 'utf-8'))
                 hend, hdrs = quick_msgparse(obj, 0)

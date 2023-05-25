@@ -30,28 +30,27 @@ from .base import BaseWorker, WorkerPool
 
 
 class StorageWorkerApi:
-    def dump(self, compress=None):
-        if compress is not None:
-            return self.call('dump', qs={'compress': compress})
-        return self.call('dump')
-
     async def async_info(self, loop,
-            key=None, details=None, recurse=0, relpath=None):
-        return await self.async_call(loop,
-            'info', key, details, recurse, relpath)
+            key=None, details=None, recurse=0, relpath=None,
+            username=None, password=None):
+        return await self.async_call(loop, 'info',
+            key, details, recurse, relpath, username, password)
 
-    def info(self, key=None, details=None, recurse=0, relpath=None):
-        return self.call('info', key, details, recurse, relpath)
+    def info(self,
+            key=None, details=None, recurse=0, relpath=None,
+            username=None, password=None):
+        return self.call('info',
+            key, details, recurse, relpath, username, password)
 
     async def async_mailbox(self, loop, key,
             skip=0, limit=None, username=None, password=None):
-        return await self.async_call(loop,
-            'mailbox', key, skip, limit, username, password,
+        return await self.async_call(loop, 'mailbox',
+            key, skip, limit, username, password,
             hide_qs=True)  # Keep passwords out of web logs
 
     def mailbox(self, key, skip=0, limit=None, username=None, password=None):
-        return self.call(
-            'mailbox', key, skip, limit, username, password,
+        return self.call('mailbox',
+            key, skip, limit, username, password,
             hide_qs=True)  # Keep passwords out of web logs
 
     async def async_email(self, loop, metadata,
@@ -101,7 +100,6 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
             name=name, notify=notify, log_level=log_level)
         self.backend = backend
         self.functions.update({
-            b'dump':         (True,  self.api_dump),
             b'info':         (True,  self.api_info),
             b'mailbox':      (True,  self.api_mailbox),
             b'email':        (True,  self.api_email),
@@ -127,16 +125,6 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
         self.background_thread.daemon = True
         self.background_thread.start()
 
-    def api_dump(self, **kwargs):
-        self.reply(
-            self.HTTP_200 + b'Content-Type: application/octet-stream',
-            self.backend.dump())
-
-    def api_info(self, key, details, recurse, relpath, method=None):
-        self.reply_json(
-            self.backend.info(key,
-                details=details, recurse=recurse, relpath=relpath))
-
     def pue_to_needinfo(self, pue):
         logging.debug('Need unlock, raising NeedInfoException')
         needs, neo = [], NeedInfoException
@@ -146,6 +134,17 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
             needs.append(
                 neo.Need('Password', 'password', datatype='password'))
         return neo(str(pue), need=needs)
+
+    def api_info(self,
+            key, details, recurse, relpath, username, password,
+            method=None):
+        try:
+            self.reply_json(
+                self.backend.info(key,
+                    details=details, recurse=recurse, relpath=relpath,
+                    username=username, password=password))
+        except PleaseUnlockError as pue:
+            raise self.pue_to_needinfo(pue)
 
     def api_mailbox(self, key, skip, limit, username, password, method=None):
         cache_key = '%s/%s/%s' % (key, username, password)
@@ -203,8 +202,9 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
         else:
             parse_cache[1] = True
 
-    def api_email(self, metadata, text, data, full_raw, parts,
-            username, password, method=None):
+    def api_email(self,
+            metadata, text, data, full_raw, parts, username, password,
+            method=None):
         metadata = Metadata(*(metadata[:Metadata.OFS_HEADERS] + [b'']))
         try:
             parsed = self.backend.parse_message(metadata,
@@ -233,6 +233,8 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
             length = len(value)
             length = min(length, dumb_decode(args[1]) if (len(args) > 1) else length)
             length -= begin
+        except PleaseUnlockError as pue:
+            raise self.pue_to_needinfo(pue)
         except KeyError:
             return self.reply(self.HTTP_404)
         except (IndexError, ValueError, TypeError):
@@ -293,26 +295,35 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
         self._client.close()
 
     def api_set(self, key, value, **kwargs):
-        key = str(key, 'latin-1')
-        #print('Setting %s = %s' % (key, dumb_decode(value)))
-        self.backend.__setitem__(key, dumb_decode(value), **kwargs)
-        self.reply_json({'set': key})
+        try:
+            key = str(key, 'latin-1')
+            #print('Setting %s = %s' % (key, dumb_decode(value)))
+            self.backend.__setitem__(key, dumb_decode(value), **kwargs)
+            self.reply_json({'set': key})
+        except PleaseUnlockError as pue:
+            raise self.pue_to_needinfo(pue)
 
     def api_append(self, key, data, method=None):
-        key = str(key, 'latin-1')
-        if hasattr(self.backend, 'append'):
-            self.backend.append(key, dumb_decode(data))
-        else:
-            self.backend[key] += dumb_decode(data)
-        self.reply_json({'appended': key})
+        try:
+            key = str(key, 'latin-1')
+            if hasattr(self.backend, 'append'):
+                self.backend.append(key, dumb_decode(data))
+            else:
+                self.backend[key] += dumb_decode(data)
+            self.reply_json({'appended': key})
+        except PleaseUnlockError as pue:
+            raise self.pue_to_needinfo(pue)
 
     def api_delete(self, key, method=None):
-        key = str(key, 'latin-1')
         try:
-            del self.backend[key]
-        except KeyError:
-            pass
-        self.reply_json({'deleted': key})
+            key = str(key, 'latin-1')
+            try:
+                del self.backend[key]
+            except KeyError:
+                pass
+            self.reply_json({'deleted': key})
+        except PleaseUnlockError as pue:
+            raise self.pue_to_needinfo(pue)
 
 
 class StorageWorkers(WorkerPool, StorageWorkerApi):
@@ -364,8 +375,8 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
             caps = 'write'
         if args and isinstance(args[0], str) and args[0].startswith('imap:'):
             caps = 'imap'
-        logging.debug('Should choose worker with %s %s%s' % (caps, fn, args))
-        return self.with_worker(capabilities=caps, pop=pop, wait=wait)
+        worker = self.with_worker(capabilities=caps, pop=pop, wait=wait)
+        return worker
 
 
 if __name__ == '__main__':

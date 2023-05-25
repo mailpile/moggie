@@ -199,6 +199,7 @@ class FileStorage(BaseStorage, MailboxStorageMixin):
 
     def info(self, key=None,
             details=False, recurse=None, relpath=None,
+            username=None, password=None,
             limit=None, skip=0):
         userhome = os.path.expanduser(b'~')
         paths = self.key_to_paths(key)
@@ -261,7 +262,8 @@ class FileStorage(BaseStorage, MailboxStorageMixin):
                     rec_next = max(0, recurse - 1)
                     det_next = True # 'magic' if (not rec_next) else True
                     c.append(self.info(subpath,
-                        details=det_next, relpath=relpath, recurse=rec_next))
+                        details=det_next, relpath=relpath, recurse=rec_next,
+                        username=username, password=password))
                 else:
                     c.append(_utf8(subpath))
                 if (len(c) > 2) and (recurse == 0):

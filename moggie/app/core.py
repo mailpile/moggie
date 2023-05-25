@@ -519,7 +519,9 @@ main app worker. Hints:
                     info = {'magic': ['imap']}
                 else:
                     info = await self.storage.async_info(loop,
-                        path, details=True, recurse=0, relpath=False)
+                        path, details=True, recurse=0, relpath=False,
+                        username=api_request.get('username'),
+                        password=api_request.get('password'))
                 if 'src' in info:
                     del info['src']
                 suggest.update(info)
