@@ -109,7 +109,10 @@ main app worker. Hints:
 
     async def tick(self):
         now = int(time.time())
-        # FIXME: Is there something we should be doing here?
+
+        if self.storage:
+            self.storage.housekeeping()
+
         self.schedule(now + 120, self.tick())
 
     def schedule(self, when, job):
@@ -132,6 +135,11 @@ main app worker. Hints:
         if context.tag_namespace:
             worker_name += '-' + context.tag_namespace
 
+        if worker_name in self.openpgp_workers:
+            if self.openpgp_workers[worker_name].exitcode is not None:
+                self.openpgp_workers[worker_name].join()
+                del self.openpgp_workers[worker_name]
+
         if worker_name not in self.openpgp_workers:
             ksc, sopc, = context.get_openpgp_settings()
             log_level = self.worker.log_level
@@ -144,7 +152,8 @@ main app worker. Hints:
                 tag_namespace=context.tag_namespace,
                 search=self.search,
                 metadata=self.metadata,
-                log_level=log_level)
+                log_level=log_level,
+                shutdown_idle=120)
             if worker.connect():
                 self.openpgp_workers[worker_name] = worker
 
@@ -181,11 +190,6 @@ main app worker. Hints:
             # Restart workers that want to know about our metadata store
             self.storage.quit()
             self.start_workers(start_encrypted=False)
-
-        try:
-            self._get_openpgp_worker(self.config.CONTEXT_ZERO)
-        except KeyError:
-            pass
 
         return True
 

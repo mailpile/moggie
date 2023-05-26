@@ -88,6 +88,8 @@ class StorageWorkerApi:
 class StorageWorker(BaseWorker, StorageWorkerApi):
     KIND = 'storage'
 
+    SHUTDOWN_IDLE = 300
+
     PEEK_BYTES = 8192
     BLOCK = 8192
 
@@ -95,9 +97,11 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
     PARSE_CACHE_TTL = 180
 
     def __init__(self, status_dir, backend,
-            name=KIND, notify=None, log_level=logging.ERROR):
+            name=KIND, notify=None, log_level=logging.ERROR,
+            shutdown_idle=None):
         BaseWorker.__init__(self, status_dir,
-            name=name, notify=notify, log_level=log_level)
+            name=name, notify=notify, log_level=log_level,
+            shutdown_idle=shutdown_idle)
         self.backend = backend
         self.functions.update({
             b'info':         (True,  self.api_info),

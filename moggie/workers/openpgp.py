@@ -49,7 +49,10 @@ class OpenPGPWorker(BaseWorker):
     BLOCK = 8192
 
     def __init__(self, status_dir, data_directory, encryption_keys,
-            name=KIND, notify=None, log_level=logging.ERROR,
+            name=KIND,
+            notify=None,
+            log_level=logging.ERROR,
+            shutdown_idle=False,
             keystore_config=DEFAULT_KEYSTORES,
             sop_config=None,
             metadata=None,
@@ -57,7 +60,8 @@ class OpenPGPWorker(BaseWorker):
             search=None):
 
         BaseWorker.__init__(self, status_dir,
-            name=name, notify=notify, log_level=log_level)
+            name=name, notify=notify,
+            log_level=log_level, shutdown_idle=shutdown_idle)
 
         # We derive our AES key(s) from those provided, instead of using
         # directly. This reduces the odds of collisions (IV reuse etc.)

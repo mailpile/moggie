@@ -61,6 +61,7 @@ class BaseWorker(Process):
     # Intervals for on_tick() and on_idle() events. Neither are precise.
     IDLE_T = 60
     TICK_T = 300
+    SHUTDOWN_IDLE = False
 
     HTTP_200 = b'HTTP/1.0 200 OK\r\n'
     HTTP_400 = b'HTTP/1.0 400 Invalid Request\r\nContent-Length: 16\r\n\r\nInvalid Request\n'
@@ -74,7 +75,7 @@ class BaseWorker(Process):
 
     def __init__(self, status_dir,
             host=None, port=None, name=None, notify=None,
-            log_level=logging.ERROR):
+            log_level=logging.ERROR, shutdown_idle=None):
         Process.__init__(self)
 
         self.name = name or self.KIND
@@ -103,6 +104,9 @@ class BaseWorker(Process):
                 logging.INFO,
                 logging.DEBUG
                 ][log_level]
+
+        self.shutdown_idle = (
+            self.SHUTDOWN_IDLE if (shutdown_idle is None) else shutdown_idle)
 
         self.log_level = log_level
         self._notify = notify
@@ -234,8 +238,10 @@ class BaseWorker(Process):
     def _make_url(self, s_host, s_port):
         return 'http://%s:%d/%s' % (s_host, s_port, str(self._secret, 'utf-8'))
 
-    def on_idle(self):
-        pass
+    def on_idle(self, last_active):
+        if self.shutdown_idle:
+            if last_active < (time.time() - self.shutdown_idle):
+                self.quit()
 
     def on_tick(self):
         pass
@@ -244,7 +250,8 @@ class BaseWorker(Process):
         return (secret == self._secret)
 
     def _main_httpd_loop(self):
-        next_tick = int(time.time() + self.TICK_T)
+        last_active = time.time()
+        next_tick = int(last_active + self.TICK_T)
         self._sock.settimeout(self.IDLE_T)
         while self.keep_running:
             client = None
@@ -254,6 +261,7 @@ class BaseWorker(Process):
                 self.on_tick()
             try:
                 (client, c_addrinfo) = self._sock.accept()
+                last_active = time.time()
                 peeked = client.recv(self.PEEK_BYTES, socket.MSG_PEEK)
                 if ((peeked[:4] in self.METHODS) and (b'\r\n\r\n' in peeked)):
                     try:
@@ -281,7 +289,7 @@ class BaseWorker(Process):
                     self.status['requests_ignored'] += 1
                     client.send(self.HTTP_400)
             except socket.timeout:
-                self.on_idle()
+                self.on_idle(last_active)
             except OSError:
                 pass
             except (QuitException, KeyboardInterrupt):
@@ -357,8 +365,6 @@ class BaseWorker(Process):
 
     def connect(self, autostart=True, quick=False):
         if (self.url or self._load_url()) and (quick or self._ping()):
-            logging.debug('Connected running %s(%s) at %s'
-                % (type(self).__name__, self.name, self.url))
             return self
 
         if autostart:
@@ -368,7 +374,14 @@ class BaseWorker(Process):
                 pass
 
             self.url = self.url_parts = None
-            logging.debug('Launching %s(%s)' % (type(self).__name__, self.name,))
+            if self.exitcode is not None:
+                logging.debug('Cannot relaunch %s(%s)'
+                    % (type(self).__name__, self.name,))
+                return None
+
+            logging.debug('Launching %s(%s)'
+                % (type(self).__name__, self.name,))
+
             self.start()
             for t in range(1, 25):
                 if self._load_url() and self._ping():
@@ -865,11 +878,22 @@ class WorkerPool:
         self.workers = []
         self.caller_lock = threading.Lock()
         self.caller_info = None
-        self.quit = lambda: self._proxy_all('quit', autostart=False)
-        self.join = lambda: self._proxy_all('join', autostart=False)
-        self.terminate = lambda: self._proxy_all('terminate', autostart=False)
+        self.quit = lambda: self._proxy_all('quit')
+        self.join = lambda: self._proxy_all('join')
+        self.terminate = lambda: self._proxy_all('terminate')
         for caps, cls, args, kwargs in workers:
             self.add_worker(caps, cls, args, kwargs)
+
+    def housekeeping(self):
+        with self.lock:
+            for w_tuple in self.workers:
+                worker = w_tuple[2]
+                if worker and (worker.exitcode is not None):
+                    try:
+                        worker.join()
+                    except:
+                        pass
+                    w_tuple[2] = None
 
     def add_worker(self, caps, cls, args, kwargs):
         with self.lock:
@@ -883,7 +907,7 @@ class WorkerPool:
             if name is None:
                 name = '%s_%d' % (worker.name, self.count)
 
-            self.workers.append([name, caps, worker, 0])
+            self.workers.append([name, caps, worker, (cls, args, kwargs), 0])
             self.count += 1
 
     def auto_add_worker(self, pop, which, capabilities):
@@ -894,10 +918,17 @@ class WorkerPool:
         for tries in range(0, 50):
             worker = name = cap = None
             with self.lock:
-                for i, (name, cap, worker, ts) in enumerate(self.workers):
+                for i, (name, cap, worker, cak, ts) in enumerate(self.workers):
                     if (((not which) or name.startswith(which))
                             and (capabilities in cap)):
-                        worker = worker.connect(quick=(ts > 0))
+                        if worker:
+                            worker = worker.connect(quick=(ts > 0))
+                        if not worker:
+                            cls, args, kwargs = cak
+                            worker = cls(*args, **kwargs)
+                            self.workers[i][2] = worker
+                            worker = worker.connect(quick=False)
+
                         if worker:
                             if pop:
                                 return self.workers.pop(i)
@@ -941,47 +972,59 @@ class WorkerPool:
                 self.caller_lock.release()
         return None
 
-    def call(self, fn, *args, **kwargs):
+    def call(self, fn, *args, **kwa):
+        caller = self.get_caller()
         w_tuple = None
-        try:
-            w_tuple = self.choose_worker(True, True, fn, args, kwargs)
-            ci = self.get_caller()
-            if ci:
-                return w_tuple[2].with_caller(ci).call(fn, *args, **kwargs)
-            else:
-                return w_tuple[2].call(fn, *args, **kwargs)
-            # FIXME: Handle ConnectionRefusedError?
-        finally:
-            if w_tuple:
-                self.workers.append(w_tuple)
+        for tries in range(0, 2):
+            try:
+                w_tuple = self.choose_worker(True, True, fn, args, kwargs)
+                worker = w_tuple[2]
+                if caller:
+                    return worker.with_caller(caller).call(fn, *args, **kwa)
+                else:
+                    return worker.call(fn, *args, **kwa)
+            except socket.error as e:
+                logging.exception('socket.error in WorkerPool.call')
+                w_tuple[2] = None
+            finally:
+                if w_tuple:
+                    w_tuple[-1] = time.time()
+                    self.workers.append(w_tuple)
 
     async def async_call(self, loop, fn, *args, **kwa):
+        caller = self.get_caller()
         w_tuple = None
-        try:
-            for tries in range(0, 50):
-                w_tuple = self.choose_worker(True, False, fn, args, kwa)
+        for t1 in range(0, 2):
+            try:
+                for t2 in range(0, 50):
+                    w_tuple = self.choose_worker(True, False, fn, args, kwa)
+                    if w_tuple:
+                        break
+                    await asyncio.sleep(0.05)
+                worker = w_tuple[2]
+                if caller:
+                    return await worker.with_caller(caller).async_call(
+                        loop, fn, *args, **kwa)
+                else:
+                    return await worker.async_call(loop, fn, *args, **kwa)
+            except socket.error as e:
+                logging.exception('socket.error in WorkerPool.async_call')
+                w_tuple[2] = None
+            finally:
                 if w_tuple:
-                    break
-                await asyncio.sleep(0.05)
-            ci = self.get_caller()
-            w = w_tuple[2]
-            if ci:
-                return await w.with_caller(ci).async_call(
-                    loop, fn, *args, **kwa)
-            else:
-                return await w.async_call(loop, fn, *args, **kwa)
-            # FIXME: Handle ConnectionRefusedError?
-        finally:
-            if w_tuple:
-                self.workers.append(w_tuple)
+                    w_tuple[-1] = time.time()
+                    self.workers.append(w_tuple)
 
-    def _proxy_all(self, method, autostart=True, args=set(), kwargs={}):
+    def _proxy_all(self, method, autostart=False, args=set(), kwargs={}):
         with self.lock:
-            for name, _, worker, _ in self.workers:
-                func = getattr(worker, method)
+            for name, _, worker, _, _ in self.workers:
+                func = getattr(worker, method) if worker else None
                 if func is not None:
                     if worker.connect(autostart=autostart, quick=True):
-                        func(*args, **kwargs)
+                        try:
+                            func(*args, **kwargs)
+                        except (IOError, OSError):
+                            pass
 
 
 if __name__ == '__main__':

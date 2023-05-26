@@ -88,7 +88,7 @@ class ImportWorker(BaseWorker):
         if not self.idle_running and self.progress is None:
             self.progress = self._no_progress(None)
 
-    def on_idle(self):
+    def on_idle(self, last_running):
         if not self.idle_running and self.progress is not None:
             self.idle_running = True
             logging.info('Launching full import in background.')
