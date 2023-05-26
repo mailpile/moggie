@@ -2,6 +2,7 @@ import logging
 
 from ..email.parsemime import parse_message as ep_parse_message
 from ..util.mailpile import PleaseUnlockError
+from ..util.dumbcode import *
 
 
 class MailboxStorageMixin:

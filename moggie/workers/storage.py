@@ -375,6 +375,11 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
             caps = 'write'
         if args and isinstance(args[0], str) and args[0].startswith('imap:'):
             caps = 'imap'
+        if fn == 'email' and isinstance(args[0], list):
+            md = Metadata(*(args[0][:Metadata.OFS_HEADERS] + [b'']))
+            if md.pointers[0].ptr_type == Metadata.PTR.IS_IMAP:
+                caps = 'imap'
+
         worker = self.with_worker(capabilities=caps, pop=pop, wait=wait)
         return worker
 

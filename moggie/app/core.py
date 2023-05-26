@@ -516,7 +516,7 @@ main app worker. Hints:
             for suggest in mail_path_suggestions(local=True):
                 path = suggest['path']
                 if path.startswith('imap:'):
-                    info = {'magic': ['imap']}
+                    info = {'path': path}
                 else:
                     info = await self.storage.async_info(loop,
                         path, details=True, recurse=0, relpath=False,
@@ -528,7 +528,9 @@ main app worker. Hints:
                 result.append(suggest)
         else:
             info = await self.storage.async_info(loop,
-                path, details=True, recurse=1, relpath=False)
+                path, details=True, recurse=1, relpath=False,
+                username=api_request.get('username'),
+                password=api_request.get('password'))
 
             children = []
             if 'contents' in info:

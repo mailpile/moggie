@@ -54,14 +54,14 @@ class BrowserListWalker(urwid.ListWalker):
     LOADED   = 8
     EXPANDED = 9
 
-    def add_paths(self, paths):
+    def add_paths(self, paths, force_src=None):
         _so = self.src_ord
         self.paths.update(dict((p['path'], [
-                _so.get(p['src'], 99), p['path'],  # Sort by src/path
+                _so.get(force_src or p['src'], 99), p['path'],  # Sort by src/path
                 True,     # 2 == Visible?
                 False,    # 3 == First?
                 '',       # 4 == Indent
-                p['src'], # 5 == Source
+                force_src or p['src'], # 5 == Source
                 p['path'],# 6 == Friendly name
                 p,        # 7 == Info
                 False,    # 8 == Loaded?
@@ -104,7 +104,10 @@ class BrowserListWalker(urwid.ListWalker):
             icon = EMOJI.get(magic[0]) if magic else ''
             if not icon:
                 icon = EMOJI.get(
-                    'folder' if info.get('is_dir') else 'file', '')
+                        'server' if name.startswith('imap:') else
+                        'folder' if info.get('is_dir') else
+                        'file',
+                    '')
 
             n = urwid.Text(('browse_name', '  %s%s%s' % (indent, icon, name)),
                            wrap='ellipsis')
@@ -246,6 +249,8 @@ class Browser(urwid.Pile):
 
     def browse(self, path_info):
         self.browse_obj['args'] = [path_info['path']]
+        self.browse_obj['req_id'] = self.browse_obj['req_id'].split('=')[0]
+        self.browse_obj['req_id'] += ('=' + path_info['src'])
         self.tui_frame.send_with_context(self.browse_obj, self.ctx_src_id)
 
     def update_content(self):
@@ -267,16 +272,19 @@ class Browser(urwid.Pile):
         self.contents[:] = [(w, ('pack', None)) for w in self.widgets]
 
     def incoming_message(self, source, message):
-        if (not self.browse_obj
-                or message.get('req_id') != self.browse_obj['req_id']):
+        req_id = message.get('req_id')
+        if (not self.browse_obj) or (req_id != self.browse_obj['req_id']):
             return
 
         for result in message.get('data', []):
             if not isinstance(result, dict):
                 continue
             try:
+                src = None
+                if '=' in req_id:
+                    src = req_id.split('=')[-1]
                 for section, paths in result.items():
-                    self.walker.add_paths(paths)
+                    self.walker.add_paths(paths, force_src=src)
             except:
                 logging.exception('Add paths failed')
 

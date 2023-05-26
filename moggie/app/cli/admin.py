@@ -908,10 +908,11 @@ class CommandBrowse(CLICommand):
     SRC_DESCRIPTIONS = {
         '': 'Files and folders',
         'fs': 'Files and folders',
+        'imap': 'Remote IMAP mailboxes',
         'spool': 'Incoming system mail',
         'home': 'Your home directory',
         'mailpilev1': 'Legacy Mailpile v1 data',
-        'thunderbird': 'Thunderbird data and accounts'}
+        'thunderbird': 'Thunderbird mailboxes'}
 
     def configure(self, args):
         self.paths = self.strip_options(args)
@@ -994,7 +995,7 @@ class CommandBrowse(CLICommand):
                 while path.endswith('/') and len(path) > 1:
                     path = path[:-1]
             results[path] = _prune(
-                await self.worker.async_api_request(self.access,
+                await self.repeatable_async_api_request(self.access,
                     RequestBrowse(
                         context=ctx_id,
                         path=path,

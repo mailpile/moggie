@@ -400,6 +400,7 @@ class TuiFrame(urwid.Frame):
             return super().keypress(size, key)
         except AttributeError:
             logging.exception('FIXME: Urwid bug in keypress handler?')
+            self.focus_last_column()
 
     def unhandled_input(self, key):
         try:
