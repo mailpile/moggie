@@ -33,10 +33,10 @@ Moggie currently masquerades as a "TUI" (text-(G)UI) app, but behind the
 scenes it is a collection of microservices using HTTP-based RPC calls to
 talk to each other. There are microservices for the search engine, the
 metadata store, filesystem operations, PGP operations, and IMAP
-connects. A master "application logic" process implements an API and is
-responsible for coordination and access controls.
+connections. A master "application logic" process implements an API and
+is responsible for coordination and access controls.
 
-Moggie "clients" send on-off HTTP requests, or establish a longer lived
+Moggie "clients" send one-off HTTP requests, or establish a longer lived
 websocket to the "app" worker. The plan is for Moggie to support a web
 user interface (like Mailpile), and integrate
 [PageKite](https://pagekite.net/) for easy remote access and
@@ -44,7 +44,7 @@ collaboration.
 
 Structured data is stored on disk using binary records, most of which is
 AES encrypted. Moggie's native "mailbox" format is a ZIP archive
-containing a Maildir directroy structure, which may be AES encrypted
+containing a Maildir directory structure, which may be AES encrypted
 and/or compressed. Moggie's encryption keys are currently left in the
 clear in the config file until I've figured out the UX and integrated
 [Passcrow](https://passcrow.org/) for password recovery.
@@ -95,7 +95,8 @@ on-disk data structures is still in flux and obsolete data may cause
 weird issues.
 
 The data includes logs (in the subdirectory named `logs`) which may be
-useful for debugging. There is also a `config.rc`.
+useful for debugging. Be warned it may also leak your secrets if you
+increase the logging verbosity. There is also a `config.rc`.
 
 
 
