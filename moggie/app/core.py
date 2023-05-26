@@ -2,6 +2,7 @@ import asyncio
 import base64
 import copy
 import logging
+import multiprocessing
 import os
 import random
 import re
@@ -112,6 +113,8 @@ main app worker. Hints:
 
         if self.storage:
             self.storage.housekeeping()
+        logging.debug('Have %d live workers, reaping zombies.'
+            % len(multiprocessing.active_children()))
 
         self.schedule(now + 120, self.tick())
 
