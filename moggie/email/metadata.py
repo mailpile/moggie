@@ -35,6 +35,9 @@ class Metadata(list):
         b')',
         flags=(re.IGNORECASE + re.DOTALL))
 
+    # The same as above, but formatted for IMAP
+    IMAP_HEADERS = '(DATE MESSAGE-ID IN-REPLY-TO FROM TO CC SUBJECT)'
+
     FIND_RE = {
         'in-reply-to': re.compile(r'(?:^|\n)in-reply-to:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL)),
         'message-id': re.compile(r'(?:^|\n)message-id:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL)),

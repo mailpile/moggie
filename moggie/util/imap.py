@@ -8,6 +8,7 @@ import time
 from imaplib import IMAP4, IMAP4_SSL
 
 from ..api.exceptions import *
+from ..email.metadata import Metadata
 from .imap_utf7 import codecs
 from .mailpile import PleaseUnlockError
 
@@ -335,16 +336,27 @@ class ImapConn:
         return []
 
     def fetch_metadata(self, mailbox, uids):
+        # Ask the server for only the headers we need for metadata; sharing
+        # some of the parsing work and reducing network traffic.
+        imap_headers = (
+            'BODY.PEEK[HEADER.FIELDS %s]' % (Metadata.IMAP_HEADERS,))
         ok, data = _try_wrap(self.conn, self.conn_info,
             self.select(mailbox).conn.fetch,
                 (','.join('%d' % i for i in uids)),
-                '(RFC822.SIZE FLAGS RFC822.HEADER)')
+                '(RFC822.SIZE FLAGS %s)' % (imap_headers,))
         if not ok:
             return
+        hkey = bytes(imap_headers.replace('.PEEK', ''), 'utf-8')
         for lines in data:
             if lines and lines[0] == 41:  # This is an imaplib bug
                 continue
             try:
+                # This is a hack to make response parsing less thorny
+                if isinstance(lines, tuple):
+                    lines = list(lines)
+                    lines[0] = lines[0].replace(hkey, b'RFC822.HEADER')
+                    lines = tuple(lines)
+
                 _, (uid, data) = parse_imap(('OK', lines), decode=True)
                 data = _imap_dict(data)
                 if 'FLAGS' in data and 'RFC822.SIZE' in data:
