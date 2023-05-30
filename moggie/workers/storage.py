@@ -368,6 +368,9 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
                 self.add_worker(*self.imap_worker_spec)
             else:
                 self.add_worker(*self.fs_worker_spec)
+            # Set all our read-only and IMAP workers to be daemons.
+            # The FS writer is excluded from this policy.
+            self.workers[-1][2].daemon = True
             if pop:
                 return self.workers.pop(-1)
             else:

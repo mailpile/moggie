@@ -62,6 +62,8 @@ class BaseWorker(Process):
     IDLE_T = 60
     TICK_T = 300
     SHUTDOWN_IDLE = False
+    MAX_FD = 2048          # If we ever get file descriptors above this,
+                           # we may end up with weird deadlocks/bugs.
 
     HTTP_200 = b'HTTP/1.0 200 OK\r\n'
     HTTP_400 = b'HTTP/1.0 400 Invalid Request\r\nContent-Length: 16\r\n\r\nInvalid Request\n'
@@ -134,7 +136,7 @@ class BaseWorker(Process):
 
     def enumerate_open_fds(self):
         open_fds = []
-        for fd in range(3, 1024):
+        for fd in range(3, self.MAX_FD):
             try:
                 stat = os.fstat(fd)
                 open_fds.append(fd)
@@ -902,7 +904,7 @@ class WorkerPool:
         self.caller_lock = threading.Lock()
         self.caller_info = None
         self.quit = lambda: self._proxy_all('quit')
-        self.join = lambda: self._proxy_all('join')
+        self.join = lambda *a: self._proxy_all('join', args=a)
         self.terminate = lambda: self._proxy_all('terminate')
         for caps, cls, args, kwargs in workers:
             self.add_worker(caps, cls, args, kwargs)
@@ -1037,6 +1039,13 @@ class WorkerPool:
                 if w_tuple:
                     w_tuple[-1] = time.time()
                     self.workers.append(w_tuple)
+
+    def is_alive(self):
+        with self.lock:
+            for name, _, worker, _, _ in self.workers:
+                if worker and worker.is_alive():
+                    return True
+        return False
 
     def _proxy_all(self, method, autostart=False, args=set(), kwargs={}):
         with self.lock:

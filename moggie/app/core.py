@@ -262,6 +262,7 @@ main app worker. Hints:
                     pass
             time.sleep(0.1)
 
+        multiprocessing.active_children()
         self.importer = self.storage = self.search = self.metadata = None
         self.openpgp_workers = {}
 
