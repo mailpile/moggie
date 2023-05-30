@@ -380,7 +380,7 @@ class EmailList(urwid.Pile):
             return
         self.loading = time.time()
 
-        self.want_emails += (self.tui_frame.max_child_rows() * 2)
+        self.want_emails += max(100, self.tui_frame.max_child_rows() * 2)
         if self.search_obj['req_type'] == 'cli:search':
             self.search_obj.set_arg('--limit=', self.want_emails)
             if self.total_available is None:

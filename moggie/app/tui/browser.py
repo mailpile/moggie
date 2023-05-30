@@ -139,7 +139,8 @@ class BrowserListWalker(urwid.ListWalker):
             # it is weird in a useful way?
             show = not entry[self.EXPANDED]
             for e in self.paths.values():
-                if e[self.PATH].startswith(entry[self.PATH] + '/'):
+                if (e[self.PATH].startswith(entry[self.PATH] + '/')
+                        and e[self.SRC] == entry[self.SRC]):
                     if e[self.LOADED]:
                         e[self.EXPANDED] = show
                     else:
