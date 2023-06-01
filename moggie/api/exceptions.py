@@ -3,19 +3,19 @@ import traceback
 
 
 class APIException(Exception):
-    def __init__(self, *args, **kwargs):
-        from_dict = kwargs.get('_from', {})
+    def __init__(self, *args, **data):
+        from_dict = data.get('_from', {})
         if hasattr(from_dict, 'as_dict'):
             from_dict = from_dict.as_dict()
 
-        for cleanup in ('_from', ):
-            if cleanup in kwargs:
-                del kwargs[cleanup]
-        super().__init__(*args)
-
+        self.exc_args = from_dict.get('exc_args', args)
+        self.exc_data = from_dict.get('exc_data', data)
         self.traceback = from_dict.get('traceback')
-        self.kwargs = from_dict.get('kwargs', kwargs)
-        self.args = from_dict.get('args', args)
+
+        for cleanup in ('_from', ):
+            if cleanup in data:
+                del data[cleanup]
+        super().__init__(*self.exc_args)
         self.validate()
 
     def validate(self):
@@ -26,8 +26,8 @@ class APIException(Exception):
             self.traceback = traceback.format_exc()
         return {
             'exception': self.__class__.__name__,
-            'kwargs': self.kwargs,
-            'args': self.args,
+            'exc_args': self.exc_args,
+            'exc_data': self.exc_data,
             'traceback': self.traceback}
 
 
@@ -42,7 +42,7 @@ class NeedInfoException(APIException):
         datatype = property(lambda s: s['datatype'], lambda s,v: s.__setitem__('datatype', v))
 
     def validate(self):
-        self.need = self.kwargs.get('need')
+        self.need = self.exc_data.get('need')
         if not isinstance(self.need, list):
             raise TypeError('NeedInfoException: Invalid arguments')
         for i, d in enumerate(self.need):

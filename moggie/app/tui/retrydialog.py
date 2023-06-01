@@ -9,7 +9,7 @@ class RetryDialog(MessageDialog):
     def __init__(self, tui_frame, emsg):
         self.emsg = emsg
         self.doingit = False
-        self.needed_info = emsg['kwargs'].get('need')
+        self.needed_info = emsg['exc_data'].get('need')
         self.retry = emsg['request']
 
         super().__init__(tui_frame, emsg['error'])

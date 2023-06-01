@@ -112,6 +112,7 @@ class TuiFrame(urwid.Frame):
         return self.context_list.send_with_context(message_obj, context)
 
     def handle_bridge_messages(self, bridge_name, message):
+        #logging.debug('Incoming(%s): %s' % (bridge_name, message))
         try:
             for widget in self.all_columns:
                 if hasattr(widget, 'handle_bridge_messages'):
@@ -120,7 +121,8 @@ class TuiFrame(urwid.Frame):
                     except:
                         logging.exception('Incoming message asploded')
 
-            if message.get('error') and message.get('exception'):
+            if 'error' in message and 'exception' in message:
+                # This only applies if we have a NeedInfo ?
                 self.topbar.open_with(RetryDialog, message)
 
             elif message.get('req_type') in ('notification', 'unlocked'):

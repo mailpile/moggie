@@ -343,8 +343,8 @@ class BaseWorker(Process):
     def api_functions(self, *args, **kwargs):
         self.reply_json([str(fn, 'utf-8') for fn in self.functions])
 
-    def api_exception(self, *args, **kwargs):
-        raise APIException(*args, **kwargs)
+    def api_exception(self, *args, **data):
+        raise APIException(*args, **data)
 
     def api_status(self, *args, **kwargs):
         if args and args[0] == 'as.text':

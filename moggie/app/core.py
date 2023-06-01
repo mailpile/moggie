@@ -879,7 +879,7 @@ main app worker. Hints:
             error['request'] = api_req
             del error['traceback']
             logging.debug('Returning error %s: %s %s'
-                % (exc.__class__.__name__, error['error'], error['kwargs']))
+                % (exc.__class__.__name__, error['error'], error['exc_data']))
 
         if internal:
             return result

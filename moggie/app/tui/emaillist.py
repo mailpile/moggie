@@ -394,7 +394,8 @@ class EmailList(urwid.Pile):
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
 
     def incoming_count(self, source, message):
-        if message['req_id'] == self.count_obj['req_id']:
+        if (message['req_id'] == self.count_obj['req_id']
+                and 'exception' not in message):
             for val in message['data'][0].values():
                 self.total_available = val
             self.set_crumb(update=True)
