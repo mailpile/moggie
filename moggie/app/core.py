@@ -879,6 +879,13 @@ main app worker. Hints:
             del error['traceback']
             logging.debug('Returning error %s: %s %s'
                 % (exc.__class__.__name__, error['error'], error['exc_data']))
+        except PermissionError as exc:
+            result = error = APIAccessDenied().as_dict()
+            error['error'] = str(exc)
+            error['request'] = api_req
+            del error['traceback']
+            logging.debug('Returning error %s: %s %s'
+                % (exc.__class__.__name__, error['error'], error['exc_data']))
 
         if internal:
             return result

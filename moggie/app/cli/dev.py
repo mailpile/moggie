@@ -40,12 +40,12 @@ class CommandWebsocket(CLICommand):
         ('--exit-after=', [None], 'X=maximum number of received messages')]]
 
     def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
         self.ws_url = None
         self.ws_tls = False
         self.ws_hostport = None
         self.ws_auth_token = None
         self.received = 0
+        super().__init__(*args, **kwargs)
 
     def configure(self, args):
         args = self.strip_options(args)
@@ -112,7 +112,7 @@ class CommandWebsocket(CLICommand):
         sys.stdout.write("""\
 # Welcome to `moggie websockets` in friendly mode!
 #
-# Type your command and they will be converted to JSON and sent. Examples:
+# Type your commands and they will be converted to JSON and sent. Examples:
 #
 #    count from:bre
 #    search --limit=10 bjarni
@@ -140,9 +140,13 @@ class CommandWebsocket(CLICommand):
             bridge = AsyncRPCBridge(ev_loop, 'cli_websocket', None, self,
                 ws_url=self.ws_url,
                 auth_token=self.ws_auth_token)
+            if self.options['--friendly']:
+                print('##[ %s ]##\n#' % self.ws_url)
         else:
             app = self.connect()
             bridge = AsyncRPCBridge(ev_loop, 'cli_websocket', app, self)
+            if self.options['--friendly']:
+                print('##[ local moggie ]##\n#')
 
         async def connect_stdin_stdout(loop):
             reader = asyncio.StreamReader()

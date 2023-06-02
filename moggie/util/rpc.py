@@ -183,8 +183,8 @@ class BridgeWorker:
             await asyncio.sleep(min(reconn_delay, 15))
 
 
-def AsyncRPCBridge(ev_loop, name, app, peer):
-    app_bridge = BridgeWorker(ev_loop, name, app, peer)
+def AsyncRPCBridge(ev_loop, name, app, peer, **kwargs):
+    app_bridge = BridgeWorker(ev_loop, name, app, peer, **kwargs)
     ev_loop.create_task(app_bridge.run())
     return app_bridge
 

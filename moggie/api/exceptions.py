@@ -31,6 +31,10 @@ class APIException(Exception):
             'traceback': self.traceback}
 
 
+class APIAccessDenied(APIException):
+    pass
+
+
 class NeedInfoException(APIException):
     class Need(dict):
         def __init__(self, label, field, datatype='text'):
