@@ -80,10 +80,13 @@ class JsonRpcClient:
 class BridgeWorker:
     PING_INTERVAL = 30
 
-    def __init__(self, ev_loop, name, app, peer):
+    def __init__(self, ev_loop, name, app, peer,
+            ws_url=None,
+            auth_token=None):
         self.ws = None
-        self.ws_url = app.websocket_url()
-        self.ws_headers = {'Authorization': 'Bearer %s' % app.auth_token}
+        self.ws_url = ws_url if ws_url else app.websocket_url()
+        self.auth_token = auth_token if auth_token else app.auth_token
+        self.ws_headers = {'Authorization': 'Bearer %s' % self.auth_token}
         self.name = name
         self.app = app
         self.message_sink = peer.link_bridge(self)

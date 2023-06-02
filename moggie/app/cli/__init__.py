@@ -18,6 +18,10 @@ def _lazy_openpgp(cls):
     import moggie.app.cli.openpgp as mod
     return getattr(mod, cls)
 
+def _lazy_dev(cls):
+    import moggie.app.cli.dev as mod
+    return getattr(mod, cls)
+
 
 class LazyLoader(dict):
     @classmethod
@@ -57,6 +61,8 @@ CLI_COMMANDS = LazyLoader({
     'browse':  (_lazy_admin, 'CommandBrowse'),
     'encrypt': (_lazy_admin, 'CommandEnableEncryption'),
     'config':  (_lazy_admin, 'CommandConfig'),
+
+    'websocket': (_lazy_dev, 'CommandWebsocket'),
 
     'pgp-get-keys': (_lazy_openpgp, 'CommandPGPGetKeys'),
     'pgp-add-keys': (_lazy_openpgp, 'CommandPGPAddKeys'),
