@@ -129,7 +129,7 @@ class ImportWorker(BaseWorker):
                     RequestEmail(metadata=metadata, text=True),
                     ).get('email')
         except Exception as e:
-            logging.debug('Failed to load %s: %s' % (metadata, e))
+            logging.exception('Failed to load %s: %s' % (metadata, e))
             return None
 
     def _notify_progress(self, progress):

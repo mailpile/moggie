@@ -788,6 +788,7 @@ class BaseWorker(Process):
             return self.reply_json(data,
                 client_info_tuple=client_info_tuple, http_code=http_code)
 
+        kwargs = None
         if argdecode_and_func is not None:
             try:
                 argdecode, func = argdecode_and_func
@@ -1002,7 +1003,7 @@ class WorkerPool:
         w_tuple = None
         for tries in range(0, 2):
             try:
-                w_tuple = self.choose_worker(True, True, fn, args, kwargs)
+                w_tuple = self.choose_worker(True, True, fn, args, kwa)
                 worker = w_tuple[2]
                 if caller:
                     return worker.with_caller(caller).call(fn, *args, **kwa)
