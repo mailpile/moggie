@@ -673,7 +673,10 @@ class AppConfig(ConfigParser):
                     return acct
         return None
 
-    def access_from_token(self, token, _raise=True):
+    def access_from_token(self, token, super_token=None, _raise=True):
+        if super_token and token == super_token:
+            return self.access_zero()
+
         with self:
             if 'tokens' not in self._caches:
                 token_cache = {}

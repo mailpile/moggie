@@ -264,7 +264,7 @@ class AppWorker(PublicWorker):
         super().__init__(*args, **kwargs)
         self.functions.update(self.app.rpc_functions)
         self.sessions = {}
-        self.auth_token = None
+        self.auth_token = str(self._secret or '', 'utf-8')
         self.want_cli = False
 
     @classmethod
@@ -281,9 +281,8 @@ class AppWorker(PublicWorker):
 
     def connect(self, *args, **kwargs):
         conn = super().connect(*args, **kwargs)
-        if conn:
-            self.auth_token = self.call('rpc/get_access_token')['token']
-            self.set_rpc_authorization('Bearer %s' % self.auth_token)
+        self.auth_token = (self.url_parts[-1] or '/bogus')[1:]
+        self.set_rpc_authorization('Bearer %s' % self.auth_token)
         return conn
 
     async def async_api_request(self, access, request_obj):
@@ -347,7 +346,9 @@ class AppWorker(PublicWorker):
             username, password = req_env['auth_basic']
             logging.warning('FIXME: BASIC AUTH')
         elif 'auth_bearer' in req_env:
-            acl = self.app.config.access_from_token(req_env['auth_bearer'])
+            acl = self.app.config.access_from_token(
+                req_env['auth_bearer'],
+                super_token=self.auth_token)
             logging.debug('Access: %s = %s' % (acl.config_key, acl))
             return acl
         elif req_acl:

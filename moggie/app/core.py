@@ -86,8 +86,7 @@ main app worker. Hints:
             b'rpc/api':               (True, self.rpc_api),
             b'rpc/ask_secret':        (True, self.rpc_ask_secret),
             b'rpc/set_secret':        (True, self.rpc_set_secret),
-            b'rpc/crypto_status':     (True, self.rpc_crypto_status),
-            b'rpc/get_access_token':  (True, self.rpc_get_access_token)}
+            b'rpc/crypto_status':     (True, self.rpc_crypto_status)}
 
         self._schedule = []
         self.counter = int(time.time()) - 1663879773
@@ -977,12 +976,3 @@ main app worker. Hints:
                 'unlocked': unlocked,
                 'locked': self._is_locked()},
             **kwargs['reply_kwargs'])
-
-    def rpc_get_access_token(self, **kwargs):
-        a0 = self.config.access_zero()
-        token, expiration = a0.get_fresh_token()
-        self.worker.reply_json({
-                'token': token,
-                'expires': expiration},
-            **kwargs['reply_kwargs'])
-
