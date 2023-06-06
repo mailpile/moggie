@@ -13,6 +13,7 @@ import traceback
 from ...api.requests import *
 from ...config import AppConfig, AccessConfig
 from ...util.dumbcode import to_json, from_json
+from ...util.friendly import *
 from .command import Nonsense, CLICommand
 
 
@@ -461,10 +462,6 @@ class CommandGrant(CLICommand):
             'q': 'QRCODE',
             'u': 'URLS'}
 
-        def _fmt_date(ts):
-            dt = datetime.datetime.fromtimestamp(int(ts))
-            return '%4.4d-%2.2d-%2.2d' % (dt.year, dt.month, dt.day)
-
         self.print(fmt % legend)
         for ai in result:
             u = ai['urls']
@@ -480,7 +477,7 @@ class CommandGrant(CLICommand):
                     'c': c[i-1]                  if (0 < i <= cl) else '',
                     'r': ai['contexts'][c[i-1]]  if (0 < i <= cl) else '',
                     't': t[0]                    if (t and i == 0) else '',
-                    'e': _fmt_date(u[0][0])      if (u and i == 0) else '',
+                    'e': friendly_date(u[0][0])  if (u and i == 0) else '',
                     'u': u[i][1]                 if (i < len(u)) else '',
                     'q': u[i][2]                 if (i < len(u)) else ''})
 
@@ -955,6 +952,9 @@ class CommandBrowse(CLICommand):
                     child[attr] = ''
             child['src'] = child.get('src', 'fs')
             child['magic'] = ','.join(sorted(magic))
+            if not tabs:
+                child['mtime'] = friendly_datetime(child['mtime'])
+                child['size'] = friendly_bytes(child['size'])
 
             if child['src'] in explanations and not tabs:
                 if not first:

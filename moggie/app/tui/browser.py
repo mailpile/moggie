@@ -3,6 +3,7 @@ import os
 import urwid
 
 from ...api.requests import RequestCommand
+from ...util.friendly import *
 from ..suggestions import Suggestion
 
 from .decorations import EMOJI
@@ -106,17 +107,21 @@ class BrowserListWalker(urwid.ListWalker):
                 icon = EMOJI.get(
                         'server' if name.startswith('imap:') else
                         'folder' if info.get('is_dir') else
-                        'file',
-                    '')
+                        'file')
+
+            if 'size' in info and not info.get('is_dir'):
+                more = friendly_bytes(info['size'])
+            else:
+                more = ''
 
             n = urwid.Text(('browse_name', '  %s%s%s' % (indent, icon, name)),
                            wrap='ellipsis')
-            #i = urwid.Text(('browse_info', '???'), align='right', wrap='clip')
-            #cols = urwid.Columns([
-            #        ('weight', 15, n),
-            #        ('fixed', 10, i),
-            #    ], dividechars=1)
-            sel = Selectable(n, on_select={
+            i = urwid.Text(('browse_info', more), align='right', wrap='clip')
+            cols = urwid.Columns([
+                    ('weight', 15, n),
+                    ('fixed', 4, i),
+                ], dividechars=1)
+            sel = Selectable(cols, on_select={
                 'enter': _cb(self.on_browse, pos, info)})
             if first:
                 prefix = '\n' if (pos > 0) else ''
