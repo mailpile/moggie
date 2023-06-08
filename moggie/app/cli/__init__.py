@@ -70,4 +70,5 @@ CLI_COMMANDS = LazyLoader({
     'pgp-sign':     (_lazy_openpgp, 'CommandPGPSign'),
     'pgp-encrypt':  (_lazy_openpgp, 'CommandPGPEncrypt'),
     'pgp-decrypt':  (_lazy_openpgp, 'CommandPGPDecrypt'),
+    'pgp-verify':   (_lazy_openpgp, 'CommandPGPVerify'),
     })

@@ -149,7 +149,7 @@ signatures.
 </p><pre>\n%s\n</pre></body></html>"""
     CLEAR_SIG_PREFIX = """\
 -----BEGIN PGP SIGNED MESSAGE-----
-Hash: %s\
+Hash: %s
 
 """
 
@@ -218,20 +218,36 @@ Hash: %s\
                         cli_obj.options[arg][i] = prefix + key
 
     @classmethod
-    def get_signing_ids_and_keys(cls, cli_obj):
+    def get_keyids_and_keys(cls, cli_obj, opt, dkim=True, pgp=True):
         ids = {'DKIM': [], 'PGP': []}
-        for _id in cli_obj.options['--sign-with=']:
+        for _id in cli_obj.options[opt]:
             t, i = _id.split(':', 1)
             ids[t.upper()].append(i)
+        if not dkim:
+            del ids['DKIM']
+        if not pgp:
+            del ids['PGP']
         return ids
 
     @classmethod
-    def get_encryptor(cls, cli_obj, html=None):
-        rcpt_ids = {'PGP': []}
-        for _id in cli_obj.options['--encrypt-to=']:
-            t, i = _id.split(':', 1)
-            rcpt_ids[t.upper()].append(i)
+    def get_signing_ids_and_keys(cls, cli_obj):
+        return cls.get_keyids_and_keys(cli_obj, '--sign-with=')
 
+    @classmethod
+    def get_encrypting_ids_and_keys(cls, cli_obj):
+        return cls.get_keyids_and_keys(cli_obj, '--encrypt-to=', dkim=False)
+
+    @classmethod
+    def get_verifying_ids_and_keys(cls, cli_obj):
+        return cls.get_keyids_and_keys(cli_obj, '--verify-from=')
+
+    @classmethod
+    def get_decrypting_ids_and_keys(cls, cli_obj):
+        return cls.get_keyids_and_keys(cli_obj, '--decrypt-with=', dkim=False)
+
+    @classmethod
+    def get_encryptor(cls, cli_obj, connect=None, html=None):
+        rcpt_ids = cls.get_encrypting_ids_and_keys(cli_obj)
         if not rcpt_ids['PGP']:
             return None, '', ''
 
@@ -239,7 +255,8 @@ Hash: %s\
             html = cli_obj.options['--pgp-htmlwrap='][-1] in ('Y', 'y', '1')
 
         pgp_signing_ids = cls.get_signing_ids_and_keys(cli_obj)['PGP']
-        sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj)
+        sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj,
+            connect=cls.should_connect(cli_obj, connect))
 
         async def encryptor(data):
             data = bytes(data, 'utf-8') if isinstance(data, str) else data
@@ -261,6 +278,69 @@ Hash: %s\
 
         ext = 'html' if html else 'asc'
         return encryptor, 'OpenPGP', ext, 'application/pgp-encrypted'
+
+    @classmethod
+    def get_decryptor(cls, cli_obj, connect=None):
+        decrypt_ids = cls.get_decrypting_ids_and_keys(cli_obj)['PGP']
+        if not decrypt_ids:
+            return None, '', ''
+
+        pgp_verifying_ids = cls.get_verifying_ids_and_keys(cli_obj)['PGP']
+        sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj,
+            connect=cls.should_connect(cli_obj, connect))
+
+        async def decryptor(data):
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
+            if not decrypt_ids:
+                pass  # FIXME: Extract the key ID from the data
+
+            decrypt_args = {
+                'data': data,
+       # FIXME: 'wantsessionkey': True,
+                'secretkeys': dict(enumerate(decrypt_ids))}
+            if pgp_verifying_ids:
+                decrypt_args['signers'] = dict(enumerate(pgp_verifying_ids))
+                if cli_obj.options['--pgp-password=']:
+                    encrypt_args['keypasswords'] = dict(
+                        enumerate(cli_obj.options['--pgp-password=']))
+
+            cleartext, verif, sessionkeys = await sopc.decrypt(**decrypt_args)
+            # FIXME: If verification failed due to missing keys, see if we
+            #        can find keys and try again?
+            return (cleartext, verif, sessionkeys)
+
+        return decryptor
+
+    @classmethod
+    def split_clearsigned(cls, data):
+        data = bytes(data, 'utf-8') if isinstance(data, str) else data
+        data = cls.normalize_text(data)
+        dbeg = data.index(b'\r\n\r\n') + 4
+        dend = data.index(b'-----BEGIN PGP SIGNATURE----')
+        return data[dbeg:dend-2], data[dend:]
+
+    @classmethod
+    def get_verifier(cls, cli_obj, connect=None):
+        pgp_verifying_ids = cls.get_verifying_ids_and_keys(cli_obj)['PGP']
+        sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj,
+            connect=cls.should_connect(cli_obj, connect))
+
+        async def verifier(data, sig=None):
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
+            if not sig:
+                data, sig = cls.split_clearsigned(data)
+
+            decrypt_args = {
+                'data': data,
+                'sig': sig,
+                'signers':  dict(enumerate(pgp_verifying_ids))}
+            if cli_obj.options['--pgp-password=']:
+                encrypt_args['keypasswords'] = dict(
+                    enumerate(cli_obj.options['--pgp-password=']))
+
+            return (data, await sopc.verify(**decrypt_args))
+
+        return verifier
 
     @classmethod
     async def get_autocrypt_header(cls, cli_obj, addr, prefer_encrypt=None):
@@ -309,19 +389,36 @@ Hash: %s\
             return None
 
     @classmethod
-    def get_signer(cls, cli_obj, html=None):
+    def normalize_text(cls, t):
+        if isinstance(t, bytes):
+            return t.replace(b'\r', b'').strip(b'\n').replace(b'\n', b'\r\n')
+        else:
+            return t.replace('\r', '').strip('\n').replace('\n', '\r\n')
+
+    @classmethod
+    def verification_as_dict(cls, v):
+        return {
+            'when': int(v._when.timestamp()),
+            'signing_fpr': v._signing_fpr,
+            'primary_fpr': v._primary_fpr}
+
+    @classmethod
+    def get_signer(cls, cli_obj, connect=None, html=None, clear=None):
         pgp_signing_ids = cls.get_signing_ids_and_keys(cli_obj)['PGP']
-        sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj)
+        sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj,
+            connect=cls.should_connect(cli_obj, connect))
 
         if html is None:
             html = cli_obj.options['--pgp-htmlwrap='][-1] in ('Y', 'y', '1')
-
-        clear = cli_obj.options['--pgp-clearsign='][-1] in ('Y', 'y', '1')
+        if clear is None:
+            clear = cli_obj.options['--pgp-clearsign='][-1] in ('Y', 'y', '1')
         if clear:
             html = False
 
         async def signer(data):
             data = bytes(data, 'utf-8') if isinstance(data, str) else data
+            if clear:
+                data = cls.normalize_text(data)
             sign_args = {
                 'data': data,
                 'wantmicalg': True,
@@ -334,14 +431,25 @@ Hash: %s\
             if html:
                 signature = cls.HTML_SIG_WRAPPER % signature
             elif clear:
-                signature = ''.join([
+                signature = cls.normalize_text(''.join([
                     cls.CLEAR_SIG_PREFIX % (micalg.split('-')[-1].upper(),),
                     str(data, 'utf-8'),
-                    signature])
+                    '\n', signature]))
             return signature, micalg
 
         ext = 'html' if html else 'asc'
         return signer, 'OpenPGP', ext, 'application/pgp-signature'
+
+    @classmethod
+    def should_connect(cls, cli_obj, connect=None):
+        if connect is None:
+            if cli_obj.options['--context='] != ['default']:
+                return True
+            sop_cfg = (cli_obj.options.get('--pgp-sop=') or [None])[-1]
+            keys_cfg = (cli_obj.options.get('--pgp-key-sources=') or [None])[-1]
+            if not (sop_cfg or keys_cfg):
+                return True
+        return connect
 
     @classmethod
     def get_async_sop_and_keystore(cls, cli_obj, connect=False):
@@ -500,7 +608,8 @@ class CommandPGPGetKeys(CommandOpenPGP):
         with_keys = self.options['--with-key='][-1] in ('Y', 'y', '1')
         best_first = self.options['--best-first='][-1] in ('Y', 'y', '1')
         only_usable = self.options['--only-usable='][-1] in ('Y', 'y', '1')
-        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
+        sop, keys = self.get_async_sop_and_keystore(self,
+            connect=self.should_connect(self))
 
         if private:
             if with_keys:
@@ -567,7 +676,8 @@ class CommandPGPAddKeys(CommandOpenPGP):
         if self.options['--keystore=']:
             kwa['which'] = self.options['--keystore='][-1]
 
-        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
+        sop, keys = self.get_async_sop_and_keystore(self,
+            connect=self.should_connect(self))
 
         certs = []
         pkeys = []
@@ -609,7 +719,8 @@ class CommandPGPDelKeys(CommandOpenPGP):
         private = self.options['--private='][-1] in ('Y', 'y', 1)
 
         # FIXME: Error handling? Progress reporting?
-        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
+        sop, keys = self.get_async_sop_and_keystore(self,
+            connect=self.should_connect(self))
         for fpr in self.args:
             await keys.delete_cert(fpr, **kwa)
             if private:
@@ -707,6 +818,70 @@ class CommandPGPDecrypt(CommandOpenPGP):
             CommandOpenPGP.OPTIONS_VERIFYING +
             CommandOpenPGP.OPTIONS_DECRYPTING])
 
-    async def run(self):
-        sop, keys = self.get_async_sop_and_keystore(self, connect=True)
+    def configure2(self, args):
+        if not args:
+            args = ['-']
+        self.decrypting = []
+        for i, arg in enumerate(args):
+            self.decrypting.append(self.read_file_or_stdin(self, arg))
+        return args
 
+    def print_results_as_text(self, results):
+        for result in results:
+            self.print(str(result['cleartext'], 'utf-8'))
+
+    async def run(self):
+        decryptor = self.get_decryptor(self)
+
+        results = []
+        for data in self.decrypting:
+            cleartext, verifications, sessionkeys = await decryptor(data)
+            results.append({
+                'cleartext': cleartext,
+                'verifications': [self.verification_as_dict(v)
+                    for v in verifications],
+                'sessionkeys': sessionkeys})
+
+        self.print_results(results)
+
+
+class CommandPGPVerify(CommandOpenPGP):
+    """moggie pgp-verify [<options>]
+
+    %(OPTIONS)s
+    """
+    NAME = 'pgp-verify'
+    OPTIONS = ([
+            CommandOpenPGP.OPTIONS_COMMON +
+            CommandOpenPGP.OPTIONS_PGP_SETTINGS
+        ]+[
+            CommandOpenPGP.OPTIONS_VERIFYING])
+
+    def configure2(self, args):
+        if not args:
+            args = ['-']
+        self.verifying = []
+        for i, arg in enumerate(args):
+            self.verifying.append(self.read_file_or_stdin(self, arg))
+        return args
+
+    def print_results_as_text(self, results):
+        for text, verifications in results:
+            self.print('# verifications_1')
+            self.print('\n'.join(str(v) for v in verifications))
+
+    def print_json(self, results):
+        return super().print_json([
+                {('verifications_%s' % (i+1)): [self.verification_as_dict(v)
+                    for v in verifications]}
+            for i, (text, verifications) in enumerate(results)])
+
+    async def run(self):
+        verifier = self.get_verifier(self)
+
+        results = []
+        for data in self.verifying:
+            text, verifications = await verifier(data)
+            results.append((text, verifications))
+
+        self.print_results(results)

@@ -379,7 +379,7 @@ if __name__ == '__main__':
 
     sopgpy = os.path.join(moggie_root, 'tools', 'sopgpy')
     try:
-        from unused_sopgpy import SOPGPy
+        from sopgpy import SOPGPy
         sopc, which = SOPGPy(), 'sopgpy-inline'
     except:
         sopc = None
