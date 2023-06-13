@@ -490,15 +490,21 @@ Hash: %s
         Remove leading and trailing data before/after the first
         PGP ASCII armor marker strings.
         """
+        if isinstance(armor, bytes):
+            _cr, _lf, _empty, _beg, _end = (
+                b'\r', b'\n', b'', b'-----BEGIN PGP ', b'-----END PGP ')
+        else:
+            _cr, _lf, _empty, _beg, _end = (
+                 '\r',  '\n',  '',  '-----BEGIN PGP ',  '-----END PGP ')
         try:
-            begin = armor.index('-----BEGIN ')
-            end = armor.index('-----END ')
-            if '\n' not in armor[end:]:
-                armor += '\n'
-            end += armor[end:].index('\n')
-            return armor[begin:end].replace('\r', '')
+            begin = armor.index(_beg)
+            end = armor.index(_end)
+            if _lf not in armor[end:]:
+                armor += _lf
+            end += armor[end:].index(_lf)
+            return armor[begin:end].replace(_cr, _empty)
         except ValueError:
-            return ''
+            return _empty
 
     @classmethod
     async def gather_pgp_keys(cls, cli_obj, terms, private_key=None):
