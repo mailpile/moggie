@@ -43,7 +43,7 @@ class CachingKeyManager:
 
     def filter_key_args(self, v, _all=None):
         if isinstance(v, str):
-            if v[:6] == '@PKEY:':
+            if v[:6] in ('@PKEY:', '@SKEY'):
                 return self.cached_get_pkey(v[6:], _all.get('keypasswords'))
             elif v[:6] == '@CERT:':
                 return self.cached_get_cert(v[6:])

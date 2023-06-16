@@ -25,6 +25,7 @@ import copy
 import io
 import logging
 import os
+import re
 import sys
 import time
 
@@ -494,7 +495,7 @@ class CommandEmail(CLICommand):
         # Check user preferences
         prefs = self.options['--pgp-headers='][-1]
         if prefs == 'N':
-            return headers, body 
+            return headers, body
         if obscure:
             if prefs == 'sign':
                 obscure = False
@@ -1237,6 +1238,7 @@ class CommandParse(CLICommand):
         ('--allow-network',     [False], 'Allow outgoing network requests'),
         ('--forbid-filesystem', [False], 'Forbid loading local files'),
         ('--write-back',        [False], 'Write parse results to search index'),
+        ] + CommandOpenPGP.OPTIONS_PGP_SETTINGS + [
     ],[
         (None, None, 'features'),
         ('--with-metadata=',    ['N'], 'X=(Y|N*), include moggie metadata'),
@@ -1250,12 +1252,14 @@ class CommandParse(CLICommand):
         ('--with-data=',        ['N'], 'X=(Y|N*), include attachment data'),
         ('--with-headprints=',  ['N'], 'X=(Y|N*), include header fingerprints'),
         ('--with-keywords=',    ['N'], 'X=(Y|N*), include search-engine keywords'),
+        ('--with-openpgp=',     ['N'], 'X=(Y|N*), process OpenPGP content'),
         ('--scan-moggie-zips=', ['Y'], 'X=(Y*|N), scan moggie-specific archives'),
         ('--scan-archives=',    ['N'], 'X=(Y|N*), scan all archives for attachments'),
         ('--zip-password=',        [], 'Password to use for ZIP decryption'),
-        ('--decrypt=',          ['N'], '? X=(Y|N*), attempt to decrypt contents'),
-        ('--verify-pgp=',       ['N'], '? X=(Y|N*), attempt to verify PGP signatures'),
-        ('--use-gnupg=',        ['N'], '? X=(Y|N*), Use GnuPG to parse OpenPGP content'),
+        ] + CommandOpenPGP.OPTIONS_DECRYPTING
+          + CommandOpenPGP.OPTIONS_VERIFYING + [
+    #   ('--decrypt=',          ['N'], '? X=(Y|N*), attempt to decrypt contents'),
+    #   ('--verify-pgp=',       ['N'], '? X=(Y|N*), attempt to verify PGP signatures'),
         ('--verify-dates=',     ['Y'], 'X=(Y*|N), attempt to validate message dates'),
         ('--verify-dkim=',      ['Y'], 'X=(Y*|N), attempt to verify DKIM signatures'),
         ('--dkim-max-age=',     [180], 'X=Max age (days, default=180) for DKIM validation'),
@@ -1290,21 +1294,199 @@ class CommandParse(CLICommand):
                 if w_none:
                     defaults = [False]
                 elif w_all and key not in (
-                        '--ignore-index=', '--use-gnupg=',
+                        '--ignore-index=',
                         '--dkim-max-age=',
+                        '--verify-from=', '--decrypt-with=',
                         '--with-nothing=', '--with-everything='):
                     defaults = [True]
                 if key:
                     attr = key[2:-1].replace('-', '_')
                     if False and w_all and key not in (
-                            '--ignore-index=', '--use-gnupg=',
+                            '--ignore-index=',
                             '--dkim-max-age=',
+                            '--verify-from=', '--decrypt-with=',
                             '--with-nothing=', '--with-everything='):
                         self.__setattr__(attr, True)
                     self.__setattr__(attr, _opt(key, attr, defaults))
 
+    class OpenPGPSettings:
+        def __init__(self, cli_obj, settings, parsed_message):
+            self.context = cli_obj.context
+            self.worker = None
+
+            if settings.decrypt_with and settings.verify_from:
+                self.options = cli_obj.options
+
+            else:
+                self.options = copy.copy(cli_obj.options)
+                if not settings.decrypt_with:
+                    dw = self.options['--decrypt-with='] = []
+                    for r in parsed_message.get('to', []):
+                        dw.append('PGP:@PKEY:%s' % r['address'])
+                    for r in parsed_message.get('cc', []):
+                        dw.append('PGP:@PKEY:%s' % r['address'])
+
+                if not settings.verify_from:
+                    frm = parsed_message.get('from')
+                    if frm:
+                        self.options['--verify-from='] = [
+                            'PGP:@CERT:%s' % frm['address']]
+
+        def connect(self):
+            self.worker = self.cli_obj.connect()
+            return self.worker
+
     @classmethod
-    async def Parse(cls, data, settings=None, allow_network=False):
+    async def parse_openpgp(cls, cli_obj, settings, parsed_message):
+        import sop
+        # parse_message.decrypt is sync, but crypto ops are async, ugh.
+        # So we do this in two passes, first we gather the things to
+        # process, then we inject the results back into the parse tree.
+
+        openpgp_cfg = cls.OpenPGPSettings(cli_obj, settings, parsed_message)
+        _gathered = {}
+        _done = {}
+
+        def _decrypt_mep(part_bin, p_idx, part, parent):
+            ctype = part['content-type']
+            if p_idx in _done:
+                data, verifications, sessionkeys = _done[p_idx]
+                new_part = {
+                    '_CRYPTO': {
+                        'openpgp_decrypted_part': p_idx,
+                        'openpgp_verifications': [
+                            CommandOpenPGP.verification_as_dict(v)
+                            for v in verifications],
+                        },
+                    'content-type': ['multipart/mixed', {}]}
+
+                del _done[p_idx]
+                return (p_idx, p_idx+3), [(new_part, data)]
+
+            if ctype[1].get('protocol') != 'application/pgp-encrypted':
+                return None
+
+            mpart = parent['_PARTS'][p_idx + 1]
+            ppart = parent['_PARTS'][p_idx + 2]
+
+            mpart_content = str(parent._bytes(mpart), 'latin-1').strip()
+            if (mpart_content.lower().split() != ['version:', '1']
+                    or ppart['content-type'][0] != 'application/octet-stream'):
+                return None
+
+            _gathered[p_idx] = ('decrypt', (parent._bytes(ppart),))
+            return None
+
+        def _verify_signed(part_bin, p_idx, part, parent):
+            sig = None
+            subs = []
+            for p in parent['_PARTS'][p_idx+1:]:
+                if p['_DEPTH'] == part['_DEPTH']:
+                    break
+                if (p['content-type'][0] == 'application/pgp-signature'
+                        and p['_DEPTH'] == part['_DEPTH'] + 1):
+                    sig = parent._bytes(p)
+                    break
+                else:
+                    subs.append(p)
+
+            if p_idx in _done:
+                text, verifications = _done[p_idx]
+                _crypto = {'openpgp_verifications': [
+                    CommandOpenPGP.verification_as_dict(v)
+                    for v in verifications]}
+                part['_CRYPTO'] = _crypto
+                for p in subs:
+                    p['_CRYPTO'] = _crypto
+                del _done[p_idx]
+                return None
+
+            if sig:
+                dpart = CommandOpenPGP.normalize_text(
+                    parent._raw(parent['_PARTS'][p_idx + 1], header=True)
+                    ) + b'\r\n'
+                _gathered[p_idx] = ('verify', (dpart, sig))
+            return None
+
+        def _decrypt_or_verify_inline(part_bin, p_idx, part, parent):
+            text = part.get('_TEXT', '')
+            decrypt = re.match('^\s*-----BEGIN PGP MESSAGE', text, flags=re.S)
+            verify = re.match('^\s*-----BEGIN PGP SIGNED', text, flags=re.S)
+
+            if p_idx in _done:
+                ctype = part['content-type']
+                cdisp = part.get('content-disposition')
+                if decrypt:
+                    data, verifications, sessionkeys = _done[p_idx]
+                    new_part = {
+                        '_CRYPTO': {
+                            'openpgp_decrypted_part': p_idx,
+                            'openpgp_verifications': [
+                                CommandOpenPGP.verification_as_dict(v)
+                                for v in verifications]},
+                        'content-type': ['text/plain', {'charset': 'utf-8'}]}
+                    if cdisp:
+                        new_part['content-disposition'] = cdisp
+                    sys.stderr.write('Cleartext=%s\n' % data)
+                    del _done[p_idx]
+                    return (p_idx, p_idx+1), [(new_part, data)]
+
+                if verify:
+                    pass
+
+                del _done[p_idx]
+                return None
+
+            sys.stderr.write('Part %d: decrypt=%s verify=%s\n' % (p_idx, decrypt, verify))
+            if decrypt:
+                _gathered[p_idx] = ('decrypt', (text,))
+            elif verify:
+                _gathered[p_idx] = ('verify', (text,))
+            return None
+
+        errors = 0
+        parsed_message['_OPENPGP_ERRORS'] = []
+        for tries in range(0, 3):
+            sys.stderr.write('Decrypt, pass %d\n' % tries)
+            parsed_message.decrypt({
+                'multipart/encrypted': [_decrypt_mep],
+                'multipart/signed': [_verify_signed],
+                'text/plain:first': [_decrypt_or_verify_inline]})
+            if not _gathered:
+                break
+
+            for idx, (op, data) in list(_gathered.items()):
+                sys.stderr.write('should %s part %s: %s\n' % (op, idx, data))
+                action = None
+                try:
+                    if op == 'decrypt':
+                        action = CommandOpenPGP.get_decryptor(
+                            openpgp_cfg, data=data[0])
+                        _done[idx] = await action(*data)
+                    elif op == 'verify':
+                        action = CommandOpenPGP.get_verifier(
+                            openpgp_cfg, sig=data[-1])
+                        _done[idx] = await action(*data)
+                except (sop.SOPNoSignature,
+                        sop.SOPInvalidDataType,
+                        TypeError) as e:
+                    if not action:
+                        parsed_message['_OPENPGP_ERRORS'].append(
+                            'Missing information (keys?), cannot %s' % op)
+                    else:
+                        parsed_message['_OPENPGP_ERRORS'].append(str(e))
+                    logging.debug('%s failed: %s' % (op, e))
+                    errors += 1
+
+                del _gathered[idx]
+            if errors:
+                break
+
+    @classmethod
+    async def Parse(cls, cli_obj, data,
+            settings=None, allow_network=False,
+            get_appworker=None, get_context=None,
+            **kwargs):
         t0 = time.time()
 
         if settings is None:
@@ -1324,7 +1506,9 @@ class CommandParse(CLICommand):
             from moggie.email.util import make_ts_and_Metadata, quick_msgparse
             from moggie.email.parsemime import parse_message
             header_end, header_summary = quick_msgparse(data, 0)
+
             p = parse_message(data, fix_mbox_from=(data[:5] == b'From '))
+
             p['_HEADER_BYTES'] = header_end
             result['parsed'] = p
 
@@ -1343,8 +1527,13 @@ class CommandParse(CLICommand):
             if settings.verify_dates:
                 from moggie.security.headers import validate_dates
                 p['_DATE_VALIDITY'] = validate_dates(md.timestamp, p)
-            if settings.with_structure:
+
+            if settings.with_openpgp:
+                p.with_structure().with_text()
+                await cls.parse_openpgp(cli_obj, settings, p)
+            elif settings.with_structure:
                 p.with_structure()
+
             if settings.scan_moggie_zips or settings.scan_archives:
                 p.with_archive_contents(
                     moggie_archives=settings.scan_moggie_zips,
@@ -1357,7 +1546,7 @@ class CommandParse(CLICommand):
                 p.with_data()
 
             if html_magic:
-                for part in p['_PARTS']:
+                for part in p.iter_parts(p):
                     if part.get('content-type', [None])[0] == 'text/html':
                         html = part['_TEXT']
                         if settings.with_html_clean:
@@ -1746,28 +1935,28 @@ These are the %d searchable keywords for this message:
 
             if self.settings.with_text:
                 report.append('## Message text')
-                for part in parsed['_PARTS']:
+                for part in parsed.iter_parts(parsed):
                     if part['content-type'][0] == 'text/plain':
                         report[-1] += ('\n\n'
                             + _indent(part['_TEXT'].strip(), code=True))
 
             if self.settings.with_html_text:
                 report.append('## Message text (from HTML)')
-                for part in parsed['_PARTS']:
+                for part in parsed.iter_parts(parsed):
                     if part['content-type'][0] == 'text/html':
                         report[-1] += ('\n\n'
                             + _indent(part['_HTML_TEXT'].strip(), code=True))
 
             if self.settings.with_html:
                 report.append('## Message HTML')
-                for part in parsed['_PARTS']:
+                for part in parsed.iter_parts(parsed):
                     if part['content-type'][0] == 'text/html':
                         report[-1] += ('\n\n'
                             + _indent(part['_TEXT'].strip(), code=True))
 
             if self.settings.with_html_clean:
                 report.append('## Message HTML, sanitized')
-                for part in parsed['_PARTS']:
+                for part in parsed.iter_parts(parsed):
                     if part['content-type'][0] == 'text/html':
                         report[-1] += ('\n\n'
                             + _indent(part['_HTML_CLEAN'].strip(), code=True))
@@ -1862,12 +2051,12 @@ These are the %d searchable keywords for this message:
 
         if self.searches:
             async for message in self.gather_emails():
-                emitter(await self.Parse(message, self.settings,
+                emitter(await self.Parse(self, message, self.settings,
                     allow_network=self.allow_network))
 
         if self.messages:
             for message in self.messages:
-                emitter(await self.Parse(message, self.settings,
+                emitter(await self.Parse(self, message, self.settings,
                     allow_network=self.allow_network))
 
         emitter(None)

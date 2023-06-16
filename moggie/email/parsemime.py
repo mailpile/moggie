@@ -19,7 +19,8 @@ class MessagePart(dict):
     """
     ESCAPED_FROM = re.compile(r'(^|\n)\>(\>*From)')
 
-    def __init__(self, msg_bin, fix_mbox_from=False):
+    def __init__(self, msg_bin, fix_mbox_from=False, inherit=None):
+        self.inherit = inherit or {}
         self.msg_bin = [msg_bin]
         self.fix_mbox_from = fix_mbox_from
         self.hend = len(msg_bin)
@@ -36,6 +37,7 @@ class MessagePart(dict):
                 pass
 
         self.update(parse_header(msg_bin[:self.hend]))
+        self.update(self.inherit)
 
     def _find_parts_re(self, boundary, buf_idx=0):
         boundary = b'\n--' + bytes(boundary, 'latin-1')
@@ -112,6 +114,7 @@ class MessagePart(dict):
             '_BUF': buf_idx,
             '_BYTES': [0, body_beg, body_end],
             '_DEPTH': 0})
+        parts[-1].update(self.inherit)
 
         if (ct and ct.startswith('multipart/')) and ('boundary' in ctp):
             parts[0]['_PARTS'] = 0
@@ -125,6 +128,7 @@ class MessagePart(dict):
                     '_BYTES': [beg, beg, end],
                     '_DEPTH': 1,
                     'content-transfer-encoding': '8bit'}
+                part.update(self.inherit)
                 parts.append(part)
                 if i == 0:
                     part['content-type'] = ['text/x-mime-preamble', {}]
@@ -332,6 +336,9 @@ class MessagePart(dict):
         for i, part in enumerate(self['_PARTS']):
             if skip and (i <= skip):
                 continue
+            if '_REPLACE' in part:
+                continue
+
             ct, ctp = part.get('content-type', ['', {}])
             cd, cdp = part.get('content-disposition', ['', {}])
             first = ':first' if (non_mime < 1) else ''
@@ -359,7 +366,8 @@ class MessagePart(dict):
                             info['_BYTES'] = [0, 0, len(cleartext)]
                             info['_DEPTH'] = (
                                 info.get('_DEPTH', 0) + part['_DEPTH'])
-                            info['content-transfer-encoding'] = '8bit'
+                            if 'content-transfer-encoding' not in info:
+                                info['content-transfer-encoding'] = '8bit'
                             infos.append(info)
                             changed += 1
                         new_parts.append((replace, infos))
@@ -380,7 +388,11 @@ class MessagePart(dict):
                 part = parts[0]
                 if (part.get('content-type', [''])[0].startswith('multipart/')
                         and len(parts) == 1):
-                    sub = MessagePart(self._raw(part)).with_structure(True)
+                    inherit = {}
+                    if '_CRYPTO' in part:
+                        inherit['_CRYPTO'] = part['_CRYPTO']
+                    sub = MessagePart(self._raw(part), inherit=inherit)
+                    sub.with_structure(True)
                     for p in sub['_PARTS']:
                         p['_BUF'] = part['_BUF']
                         p['_BYTES'][0] += part['_BYTES'][0]

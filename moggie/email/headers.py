@@ -226,7 +226,7 @@ def parse_header(raw_header):
     This will parse an e-mail header into a JSON-serializable dictionary
     of useful information.
     """
-    if isinstance(raw_header, bytes):
+    if isinstance(raw_header, (bytes, bytearray)):
         raw_header = str(raw_header, 'latin-1')
 
     # FIXME: This was '' - which is correct?

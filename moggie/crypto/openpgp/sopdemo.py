@@ -38,7 +38,7 @@ FAKE_SIGNATURE_DATA
 
     def decrypt(self, data, *args, **kwargs):
         return (
-            b''.join(l[2:] for l in data.splitines(True) if l[:2] == b'E '),
+            b''.join(l[2:] for l in data.splitlines(True) if l[:2] == b'E '),
             [],
             None)
 

@@ -6,6 +6,8 @@ import os
 import sys
 import time
 
+import pgpdump
+
 from moggie.util.dumbcode import *
 from moggie.crypto.openpgp.keyinfo import KeyInfo
 from .command import Nonsense, CLICommand, AccessConfig
@@ -218,15 +220,29 @@ Hash: %s
                         cli_obj.options[arg][i] = prefix + key
 
     @classmethod
-    def get_keyids_and_keys(cls, cli_obj, opt, dkim=True, pgp=True):
+    def get_keyids_and_keys(cls, cli_obj, opt,
+            dkim=True, pgp=True, extras=[]):
         ids = {'DKIM': [], 'PGP': []}
-        for _id in cli_obj.options[opt]:
+        for _id in (cli_obj.options[opt] + extras):
             t, i = _id.split(':', 1)
             ids[t.upper()].append(i)
         if not dkim:
             del ids['DKIM']
         if not pgp:
             del ids['PGP']
+        return ids
+
+    @classmethod
+    def get_keyids_from_data(self, data, private=False):
+        ids = []
+        if data:
+            prefix = 'PGP:@PKEY:' if private else 'PGP:@CERT:'
+            try:
+                for p in pgpdump.AsciiData(data).packets():
+                    if hasattr(p, 'key_id'):
+                        ids.append(prefix + str(p.key_id, 'utf-8'))
+            except (ValueError, TypeError, IndexError):
+                pass
         return ids
 
     @classmethod
@@ -238,18 +254,21 @@ Hash: %s
         return cls.get_keyids_and_keys(cli_obj, '--encrypt-to=', dkim=False)
 
     @classmethod
-    def get_verifying_ids_and_keys(cls, cli_obj):
-        return cls.get_keyids_and_keys(cli_obj, '--verify-from=')
+    def get_verifying_ids_and_keys(cls, cli_obj, data=None):
+        ids = cls.get_keyids_from_data(data, private=False)
+        return cls.get_keyids_and_keys(cli_obj, '--verify-from=', extras=ids)
 
     @classmethod
-    def get_decrypting_ids_and_keys(cls, cli_obj):
-        return cls.get_keyids_and_keys(cli_obj, '--decrypt-with=', dkim=False)
+    def get_decrypting_ids_and_keys(cls, cli_obj, data=None):
+        ids = cls.get_keyids_from_data(data, private=True)
+        return cls.get_keyids_and_keys(
+            cli_obj, '--decrypt-with=', dkim=False, extras=ids)
 
     @classmethod
     def get_encryptor(cls, cli_obj, connect=None, html=None):
         rcpt_ids = cls.get_encrypting_ids_and_keys(cli_obj)
         if not rcpt_ids['PGP']:
-            return None, '', ''
+            return None, '', '', ''
 
         if html is None:
             html = cli_obj.options['--pgp-htmlwrap='][-1] in ('Y', 'y', '1')
@@ -259,15 +278,18 @@ Hash: %s
             connect=cls.should_connect(cli_obj, connect))
 
         async def encryptor(data):
-            data = bytes(data, 'utf-8') if isinstance(data, str) else data
             encrypt_args = {
-                'data': data,
                 'recipients': dict(enumerate(rcpt_ids['PGP']))}
             if pgp_signing_ids:
                 encrypt_args['signers'] = dict(enumerate(pgp_signing_ids))
                 if cli_obj.options['--pgp-password=']:
                     encrypt_args['keypasswords'] = dict(
                         enumerate(cli_obj.options['--pgp-password=']))
+            logging.debug(
+                'Encrypting %d bytes with %s' % (len(data), encrypt_args))
+
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
+            encrypt_args['data'] = data
 
             ctxt = await sopc.encrypt(**encrypt_args)
             ctxt = ctxt if isinstance(ctxt, str) else str(ctxt, 'utf-8')
@@ -280,22 +302,21 @@ Hash: %s
         return encryptor, 'OpenPGP', ext, 'application/pgp-encrypted'
 
     @classmethod
-    def get_decryptor(cls, cli_obj, connect=None):
-        decrypt_ids = cls.get_decrypting_ids_and_keys(cli_obj)['PGP']
+    def get_decryptor(cls, cli_obj, connect=None, data=None):
+        decrypt_ids = cls.get_decrypting_ids_and_keys(
+            cli_obj, data=data)['PGP']
         if not decrypt_ids:
-            return None, '', ''
+            return None
 
         pgp_verifying_ids = cls.get_verifying_ids_and_keys(cli_obj)['PGP']
         sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj,
             connect=cls.should_connect(cli_obj, connect))
 
         async def decryptor(data):
-            data = bytes(data, 'utf-8') if isinstance(data, str) else data
             if not decrypt_ids:
                 pass  # FIXME: Extract the key ID from the data
 
             decrypt_args = {
-                'data': data,
        # FIXME: 'wantsessionkey': True,
                 'secretkeys': dict(enumerate(decrypt_ids))}
             if pgp_verifying_ids:
@@ -303,8 +324,13 @@ Hash: %s
                 if cli_obj.options['--pgp-password=']:
                     encrypt_args['keypasswords'] = dict(
                         enumerate(cli_obj.options['--pgp-password=']))
+            logging.debug(
+                'Decrypting %d bytes with %s' % (len(data), decrypt_args))
 
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
+            decrypt_args['data'] = data
             cleartext, verif, sessionkeys = await sopc.decrypt(**decrypt_args)
+
             # FIXME: If verification failed due to missing keys, see if we
             #        can find keys and try again?
             return (cleartext, verif, sessionkeys)
@@ -320,25 +346,33 @@ Hash: %s
         return data[dbeg:dend-2], data[dend:]
 
     @classmethod
-    def get_verifier(cls, cli_obj, connect=None):
-        pgp_verifying_ids = cls.get_verifying_ids_and_keys(cli_obj)['PGP']
+    def get_verifier(cls, cli_obj, connect=None, sig=None):
+        if sig and not sig.startswith(b'-----BEGIN PGP SIGNA'):
+            _, sig = cls.split_clearsigned(sig)
+
+        pgp_verifying_ids = cls.get_verifying_ids_and_keys(
+            cli_obj, data=sig)['PGP']
+
         sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj,
             connect=cls.should_connect(cli_obj, connect))
 
         async def verifier(data, sig=None):
-            data = bytes(data, 'utf-8') if isinstance(data, str) else data
             if not sig:
                 data, sig = cls.split_clearsigned(data)
 
-            decrypt_args = {
-                'data': data,
-                'sig': sig,
+            verify_args = {
+                'sig': cls.pgp_strip(sig),
                 'signers':  dict(enumerate(pgp_verifying_ids))}
-            if cli_obj.options['--pgp-password=']:
-                encrypt_args['keypasswords'] = dict(
-                    enumerate(cli_obj.options['--pgp-password=']))
+            logging.debug(
+                'Verifying %d bytes with %s' % (len(data), verify_args))
 
-            return (data, await sopc.verify(**decrypt_args))
+            if cli_obj.options['--pgp-password=']:
+                verify_args['keypasswords'] = dict(
+                    enumerate(cli_obj.options['--pgp-password=']))
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
+            verify_args['data'] = data
+
+            return (data, await sopc.verify(**verify_args))
 
         return verifier
 
@@ -360,7 +394,6 @@ Hash: %s
                 ac_key = str(key, 'utf-8') if isinstance(key, bytes) else key
                 break
 
-        import pgpdump
         try:
             key_data = pgpdump.AsciiData(bytes(ac_key, 'utf-8')).data
         except TypeError as e:
