@@ -366,10 +366,8 @@ Hash: %s
             verify_args = {
                 'sig': sig,
                 'signers': dict(enumerate(pgp_verifying_ids))}
-
             logging.debug(
-                'Verifying %d bytes (%s ... %s) with %s'
-                % (len(data), data[:10], data[-10:], verify_args))
+                'Verifying %d bytes with %s' % (len(data), verify_args))
             if cli_obj.options['--pgp-password=']:
                 verify_args['keypasswords'] = dict(
                     enumerate(cli_obj.options['--pgp-password=']))

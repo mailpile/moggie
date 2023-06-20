@@ -141,7 +141,8 @@ class MessagePart(dict):
                     part['content-type'] = ['text/x-mime-postamble', {}]
                 elif recurse:
                     sub = MessagePart(
-                        self._raw(part), self.fix_mbox_from
+                        self._raw(part), self.fix_mbox_from,
+                        inherit=self.inherit
                         ).with_structure(recurse)
                     for p in sub['_PARTS']:
                         p['_BUF'] = part['_BUF']

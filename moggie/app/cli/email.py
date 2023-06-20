@@ -1426,7 +1426,6 @@ class CommandParse(CLICommand):
                 _crypto = {'openpgp_verifications': [
                     CommandOpenPGP.verification_as_dict(v)
                     for v in verifications]}
-                part['_CRYPTO'] = _crypto
                 for p in subs:
                     p['_CRYPTO'] = _crypto
                 del _done[p_idx]
