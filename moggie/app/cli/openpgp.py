@@ -3,6 +3,7 @@
 import io
 import logging
 import os
+import re
 import sys
 import time
 
@@ -342,14 +343,11 @@ Hash: %s
         data = bytes(data, 'utf-8') if isinstance(data, str) else data
         data = cls.normalize_text(data)
         dbeg = data.index(b'\r\n\r\n') + 4
-        dend = data.index(b'-----BEGIN PGP SIGNATURE----')
-        return data[dbeg:dend-2], data[dend:]
+        dend = data.index(b'-----BEGIN PGP SIGNATURE-----')
+        return cls.dash_unescape(data[dbeg:dend]), data[dend:]
 
     @classmethod
     def get_verifier(cls, cli_obj, connect=None, sig=None):
-        if sig and not sig.startswith(b'-----BEGIN PGP SIGNA'):
-            _, sig = cls.split_clearsigned(sig)
-
         pgp_verifying_ids = cls.get_verifying_ids_and_keys(
             cli_obj, data=sig)['PGP']
 
@@ -424,9 +422,21 @@ Hash: %s
     @classmethod
     def normalize_text(cls, t):
         if isinstance(t, bytes):
-            return t.replace(b'\r', b'').strip(b'\n').replace(b'\n', b'\r\n')
+            if not t[-1:] == b'\n':
+                t += b'\r\n'
+            return re.sub(b'[ \t\r]*\n', b'\r\n', t, flags=re.S)
         else:
-            return t.replace('\r', '').strip('\n').replace('\n', '\r\n')
+            if not t[-1:] == '\n':
+                t += '\r\n'
+            return re.sub('[ \t\r]*\n', '\r\n', t, flags=re.S)
+
+    @classmethod
+    def dash_escape(cls, t):
+        return re.sub(b'^(-|From )', b'- \\1', t, flags=re.M)
+
+    @classmethod
+    def dash_unescape(cls, t):
+        return re.sub(b'^- ', b'', t, flags=re.M)
 
     @classmethod
     def verification_as_dict(cls, v):
@@ -451,7 +461,11 @@ Hash: %s
         async def signer(data):
             data = bytes(data, 'utf-8') if isinstance(data, str) else data
             if clear:
-                data = cls.normalize_text(data)
+                # The normalized text always ends in a CRLF, but we do
+                # not included it in the signature itself. It gets re-added
+                # to the output below.
+                data = cls.normalize_text(data)[:-2]
+
             sign_args = {
                 'data': data,
                 'wantmicalg': True,
@@ -466,8 +480,8 @@ Hash: %s
             elif clear:
                 signature = cls.normalize_text(''.join([
                     cls.CLEAR_SIG_PREFIX % (micalg.split('-')[-1].upper(),),
-                    str(data, 'utf-8'),
-                    '\n', signature]))
+                    str(cls.dash_escape(data), 'utf-8'),
+                    '\r\n', signature]))
             return signature, micalg
 
         ext = 'html' if html else 'asc'

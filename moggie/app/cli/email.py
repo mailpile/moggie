@@ -423,11 +423,15 @@ class CommandEmail(CLICommand):
             raise Nonsense('Unknown args: %s' % args)
         return args
 
-    def text_part(self, text, mimetype='text/plain', ctattrs=[], no_enc=False):
+    def text_part(self, text, mimetype='text/plain', ctattrs=[],
+            no_enc=False, always_enc=False):
         try:
+            if always_enc:
+                no_enc = False
+                raise ValueError('Encoding required')
             data = str(bytes(text, 'us-ascii'), 'us-ascii')
             enc = '7bit'
-        except UnicodeEncodeError:
+        except (ValueError, UnicodeEncodeError):
             if no_enc or self.options['--8bit']:
                 enc = '8bit'
                 data = text
@@ -628,7 +632,8 @@ class CommandEmail(CLICommand):
         ids = CommandOpenPGP.get_signing_ids_and_keys(self)
 
         if openpgp and ids['PGP']:
-            signer, how, ext, smt = CommandOpenPGP.get_signer(self, html=True)
+            signer, how, ext, smt = CommandOpenPGP.get_signer(self,
+                html=True, clear=False)
             fn = '%s-digital-signature.%s' % (how, ext)
             headers, body = self.protect_headers(headers, body)
             body = body.strip()
@@ -647,6 +652,13 @@ class CommandEmail(CLICommand):
             pass
 
         return (headers, body)
+
+    async def clearsign(self, text):
+        ids = CommandOpenPGP.get_signing_ids_and_keys(self)
+        if not ids['PGP']:
+            return text
+        signer, _, _, _ = CommandOpenPGP.get_signer(self, clear=True)
+        return (await signer(text))[0]
 
     async def attach_encrypted_attachments(self, text_parts=None):
         from moggie.storage.exporters.maildir import ZipWriter
@@ -952,29 +964,40 @@ class CommandEmail(CLICommand):
             text_opt, html_opt = self.generate_text_parts(want_text, want_html)
 
         # FIXME: Is this where we fork, on what the output format is?
+
         encryption = (self.options.get('--encrypt=') or ['N'])[-1].lower()
         raw_text = (encryption == 'all' and not self.options['--encrypt-to='])
+        encode = (len(self.options['--sign-with=']) > 0) and not raw_text
 
         parts = []
+        raw_text_parts = []
         for i, msg in enumerate(self.forwarding):
             self.attachments.extend(self.forward_attachments(msg, count=i))
 
         text_opt = [t for t in text_opt if t not in ('', 'Y')]
         if want_text and text_opt:
-            parts.append(self.text_part(
-                '\r\n\r\n'.join(t.strip() for t in text_opt),
-                no_enc=raw_text))
+            raw_text_part = '\r\n\r\n'.join(t.strip() for t in text_opt)
+            parts.append(self.text_part(raw_text_part, always_enc=encode))
+            raw_text_parts.append((parts[-1][0], raw_text_part))
 
         html_opt = [t for t in html_opt if t not in ('', 'Y')]
         if want_html and html_opt:
-            parts.append(
-                self.text_part(
-                    '\r\n\r\n'.join(html_opt),
-                    mimetype='text/html', no_enc=raw_text))
+            raw_text_part = '\r\n\r\n'.join(html_opt)
+            parts.append(self.text_part(raw_text_part,
+                mimetype='text/html',
+                always_enc=encode))
+            raw_text_parts.append((parts[-1][0], raw_text_part))
+
+        clearsignable = ((not self.attachments)
+            and (len(raw_text_parts) == len(parts) == 1)
+            and (parts[0][0]['content-type'][0] == 'text/plain')
+            and (self.options['--pgp-clearsign='][-1] in ('Y', 'y', '1')))
 
         if encryption == 'all' and not self.options['--encrypt-to=']:
             # Create an encrypted .ZIP with entire message content
-            _zp = await self.attach_encrypted_attachments(text_parts=parts)
+            clearsignable = False
+            _zp = await self.attach_encrypted_attachments(
+                text_parts=raw_text_parts)
             if _zp:
                 parts = [_zp]
         else:
@@ -990,6 +1013,7 @@ class CommandEmail(CLICommand):
 
         if len(parts) > 1:
             header, body = self.multi_part('mixed', parts)
+            clearsignable = False
         elif parts:
             header, body = parts[0]
         else:
@@ -1002,8 +1026,13 @@ class CommandEmail(CLICommand):
             header, body = await self.encrypt_to_recipients(header, body)
 
         elif self.options['--sign-with=']:
+            if clearsignable:
+                header, body = parts[0] = self.text_part(
+                    await self.clearsign(raw_text_parts[0][-1]))
+
             # Sign entire message
-            header, body = await self.sign_message(header, body)
+            header, body = await self.sign_message(header, body,
+                openpgp=(not clearsignable))
 
         self.headers.update(header)
         return ''.join([format_headers(self.headers), body])
