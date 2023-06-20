@@ -15,6 +15,7 @@ from typing import Tuple, BinaryIO, TYPE_CHECKING
 
 import sop
 
+from ...util.dumbcode import *
 from ...util.safe_popen import ExternalProcRunner
 
 
@@ -363,10 +364,42 @@ def GetSOPClient(sop_config):
     raise ImportError('No SOP client found')
 
 
+def dumb_encode_SopSigResult_bin(obj):
+    return bytes('v%x/%s/%s/%s' % (
+            int(obj._when.timestamp()),
+            obj._signing_fpr,
+            obj._primary_fpr,
+            obj._moreinfo),
+        'utf-8')
+
+def dumb_encode_SopSigResult_asc(obj):
+    return 'V%x/%s/%s/%s' % (
+        int(obj._when.timestamp()),
+        obj._signing_fpr,
+        obj._primary_fpr,
+        obj._moreinfo)
+
+
+def dumb_decode_SopSigResult(enc):
+    enc = str(enc, 'utf-8') if isinstance(enc, bytes) else enc
+    ts, sfpr, pfpr, more = enc[1:].split('/', 3)
+    return sop.SOPSigResult(
+        datetime.datetime.fromtimestamp(int(ts, 16)), sfpr, pfpr, more)
+
+sop.SOPSigResult.dumb_encode_bin = dumb_encode_SopSigResult_bin
+sop.SOPSigResult.dumb_encode_asc = dumb_encode_SopSigResult_asc
+register_dumb_decoder('v', dumb_decode_SopSigResult)
+
+
 if __name__ == '__main__':
-    import os
+    import os, time, datetime
     moggie_root = os.path.normpath(os.path.join(
         os.path.dirname(__file__), '..', '..'))
+
+    ts0 = int(time.time())
+    ssr = sop.SOPSigResult(datetime.datetime.fromtimestamp(ts0), 'dead', 'beef')
+    assert(dumb_encode_bin(ssr) == b'v%x/dead/beef/' % ts0)
+    assert(str(dumb_decode(dumb_encode_bin(ssr))) == str(ssr))
 
     SOPC = StatelessOpenPGPClient
 
