@@ -1340,7 +1340,9 @@ class CommandParse(CLICommand):
 
     class OpenPGPSettings:
         def __init__(self, cli_obj, settings, parsed_message):
+            self.cli_obj = cli_obj
             self.context = cli_obj.context
+            self.access = cli_obj.access
             self.worker = None
 
             if settings.decrypt_with and settings.verify_from:
@@ -1433,7 +1435,7 @@ class CommandParse(CLICommand):
             if sig:
                 dpart = CommandOpenPGP.normalize_text(
                     parent._raw(parent['_PARTS'][p_idx + 1], header=True)
-                    ) + b'\r\n'
+                    ).rstrip() + b'\r\n'
                 _gathered[p_idx] = ('verify', (dpart, sig))
             return None
 
@@ -1456,17 +1458,25 @@ class CommandParse(CLICommand):
                         'content-type': ['text/plain', {'charset': 'utf-8'}]}
                     if cdisp:
                         new_part['content-disposition'] = cdisp
-                    sys.stderr.write('Cleartext=%s\n' % data)
                     del _done[p_idx]
                     return (p_idx, p_idx+1), [(new_part, data)]
 
                 if verify:
-                    pass
+                    text, verifications = _done[p_idx]
+                    new_part = {
+                        '_CRYPTO': {
+                            'openpgp_verifications': [
+                                CommandOpenPGP.verification_as_dict(v)
+                                for v in verifications if v]},
+                        'content-type': ['text/plain', {'charset': 'utf-8'}]}
+                    if cdisp:
+                        new_part['content-disposition'] = cdisp
+                    del _done[p_idx]
+                    return (p_idx, p_idx+1), [(new_part, text)]
 
                 del _done[p_idx]
                 return None
 
-            sys.stderr.write('Part %d: decrypt=%s verify=%s\n' % (p_idx, decrypt, verify))
             if decrypt:
                 _gathered[p_idx] = ('decrypt', (text,))
             elif verify:
@@ -1476,7 +1486,6 @@ class CommandParse(CLICommand):
         errors = 0
         parsed_message['_OPENPGP_ERRORS'] = []
         for tries in range(0, 3):
-            sys.stderr.write('Decrypt, pass %d\n' % tries)
             parsed_message.decrypt({
                 'multipart/encrypted': [_decrypt_mep],
                 'multipart/signed': [_verify_signed],
@@ -1485,7 +1494,6 @@ class CommandParse(CLICommand):
                 break
 
             for idx, (op, data) in list(_gathered.items()):
-                sys.stderr.write('should %s part %s: %s\n' % (op, idx, data))
                 action = None
                 try:
                     if op == 'decrypt':
@@ -1496,15 +1504,12 @@ class CommandParse(CLICommand):
                         action = CommandOpenPGP.get_verifier(
                             openpgp_cfg, sig=data[-1])
                         _done[idx] = await action(*data)
-                except (sop.SOPNoSignature,
-                        sop.SOPInvalidDataType,
-                        TypeError) as e:
+                except Exception as e:
                     if not action:
                         parsed_message['_OPENPGP_ERRORS'].append(
                             'Missing information (keys?), cannot %s' % op)
                     else:
                         parsed_message['_OPENPGP_ERRORS'].append(str(e))
-                    logging.debug('%s failed: %s' % (op, e))
                     errors += 1
 
                 del _gathered[idx]
@@ -1825,13 +1830,29 @@ class CommandParse(CLICommand):
             parsed = parsed['parsed']
 
             if self.settings.with_structure:
+                # FIXME: We need to explain the structure of encrypted/signed
+                #        messages! What became what? What was signed?
                 atts = 0
                 hlen = parsed['_HEADER_BYTES']
                 structure = [
                    '## Message structure\n',
                    '   * Message header (%s bytes)' % hlen]
                 errors = []
-                for i, p in enumerate(parsed.iter_parts(parsed)):
+                replaced = {}
+                for i, p in enumerate(parsed['_PARTS']):
+                    _id = '%d' % (i+1)
+                    if '_REPLACE' in p:
+                        replacement = '%d' % (p['_REPLACE']+1)
+                        replaced[replacement] = _id
+                    if _id in replaced:
+                        _id = 'Decrypted Part %s (Part %s)' % (replaced[_id], _id)
+                    elif p.get('_CRYPTO', {}).get('openpgp_verifications'):
+                        _id = 'Signed Part ' + _id
+                    elif p.get('_CRYPTO', {}).get('openpgp_decrypted_part'):
+                        _id = 'Decrypted Part ' + _id
+                    else:
+                        _id = 'Part ' + _id
+
                     plen = p['_BYTES'][2] - p['_BYTES'][1]
                     disp = p.get('content-disposition') or [None, {}]
                     filename = (p['content-type'][1].get('name')
@@ -1839,10 +1860,11 @@ class CommandParse(CLICommand):
                     error = p.get('_DECRYPT_FAILED')
                     if error:
                         error = 'Decrypt failed: ' + ', '.join(error)
-                    structure.append('   %s* Part %d: %s (%d bytes%s)%s' % (
-                        '   ' * p['_DEPTH'], i+1,
+                    structure.append('   %s* %s: %s (%d bytes%s)%s' % (
+                        '   ' * p['_DEPTH'], _id,
                         p['content-type'][0],
-                        plen, ', %s' % filename if filename else '',
+                        plen,
+                        ', %s' % filename if filename else '',
                         ' !!' if error else ''))
                     if error:
                         errors.append((i, error))
@@ -1850,7 +1872,7 @@ class CommandParse(CLICommand):
                         atts += 1
                 if errors:
                     structure.append('\nErrors:\n')
-                    structure.extend('   * Part %d: %s' % (i, err)
+                    structure.extend('   * Part %s: %s' % (_id, err)
                        for i, err in errors)
                 if atts:
                     structure.append("""

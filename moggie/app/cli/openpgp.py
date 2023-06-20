@@ -344,10 +344,14 @@ Hash: %s
         data = cls.normalize_text(data)
         dbeg = data.index(b'\r\n\r\n') + 4
         dend = data.index(b'-----BEGIN PGP SIGNATURE-----')
-        return cls.dash_unescape(data[dbeg:dend]), data[dend:]
+        return (
+            cls.dash_unescape(data[dbeg:dend-2]),
+            cls.pgp_strip(data[dend:]))
 
     @classmethod
     def get_verifier(cls, cli_obj, connect=None, sig=None):
+        if sig:
+            sig = cls.pgp_strip(sig)
         pgp_verifying_ids = cls.get_verifying_ids_and_keys(
             cli_obj, data=sig)['PGP']
 
@@ -358,18 +362,19 @@ Hash: %s
             if not sig:
                 data, sig = cls.split_clearsigned(data)
 
+            data = bytes(data, 'utf-8') if isinstance(data, str) else data
             verify_args = {
-                'sig': cls.pgp_strip(sig),
-                'signers':  dict(enumerate(pgp_verifying_ids))}
-            logging.debug(
-                'Verifying %d bytes with %s' % (len(data), verify_args))
+                'sig': sig,
+                'signers': dict(enumerate(pgp_verifying_ids))}
 
+            logging.debug(
+                'Verifying %d bytes (%s ... %s) with %s'
+                % (len(data), data[:10], data[-10:], verify_args))
             if cli_obj.options['--pgp-password=']:
                 verify_args['keypasswords'] = dict(
                     enumerate(cli_obj.options['--pgp-password=']))
-            data = bytes(data, 'utf-8') if isinstance(data, str) else data
-            verify_args['data'] = data
 
+            verify_args['data'] = data
             return (data, await sopc.verify(**verify_args))
 
         return verifier

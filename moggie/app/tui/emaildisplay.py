@@ -3,8 +3,9 @@ import re
 import sys
 import urwid
 
-from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
+from ...email.metadata import Metadata
+from ...email.parsemime import MessagePart
 from ...api.requests import RequestCommand
 from ...util.dumbcode import to_json
 
@@ -157,7 +158,7 @@ However, Moggie has yet to receive a copy.
 
         if self.email:
             self.has_attachments = []
-            for part in self.email.get('_PARTS', []):
+            for part in MessagePart.iter_parts(self.email):
                 filename = None
                 ctype = part.get('content-type', ['', {}])
                 disp = part.get('content-disposition', ['', {}])
@@ -201,6 +202,7 @@ However, Moggie has yet to receive a copy.
                 '--with-headers=Y',
                 '--with-structure=Y',
                 '--with-text=Y',
+                '--with-openpgp=Y',
                 '--ignore-index=N',
                 # We convert the HTML to text here, so we can wrap lines.
                 '--with-html-text=N',
@@ -262,7 +264,7 @@ However, Moggie has yet to receive a copy.
         for ctype, fmt in (
                 ('text/plain', lambda t: t),
                 ('text/html',  _to_md)):
-            for part in self.email.get('_PARTS', []):
+            for part in MessagePart.iter_parts(self.email):
                 if part['content-type'][0] == ctype:
                     email_txts[ctype] += fmt(part.get('_TEXT', ''))
 
