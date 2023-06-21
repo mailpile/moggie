@@ -53,10 +53,21 @@ def validate_dates(metadata_ts, parsed_email, remote_only=True, now=None):
     timestamps = []
     timezones = []
 
+    # Gather any cryptographic signature times.
+    for part in parsed_email.get('_PARTS', []):
+        p_crypto = part.get('_CRYPTO')
+        if p_crypto:
+            for v in p_crypto.get('openpgp_verifications', []):
+                timestamps.append(v['when'])
+
+    # Cryptographic signatures should all predate timestamps from the
+    # STMP server infrastructure; so make a note of that here. We make
+    # a minor (300s) allowance for clock skew.
+    minimum_ts = max(0, 300, *timestamps) - 300
     if metadata_ts:
         timestamps.append(int(metadata_ts))
-    time_went_backwards = []
 
+    time_went_backwards = []
     for h in ('received', 'arc-seal'):
         last_ts = now
         for hdr in parsed_email.get(h, []):
@@ -72,6 +83,8 @@ def validate_dates(metadata_ts, parsed_email, remote_only=True, now=None):
                     ts = int(date)
                     timestamps.append(ts) 
                     if last_ts and ts > last_ts:
+                        time_went_backwards.append(h)
+                    elif ts < minimum_ts:
                         time_went_backwards.append(h)
                     last_ts = ts
                 except ValueError:

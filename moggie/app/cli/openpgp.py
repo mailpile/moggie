@@ -226,7 +226,9 @@ Hash: %s
         ids = {'DKIM': [], 'PGP': []}
         for _id in (cli_obj.options[opt] + extras):
             t, i = _id.split(':', 1)
-            ids[t.upper()].append(i)
+            id_list = ids[t.upper()]
+            if i not in id_list:
+                id_list.append(i)
         if not dkim:
             del ids['DKIM']
         if not pgp:
@@ -445,8 +447,8 @@ Hash: %s
     def verification_as_dict(cls, v):
         return {
             'when': int(v._when.timestamp()),
-            'signing_fpr': v._signing_fpr,
-            'primary_fpr': v._primary_fpr}
+            'signing_fpr': str(v._signing_fpr),
+            'primary_fpr': str(v._primary_fpr)}
 
     @classmethod
     def get_signer(cls, cli_obj, connect=None, html=None, clear=None):

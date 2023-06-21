@@ -192,6 +192,33 @@ class CommandParse(CLICommand):
             return self.worker
 
     @classmethod
+    def summarize_crypto(cls,
+            part=None,
+            errors=None,
+            openpgp_decrypted_part=None,
+            openpgp_verifications=None):
+        state = (part and part.get('_CRYPTO')) or {}
+
+        if errors:
+            state['errors'] = state.get('errors', []) + errors
+        if openpgp_decrypted_part is not None:
+            state['openpgp_decrypted_part'] = openpgp_decrypted_part
+        if openpgp_verifications:
+            state['openpgp_verifications'] = [
+                CommandOpenPGP.verification_as_dict(v)
+                for v in openpgp_verifications]
+
+        state['summary'] = '+'.join(s for s in [
+            ('decrypted:%s' % state['openpgp_decrypted_part'])
+                if 'openpgp_decrypted_part' in state else '',
+            'verified' if state.get('openpgp_verifications') else '',
+            'errors' if state.get('errors') else ''] if s)
+
+        if state['summary'] and part:
+            part['_CRYPTO'] = state
+        return state
+
+    @classmethod
     async def parse_openpgp(cls, cli_obj, settings, parsed_message):
         import sop
         # parse_message.decrypt is sync, but crypto ops are async, ugh.
@@ -206,15 +233,10 @@ class CommandParse(CLICommand):
             ctype = part['content-type']
             if p_idx in _done:
                 data, verifications, sessionkeys = _done[p_idx]
-                new_part = {
-                    '_CRYPTO': {
-                        'openpgp_decrypted_part': p_idx,
-                        'openpgp_verifications': [
-                            CommandOpenPGP.verification_as_dict(v)
-                            for v in verifications],
-                        },
-                    'content-type': ['multipart/mixed', {}]}
-
+                new_part = {'content-type': ['multipart/mixed', {}]}
+                cls.summarize_crypto(new_part,
+                    openpgp_decrypted_part=p_idx,
+                    openpgp_verifications=verifications)
                 del _done[p_idx]
                 return (p_idx, p_idx+3), [(new_part, data)]
 
@@ -247,9 +269,8 @@ class CommandParse(CLICommand):
 
             if p_idx in _done:
                 text, verifications = _done[p_idx]
-                _crypto = {'openpgp_verifications': [
-                    CommandOpenPGP.verification_as_dict(v)
-                    for v in verifications]}
+                _crypto = cls.summarize_crypto(
+                    openpgp_verifications=verifications)
                 for p in subs:
                     p['_CRYPTO'] = _crypto
                 del _done[p_idx]
@@ -273,12 +294,10 @@ class CommandParse(CLICommand):
                 if decrypt:
                     data, verifications, sessionkeys = _done[p_idx]
                     new_part = {
-                        '_CRYPTO': {
-                            'openpgp_decrypted_part': p_idx,
-                            'openpgp_verifications': [
-                                CommandOpenPGP.verification_as_dict(v)
-                                for v in verifications]},
                         'content-type': ['text/plain', {'charset': 'utf-8'}]}
+                    cls.summarize_crypto(new_part,
+                        openpgp_decrypted_part=p_idx,
+                        openpgp_verifications=verifications)
                     if cdisp:
                         new_part['content-disposition'] = cdisp
                     del _done[p_idx]
@@ -287,11 +306,9 @@ class CommandParse(CLICommand):
                 if verify:
                     text, verifications = _done[p_idx]
                     new_part = {
-                        '_CRYPTO': {
-                            'openpgp_verifications': [
-                                CommandOpenPGP.verification_as_dict(v)
-                                for v in verifications if v]},
                         'content-type': ['text/plain', {'charset': 'utf-8'}]}
+                    cls.summarize_crypto(new_part,
+                        openpgp_verifications=verifications)
                     if cdisp:
                         new_part['content-disposition'] = cdisp
                     del _done[p_idx]
@@ -307,7 +324,7 @@ class CommandParse(CLICommand):
             return None
 
         errors = 0
-        parsed_message['_OPENPGP_ERRORS'] = []
+        parsed_message['_OPENPGP_ERRORS'] = {}
         for tries in range(0, 3):
             parsed_message.decrypt({
                 'multipart/encrypted': [_decrypt_mep],
@@ -329,10 +346,13 @@ class CommandParse(CLICommand):
                         _done[idx] = await action(*data)
                 except Exception as e:
                     if not action:
-                        parsed_message['_OPENPGP_ERRORS'].append(
-                            'Missing information (keys?), cannot %s' % op)
+                        emsg = 'Missing information (keys?), cannot %s' % op
                     else:
-                        parsed_message['_OPENPGP_ERRORS'].append(str(e))
+                        logging.exception('%s failed' % op)
+                        emsg = str(e)
+                    cls.summarize_crypto(
+                        parsed_message['_PARTS'][idx], errors=[emsg])
+                    parsed_message['_OPENPGP_ERRORS'][idx] = True
                     errors += 1
 
                 del _gathered[idx]
@@ -380,15 +400,17 @@ class CommandParse(CLICommand):
             if settings.with_headers:
                 p['_RAW_HEADERS'] = str(
                     data[:header_end], 'utf-8', 'replace').rstrip()
-            if settings.verify_dates:
-                from moggie.security.headers import validate_dates
-                p['_DATE_VALIDITY'] = validate_dates(md.timestamp, p)
-
             if settings.with_openpgp:
                 p.with_structure().with_text()
                 await cls.parse_openpgp(cli_obj, settings, p)
             elif settings.with_structure:
                 p.with_structure()
+
+            if settings.verify_dates:
+                # This happens *after* OpenPGP processing, so we can include
+                # any signature dates in this check.
+                from moggie.security.headers import validate_dates
+                p['_DATE_VALIDITY'] = validate_dates(md.timestamp, p)
 
             if settings.scan_moggie_zips or settings.scan_archives:
                 p.with_archive_contents(
@@ -659,47 +681,64 @@ class CommandParse(CLICommand):
                 structure = [
                    '## Message structure\n',
                    '   * Message header (%s bytes)' % hlen]
-                errors = []
                 replaced = {}
                 for i, p in enumerate(parsed['_PARTS']):
+                    p_crypto = p.get('_CRYPTO', {})
+                    p_ctype = p['content-type']
+                    p_disp = p.get('content-disposition') or [None, {}]
+
                     _id = '%d' % (i+1)
                     if '_REPLACE' in p:
                         replacement = '%d' % (p['_REPLACE']+1)
                         replaced[replacement] = _id
+
+                    plen = p['_BYTES'][2] - p['_BYTES'][1]
+                    filename = (
+                        p_ctype[1].get('name') or
+                        p_disp[1].get('filename'))
+                    details = ', %s' % filename if filename else ''
+
+                    if (p_crypto.get('openpgp_decrypted_part') is not None
+                            and p_ctype[1].get('hp-legacy-display')):
+                        details += ', header display'
+
+                    verifs = p_crypto.get('openpgp_verifications')
                     if _id in replaced:
-                        _id = 'Decrypted Part %s (Part %s)' % (replaced[_id], _id)
-                    elif p.get('_CRYPTO', {}).get('openpgp_verifications'):
-                        _id = 'Signed Part ' + _id
-                    elif p.get('_CRYPTO', {}).get('openpgp_decrypted_part'):
+                        if verifs:
+                            fmt = 'Verified Part %s (Part %s)'
+                        else:
+                            fmt = 'Decrypted Part %s (Part %s)'
+                        _id = fmt % (replaced[_id], _id)
+                    elif verifs:
+                        _id = 'Verified Part ' + _id
+                    elif p_crypto.get('openpgp_decrypted_part') is not None:
                         _id = 'Decrypted Part ' + _id
                     else:
                         _id = 'Part ' + _id
+                    if verifs:
+                        details += ', signed'
+                    if p_crypto.get('errors'):
+                        details += ', crypto failed'
 
-                    plen = p['_BYTES'][2] - p['_BYTES'][1]
-                    disp = p.get('content-disposition') or [None, {}]
-                    filename = (p['content-type'][1].get('name')
-                        or disp[1].get('filename'))
-                    error = p.get('_DECRYPT_FAILED')
-                    if error:
-                        error = 'Decrypt failed: ' + ', '.join(error)
-                    structure.append('   %s* %s: %s (%d bytes%s)%s' % (
-                        '   ' * p['_DEPTH'], _id,
-                        p['content-type'][0],
-                        plen,
-                        ', %s' % filename if filename else '',
-                        ' !!' if error else ''))
-                    if error:
-                        errors.append((i, error))
+                    basics = '   %s* %s: %s' % (
+                        '   ' * p['_DEPTH'], _id, p_ctype[0])
+                    details = ' (%d bytes%s)' % (plen, details)
+                    if len(basics) + len(details) > 80:
+                        details = '\n    %s%s' % (
+                            '   ' * p['_DEPTH'], details)
+
+                    structure.append(basics + details)
                     if filename:
                         atts += 1
-                if errors:
-                    structure.append('\nErrors:\n')
-                    structure.extend('   * Part %s: %s' % (_id, err)
-                       for i, err in errors)
                 if atts:
                     structure.append("""
-Note: attachment sizes include the MIME encoding overhead, once decoded
+Note: Attachment sizes include the MIME encoding overhead, once decoded
       the files will be about 25% smaller.""")
+                if replaced:
+                    structure.append("""
+Note: The list above includes synthetic parts which were generated by the
+      decryption and/or signature verification processes; both "before"
+      and "after" versions of the data.""")
                 report.append('\n'.join(structure))
 
             if self.settings.verify_dates:
@@ -727,12 +766,53 @@ message."""
                 report.append("""\
 ## Dates and times
 
-Dates and times in header span %d seconds from %d time zones.
+Dates and times in message span %d seconds from %d time zones.
 
    * Earliest: %s
    * Latest: %s%s\
 """ % (         dv['delta'], len(dv['timezones']),
                 formatdate(d0), formatdate(dn), hints))
+
+            if self.settings.with_openpgp:
+                from moggie.util.friendly import friendly_datetime
+                report.append('## OpenPGP details')
+
+                crypto_states = []
+                for i, p in enumerate(parsed['_PARTS']):
+                    p_crypto = p.get('_CRYPTO', {})
+                    if p_crypto:
+                        crypto_states.append((i, p_crypto))
+
+                # FIXME: If we found protected headers, explain here
+
+                r, bullet = [], '      * '
+                if crypto_states or parsed.get('_OPENPGP_ERRORS'):
+                    r0, last_summary = None, ''
+                    for idx, state in crypto_states:
+                        if state.get('errors'):
+                            what = ', '.join(state['errors'])
+                        else:
+                            what = []
+                            if 'openpgp_decrypted_part' in state:
+                                what.append(
+                                    'Decrypted OpenPGP Message (Part %d)'
+                                    % (state['openpgp_decrypted_part']+1))
+                            for v in state.get('openpgp_verifications', []):
+                                what.append(
+                                    'Signed by OpenPGP key 0x%s at %s'
+                                    % (v['primary_fpr'][-16:],
+                                       friendly_datetime(v['when'])))
+                            what = ('\n'+bullet).join(sorted(list(set(what))))
+                        if what != last_summary:
+                            r0 = len(r)
+                            r.append('   * Part %d:' % (idx+1))
+                            r.append('%s%s' % (bullet, what))
+                            last_summary = what
+                        elif r0 is not None:
+                            r[r0] = r[r0][:-1] + ', Part %d:' % (idx+1)
+                    report.append('\n'.join(r))
+                else:
+                    report.append('No OpenPGP message or signature found.')
 
             if self.settings.with_headprints:
                 report.append('## Header fingerprints\n\n'
