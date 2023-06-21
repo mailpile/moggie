@@ -53,6 +53,888 @@ def _make_message_id(random_data=None):
         str(hexlify(random_data or os.urandom(16)), 'utf-8'))
 
 
+class CommandParse(CLICommand):
+    """moggie parse [options] <terms>
+
+    This command will load and parse e-mails matching the search terms,
+    provided as files or standard input. Terms can also be full Moggie
+    metadata objects (for API use).
+
+    The output is either a human readable report (text or HTML), or a
+    JSON data structure explaining the contents, structure and technical
+    characteristics of the e-mail.
+
+    ### Options
+
+    %(OPTIONS)s
+
+    ### Examples
+
+        ...
+
+    FIXME
+    """
+    NAME = 'parse'
+    ROLES = AccessConfig.GRANT_READ
+    WEBSOCKET = False
+    WEB_EXPOSE = True
+    CONNECT = False    # We manually connect if we need to!
+    OPTIONS = [[
+        (None, None, 'moggie'),
+        ('--context=', ['default'], 'Context to use for default settings'),
+        ('--format=',     ['text'], 'X=(text*|html|json|sexp)'),
+        ('--stdin=',            [], None), # Allow lots to send stdin (internal)
+        ('--input=',            [], 'Load e-mail from file X, "-" for stdin'),
+        ('--username=',     [None], 'Username with which to access the email'),
+        ('--password=',     [None], 'Password with which to access the email'),
+        ('--or',           [False], 'Use OR instead of AND with search terms'),
+        ('--allow-network',     [False], 'Allow outgoing network requests'),
+        ('--forbid-filesystem', [False], 'Forbid loading local files'),
+        ('--write-back',        [False], 'Write parse results to search index'),
+        ] + CommandOpenPGP.OPTIONS_PGP_SETTINGS + [
+    ],[
+        (None, None, 'features'),
+        ('--with-metadata=',    ['N'], 'X=(Y|N*), include moggie metadata'),
+        ('--with-headers=',     ['Y'], 'X=(Y*|N), include parsed message headers'),
+        ('--with-path-info=',   ['Y'], 'X=(Y*|N), include path through network'),
+        ('--with-structure=',   ['Y'], 'X=(Y*|N), include message structure'),
+        ('--with-text=',        ['Y'], 'X=(Y*|N), include message text parts'),
+        ('--with-html=',        ['N'], 'X=(Y|N*), include raw message HTML'),
+        ('--with-html-clean=',  ['N'], 'X=(Y|N*), include sanitized message HTML'),
+        ('--with-html-text=',   ['Y'], 'X=(Y*|N), include text extracted from HTML'),
+        ('--with-data=',        ['N'], 'X=(Y|N*), include attachment data'),
+        ('--with-headprints=',  ['N'], 'X=(Y|N*), include header fingerprints'),
+        ('--with-keywords=',    ['N'], 'X=(Y|N*), include search-engine keywords'),
+        ('--with-openpgp=',     ['N'], 'X=(Y|N*), process OpenPGP content'),
+        ('--scan-moggie-zips=', ['Y'], 'X=(Y*|N), scan moggie-specific archives'),
+        ('--scan-archives=',    ['N'], 'X=(Y|N*), scan all archives for attachments'),
+        ('--zip-password=',        [], 'Password to use for ZIP decryption'),
+        ] + CommandOpenPGP.OPTIONS_DECRYPTING
+          + CommandOpenPGP.OPTIONS_VERIFYING + [
+    #   ('--decrypt=',          ['N'], '? X=(Y|N*), attempt to decrypt contents'),
+    #   ('--verify-pgp=',       ['N'], '? X=(Y|N*), attempt to verify PGP signatures'),
+        ('--verify-dates=',     ['Y'], 'X=(Y*|N), attempt to validate message dates'),
+        ('--verify-dkim=',      ['Y'], 'X=(Y*|N), attempt to verify DKIM signatures'),
+        ('--dkim-max-age=',     [180], 'X=Max age (days, default=180) for DKIM validation'),
+        ('--with-nothing=',     ['N'], 'X=(Y|N*), parse nothing by default'),
+        ('--with-everything=',  ['N'], 'X=(Y|N*), try to parse everything!'),
+        ('--ignore-index=',     ['N'], 'X=(Y|N*), Ignore contents of search index'),
+    ]]
+
+    class Settings:
+        def __init__(self, **kwargs):
+            def _opt(k, a, defaults):
+                val = kwargs.get(a) or kwargs.get(k)
+                if val is None:
+                    if defaults:
+                        val = defaults[-1]
+                elif isinstance(val, list):
+                    if len(val) > (1 if defaults else 0):
+                        val = val[-1]
+                    elif defaults:
+                        val = defaults[-1]
+                    else:
+                        val = False
+                if val in (True, 'Y', 'y', 'true', 'True', 'TRUE'):
+                    return True
+                if val in (False, 'N', 'n', 'false', 'False', 'FALSE', None):
+                    return False
+                return val
+
+            w_none = _opt('--with-nothing=', 'with_nothing', None)
+            w_all = _opt('--with-everything=', 'with_everything', None)
+            for key, defaults, comment in CommandParse.OPTIONS[1]:
+                if w_none:
+                    defaults = [False]
+                elif w_all and key not in (
+                        '--ignore-index=',
+                        '--dkim-max-age=',
+                        '--verify-from=', '--decrypt-with=',
+                        '--with-nothing=', '--with-everything='):
+                    defaults = [True]
+                if key:
+                    attr = key[2:-1].replace('-', '_')
+                    if False and w_all and key not in (
+                            '--ignore-index=',
+                            '--dkim-max-age=',
+                            '--verify-from=', '--decrypt-with=',
+                            '--with-nothing=', '--with-everything='):
+                        self.__setattr__(attr, True)
+                    self.__setattr__(attr, _opt(key, attr, defaults))
+
+    class OpenPGPSettings:
+        def __init__(self, cli_obj, settings, parsed_message):
+            self.cli_obj = cli_obj
+            self.context = cli_obj.context
+            self.access = cli_obj.access
+            self.worker = None
+
+            if settings.decrypt_with and settings.verify_from:
+                self.options = cli_obj.options
+
+            else:
+                self.options = copy.copy(cli_obj.options)
+                if not settings.decrypt_with:
+                    dw = self.options['--decrypt-with='] = []
+                    for r in parsed_message.get('to', []):
+                        dw.append('PGP:@PKEY:%s' % r['address'])
+                    for r in parsed_message.get('cc', []):
+                        dw.append('PGP:@PKEY:%s' % r['address'])
+
+                if not settings.verify_from:
+                    frm = parsed_message.get('from')
+                    if frm:
+                        self.options['--verify-from='] = [
+                            'PGP:@CERT:%s' % frm['address']]
+
+        def connect(self):
+            self.worker = self.cli_obj.connect()
+            return self.worker
+
+    @classmethod
+    async def parse_openpgp(cls, cli_obj, settings, parsed_message):
+        import sop
+        # parse_message.decrypt is sync, but crypto ops are async, ugh.
+        # So we do this in two passes, first we gather the things to
+        # process, then we inject the results back into the parse tree.
+
+        openpgp_cfg = cls.OpenPGPSettings(cli_obj, settings, parsed_message)
+        _gathered = {}
+        _done = {}
+
+        def _decrypt_mep(part_bin, p_idx, part, parent):
+            ctype = part['content-type']
+            if p_idx in _done:
+                data, verifications, sessionkeys = _done[p_idx]
+                new_part = {
+                    '_CRYPTO': {
+                        'openpgp_decrypted_part': p_idx,
+                        'openpgp_verifications': [
+                            CommandOpenPGP.verification_as_dict(v)
+                            for v in verifications],
+                        },
+                    'content-type': ['multipart/mixed', {}]}
+
+                del _done[p_idx]
+                return (p_idx, p_idx+3), [(new_part, data)]
+
+            if ctype[1].get('protocol') != 'application/pgp-encrypted':
+                return None
+
+            mpart = parent['_PARTS'][p_idx + 1]
+            ppart = parent['_PARTS'][p_idx + 2]
+
+            mpart_content = str(parent._bytes(mpart), 'latin-1').strip()
+            if (mpart_content.lower().split() != ['version:', '1']
+                    or ppart['content-type'][0] != 'application/octet-stream'):
+                return None
+
+            _gathered[p_idx] = ('decrypt', (parent._bytes(ppart),))
+            return None
+
+        def _verify_signed(part_bin, p_idx, part, parent):
+            sig = None
+            subs = []
+            for p in parent['_PARTS'][p_idx+1:]:
+                if p['_DEPTH'] == part['_DEPTH']:
+                    break
+                if (p['content-type'][0] == 'application/pgp-signature'
+                        and p['_DEPTH'] == part['_DEPTH'] + 1):
+                    sig = parent._bytes(p)
+                    break
+                else:
+                    subs.append(p)
+
+            if p_idx in _done:
+                text, verifications = _done[p_idx]
+                _crypto = {'openpgp_verifications': [
+                    CommandOpenPGP.verification_as_dict(v)
+                    for v in verifications]}
+                for p in subs:
+                    p['_CRYPTO'] = _crypto
+                del _done[p_idx]
+                return None
+
+            if sig:
+                dpart = CommandOpenPGP.normalize_text(
+                    parent._raw(parent['_PARTS'][p_idx + 1], header=True)
+                    ).rstrip() + b'\r\n'
+                _gathered[p_idx] = ('verify', (dpart, sig))
+            return None
+
+        def _decrypt_or_verify_inline(part_bin, p_idx, part, parent):
+            text = part.get('_TEXT', '')
+            decrypt = re.match('^\s*-----BEGIN PGP MESSAGE', text, flags=re.S)
+            verify = re.match('^\s*-----BEGIN PGP SIGNED', text, flags=re.S)
+
+            if p_idx in _done:
+                ctype = part['content-type']
+                cdisp = part.get('content-disposition')
+                if decrypt:
+                    data, verifications, sessionkeys = _done[p_idx]
+                    new_part = {
+                        '_CRYPTO': {
+                            'openpgp_decrypted_part': p_idx,
+                            'openpgp_verifications': [
+                                CommandOpenPGP.verification_as_dict(v)
+                                for v in verifications]},
+                        'content-type': ['text/plain', {'charset': 'utf-8'}]}
+                    if cdisp:
+                        new_part['content-disposition'] = cdisp
+                    del _done[p_idx]
+                    return (p_idx, p_idx+1), [(new_part, data)]
+
+                if verify:
+                    text, verifications = _done[p_idx]
+                    new_part = {
+                        '_CRYPTO': {
+                            'openpgp_verifications': [
+                                CommandOpenPGP.verification_as_dict(v)
+                                for v in verifications if v]},
+                        'content-type': ['text/plain', {'charset': 'utf-8'}]}
+                    if cdisp:
+                        new_part['content-disposition'] = cdisp
+                    del _done[p_idx]
+                    return (p_idx, p_idx+1), [(new_part, text)]
+
+                del _done[p_idx]
+                return None
+
+            if decrypt:
+                _gathered[p_idx] = ('decrypt', (text,))
+            elif verify:
+                _gathered[p_idx] = ('verify', (text,))
+            return None
+
+        errors = 0
+        parsed_message['_OPENPGP_ERRORS'] = []
+        for tries in range(0, 3):
+            parsed_message.decrypt({
+                'multipart/encrypted': [_decrypt_mep],
+                'multipart/signed': [_verify_signed],
+                'text/plain:first': [_decrypt_or_verify_inline]})
+            if not _gathered:
+                break
+
+            for idx, (op, data) in list(_gathered.items()):
+                action = None
+                try:
+                    if op == 'decrypt':
+                        action = CommandOpenPGP.get_decryptor(
+                            openpgp_cfg, data=data[0])
+                        _done[idx] = await action(*data)
+                    elif op == 'verify':
+                        action = CommandOpenPGP.get_verifier(
+                            openpgp_cfg, sig=data[-1])
+                        _done[idx] = await action(*data)
+                except Exception as e:
+                    if not action:
+                        parsed_message['_OPENPGP_ERRORS'].append(
+                            'Missing information (keys?), cannot %s' % op)
+                    else:
+                        parsed_message['_OPENPGP_ERRORS'].append(str(e))
+                    errors += 1
+
+                del _gathered[idx]
+            if errors:
+                break
+
+    @classmethod
+    async def Parse(cls, cli_obj, data,
+            settings=None, allow_network=False,
+            **kwargs):
+        t0 = time.time()
+
+        if settings is None:
+            settings = cls.Settings(**kwargs)
+
+        result = {}
+        if isinstance(data, dict):
+            result = data
+        else:
+            result['data'] = data
+        data = result.get('data')
+
+        md = result.get('metadata')
+        html_magic = (settings.with_html
+            or settings.with_html_text or settings.with_html_clean)
+        if data:
+            from moggie.email.util import make_ts_and_Metadata, quick_msgparse
+            from moggie.email.parsemime import parse_message
+            header_end, header_summary = quick_msgparse(data, 0)
+
+            p = parse_message(data, fix_mbox_from=(data[:5] == b'From '))
+
+            p['_HEADER_BYTES'] = header_end
+            result['parsed'] = p
+
+            if (md is None) or settings.ignore_index:
+                ignored_ts, md = make_ts_and_Metadata(
+                    time.time(), 0, header_summary, [], header_summary)
+                result['metadata'] = md
+
+            if settings.with_path_info:
+                from moggie.security.headers import validate_smtp_hops
+                p['_PATH_INFO'] = await validate_smtp_hops(p,
+                    check_dns=allow_network)
+            if settings.with_headers:
+                p['_RAW_HEADERS'] = str(
+                    data[:header_end], 'utf-8', 'replace').rstrip()
+            if settings.verify_dates:
+                from moggie.security.headers import validate_dates
+                p['_DATE_VALIDITY'] = validate_dates(md.timestamp, p)
+
+            if settings.with_openpgp:
+                p.with_structure().with_text()
+                await cls.parse_openpgp(cli_obj, settings, p)
+            elif settings.with_structure:
+                p.with_structure()
+
+            if settings.scan_moggie_zips or settings.scan_archives:
+                p.with_archive_contents(
+                    moggie_archives=settings.scan_moggie_zips,
+                    zip_archives=settings.scan_archives,
+                    zip_passwords=settings.zip_password)
+
+            if settings.with_text or html_magic or settings.with_keywords:
+                p.with_text()
+            if settings.with_data:
+                p.with_data()
+
+            if html_magic:
+                for part in p.iter_parts(p):
+                    if part.get('content-type', [None])[0] == 'text/html':
+                        html = part['_TEXT']
+                        if settings.with_html_clean:
+                            from moggie.security.html import clean_email_html
+                            part['_HTML_CLEAN'] = clean_email_html(md, p, part,
+                                # FIXME: Make these configurable
+                                inline_images=True,
+                                remote_images=True,
+                                target_blank=True)
+
+                        if settings.with_html_text:
+                            from moggie.security.html import html_to_markdown
+                            part['_HTML_TEXT'] = html_to_markdown(html)
+
+            if settings.with_headprints:
+                from moggie.search.headerprint import HeaderPrints
+                p['_HEADPRINTS'] = HeaderPrints(p)
+
+            if settings.verify_dkim:
+                from moggie.security.dkim import verify_all_async
+                hcount = len(p.get('dkim-signature', []))
+                verifications = []
+                if not settings.ignore_index:
+                    ts, verifications = md.get_dkim_status()
+                if not verifications and p.get('dkim-signature'):
+                    now = time.time()
+                    maxage = 24 * 3600 * int(settings.dkim_max_age)
+                    if (md.timestamp >= now - maxage) and allow_network:
+                        verifications = await verify_all_async(
+                            hcount, data, logger=logging)
+                        if verifications:
+                            md.set_dkim_status(verifications, ts=now)
+                    else:
+                        for dkim in p['dkim-signature']:
+                            dkim['_DKIM_TOO_OLD'] = True
+                            dkim['_DKIM_VERIFIED'] = False
+                            dkim['_DKIM_PARTIAL'] = False
+                for i, ok in enumerate(verifications):
+                    dkim = p['dkim-signature'][i]
+                    dkim['_DKIM_VERIFIED'] = ok
+                    dkim['_DKIM_PARTIAL'] = False
+                    if dkim.get('l'):
+                        if int(dkim['l']) < (len(data) - header_end):
+                            dkim['_DKIM_PARTIAL'] = True
+
+            # Important: This must come last, it checks for the output of
+            #            the above sections!
+            if settings.with_keywords:
+                from moggie.search.extractor import KeywordExtractor
+                kwe = KeywordExtractor()
+                more, kws = kwe.extract_email_keywords(None, p)
+                p['_KEYWORDS'] = sorted(list(kws))
+
+            # Cleanup phase; depending on our --with-... arguments, we may
+            # want to remove some stuff from the output.
+
+            removing = []
+            if not settings.with_headers:
+                removing.extend(k for k in p if not k[:1] == '_')
+                if settings.verify_dkim and 'dkim-signature' in removing:
+                    removing.remove('dkim-signature')
+                removing.append('_DATE_TS')
+                removing.append('_RAW_HEADERS')
+                removing.append('_mbox_separator')
+                removing.append('_ORDER')
+            if not settings.with_structure:
+                removing.append('_HEADER_BYTES')
+            if not (settings.with_structure
+                    or settings.with_text
+                    or settings.with_data
+                    or html_magic):
+                removing.append('_PARTS')
+            for hdr in removing:
+                if hdr in p:
+                    del p[hdr]
+
+            if settings.with_metadata:
+                result['metadata'] = result['metadata'].parsed()
+            else:
+                del result['metadata']
+
+            if not settings.with_structure and '_PARTS' in p:
+                parts = p['_PARTS']
+                for i in reversed(range(0, len(parts))):
+                    ctype = parts[i]['content-type'][0]
+                    if ctype.startswith('multipart/'):
+                        parts.pop(i)
+                    elif not (settings.with_data
+                            or ctype in ('text/plain', 'text/html')):
+                        parts.pop(i)
+                    else:
+                        for key in [k for k in parts[i] if k[:1] == '_']:
+                            if key == '_TEXT' and settings.with_text:
+                                pass
+                            elif key.startswith('_HTML') and html_magic:
+                                pass
+                            elif key == '_DATA' and settings.with_data:
+                                pass
+                            else:
+                                del parts[i][key]
+
+        if 'data' in result:
+            del result['data']
+
+        result['_PARSE_TIME_MS'] = int(1000 * (time.time() - t0))
+        return result
+
+    def __init__(self, *args, **kwargs):
+        self.emitted = 0
+        self.settings = None
+        self.searches = []
+        self.messages = []
+        super().__init__(*args, **kwargs)
+
+    def configure(self, args):
+        args = self.strip_options(args)
+
+        # FIXME: Think about this, how DO we want to restrict access to the
+        #        filesytem? It is probaby per user/context.
+        self.allow_fs = not self.options['--forbid-filesystem'][-1]
+        self.allow_network = self.options['--allow-network'][-1]
+        self.write_back = self.options['--write-back'][-1]
+
+        self.settings = self.Settings(**self.options)
+        self.settings.zip_password = self.options['--zip-password=']
+
+        if not self.allow_network:
+            self.settings.verify_dkim = False
+            if len(self.options['--verify-dkim=']) > 1:
+                raise Nonsense('Cannot verify DKIM without network access')
+
+        def _load(t, target):
+            if t[:1] == '-':
+                if self.options['--stdin=']:
+                    data = self.options['--stdin='].pop(0)
+                else:
+                    data = sys.stdin.buffer.read()
+                target.append({
+                    'stdin': True,
+                    'data': data})
+                return True
+            elif t[:7] == 'base64:':
+                target.append({
+                    'base64': True,
+                    'data': base64.b64decode(t[7:])})
+                return True
+            elif self.allow_fs and (os.path.sep in t) and os.path.exists(t):
+                with open(t, 'rb') as fd:
+                    target.append({
+                        'path': t,
+                        'data': fd.read()})
+                return True
+            return False
+
+        def _read_file(current, i, t, target):
+            if _load(t, target):
+                current[i] = None
+
+        # This lets the caller provide messages for forwarding or replying to
+        # directly, instead of searching. Anything left in the options after
+        # this will be treated as a search term.
+        for target, key in (
+                (self.messages, '--input='),
+                (self.messages, None)):
+            current = self.options.get(key, []) if key else args
+            i = None
+            for i, t in enumerate(current):
+                _read_file(current, i, t, target)
+            if key:
+                self.options[key] = [t for t in current if t]
+            else:
+                if i is None:
+                    _read_file(['-'], 0, '-', self.messages)
+                else:
+                    args = [t for t in current if t]
+
+        return self.configure2(args)
+
+    def configure2(self, args):
+        if args:
+            self.searches.append(self.combine_terms(args))
+        self.searches.extend(self.options['--input='])
+        self.options['--input='] = []
+        return []
+
+    def generate_markdown(self, parsed):
+        def _indent(blob, indent='    ', code=False):
+            if code:
+                lines = ['```'] + blob.splitlines() + ['```']
+            else:
+                lines = blob.splitlines()
+            return '\n'.join(indent+l for l in lines)
+
+        def _wrap(words, maxlen=72, indent=''):
+            lines = [indent]
+            if isinstance(words, str):
+                words = words.split()
+            for word in words:
+                if len(lines[-1]) + len(word) < maxlen:
+                    lines[-1] += word + ' '
+                else:
+                    lines[-1] = lines[-1].rstrip()
+                    lines.append(indent + word + ' ')
+            return '\n'.join(lines)
+
+        report = []
+        if parsed.get('stdin'):
+            report.append('# Parsed e-mail from standard input')
+        elif parsed.get('search'):
+            s = '%s' % parsed['search']
+            if s[:1] == '{' and s[-1:] == '}':
+                s = '(internal metadata)'
+                report.append('# Parsed e-mail')
+            else:
+                if len(s) > 42:
+                    s = s[:40] + '..'
+                report.append('# Parsed e-mail from search: %s' % s)
+
+        if self.settings.with_metadata:
+            md = parsed.get('metadata')
+            if not md:
+                report.append("""## Metadata unavailable""")
+            else:
+                if md['idx']:
+                    msg = 'This is the metadata stored in the search index'
+                else:
+                    msg = 'This is the message metadata'
+                report.append("""## Metadata\n\n%s:\n\n%s\n
+    data_type=%s
+    uuid=%s
+    ts=%d, id=%s, parent=%s, thread=%s, pointers=%s
+    extras=%s""" % (msg,
+                    '\n'.join('    %s' % h for h in md['raw_headers'].splitlines()),
+                    md['data_type'],
+                    md['uuid'],
+                    md['ts'],
+                    md['idx'],
+                    md.get('parent_id', '(none)'),
+                    md.get('thread_id', '(none)'),
+                    len(md['ptrs']),
+                    dict((k, md[k]) for k in md['_MORE'])))
+
+        if 'error' in parsed:
+            report.append('Error loading message: %s' % parsed['error'])
+
+        elif 'parsed' in parsed:
+            parsed = parsed['parsed']
+
+            if self.settings.with_structure:
+                # FIXME: We need to explain the structure of encrypted/signed
+                #        messages! What became what? What was signed?
+                atts = 0
+                hlen = parsed['_HEADER_BYTES']
+                structure = [
+                   '## Message structure\n',
+                   '   * Message header (%s bytes)' % hlen]
+                errors = []
+                replaced = {}
+                for i, p in enumerate(parsed['_PARTS']):
+                    _id = '%d' % (i+1)
+                    if '_REPLACE' in p:
+                        replacement = '%d' % (p['_REPLACE']+1)
+                        replaced[replacement] = _id
+                    if _id in replaced:
+                        _id = 'Decrypted Part %s (Part %s)' % (replaced[_id], _id)
+                    elif p.get('_CRYPTO', {}).get('openpgp_verifications'):
+                        _id = 'Signed Part ' + _id
+                    elif p.get('_CRYPTO', {}).get('openpgp_decrypted_part'):
+                        _id = 'Decrypted Part ' + _id
+                    else:
+                        _id = 'Part ' + _id
+
+                    plen = p['_BYTES'][2] - p['_BYTES'][1]
+                    disp = p.get('content-disposition') or [None, {}]
+                    filename = (p['content-type'][1].get('name')
+                        or disp[1].get('filename'))
+                    error = p.get('_DECRYPT_FAILED')
+                    if error:
+                        error = 'Decrypt failed: ' + ', '.join(error)
+                    structure.append('   %s* %s: %s (%d bytes%s)%s' % (
+                        '   ' * p['_DEPTH'], _id,
+                        p['content-type'][0],
+                        plen,
+                        ', %s' % filename if filename else '',
+                        ' !!' if error else ''))
+                    if error:
+                        errors.append((i, error))
+                    if filename:
+                        atts += 1
+                if errors:
+                    structure.append('\nErrors:\n')
+                    structure.extend('   * Part %s: %s' % (_id, err)
+                       for i, err in errors)
+                if atts:
+                    structure.append("""
+Note: attachment sizes include the MIME encoding overhead, once decoded
+      the files will be about 25% smaller.""")
+                report.append('\n'.join(structure))
+
+            if self.settings.verify_dates:
+                from email.utils import formatdate
+                dv = parsed['_DATE_VALIDITY']
+                d0 = dv['timestamps'][0]
+                dn = dv['timestamps'][-1]
+                hints = ''
+                if dv.get('time_went_backwards'):
+                    hints = """\n
+The header dates are not in the expected order, or appear to be from the
+future. One or more machines involved in creating or delivering the message
+probably has an incorrect clock."""
+                elif dv.get('delta_large'):
+                    hints = """\n
+Large deltas may indicate that an old message has been resent, or that
+one or more machines involved in creating or delivering the message have
+incorrect clocks."""
+                elif dv.get('delta_tzbug'):
+                    hints = """\n
+Deltas that are a multiple of 3600 seconds (1 hour) may be indicative of
+incorrect time zones on one or more machines involved in processing the
+message."""
+
+                report.append("""\
+## Dates and times
+
+Dates and times in header span %d seconds from %d time zones.
+
+   * Earliest: %s
+   * Latest: %s%s\
+""" % (         dv['delta'], len(dv['timezones']),
+                formatdate(d0), formatdate(dn), hints))
+
+            if self.settings.with_headprints:
+                report.append('## Header fingerprints\n\n'
+                    + '\n'.join('   * %s: %s' % (hp, val)
+                        for hp, val
+                        in sorted(list(parsed['_HEADPRINTS'].items()))))
+
+            if self.settings.with_path_info:
+                hops = parsed.get('_PATH_INFO', {}).get('hops')
+                if not hops:
+                    status = 'No network path information found.\n'
+                else:
+                    status = 'Hops:\n\n'
+                    for hop in reversed(hops):
+                        status += '   * %s at %s\n' % (
+                            hop.get('from_ip', '(unknown)'),
+                            formatdate(hop['received_ts']))
+
+                # FIXME: Any anomalies? Report DNS info?
+
+                report.append('## Network path information\n\n%s'
+                    % status.rstrip())
+
+            if self.settings.verify_dkim:
+                if not parsed.get('dkim-signature'):
+                    status = 'No DKIM signatures found in header.\n'
+                else:
+                    status = ''
+                    for dkim in parsed['dkim-signature']:
+                        who = dkim.get('i', '')
+                        if not who.endswith(dkim['d']):
+                            who += ('/' if who else '') + dkim['d']
+
+                        if dkim.get('_DKIM_TOO_OLD'):
+                            summary = 'Too old'
+                        elif dkim['_DKIM_VERIFIED']:
+                            summary = 'Good'
+                        else:
+                            summary = 'Invalid'
+
+                        status += '   * %s: v%s signature from %s%s\n' % (
+                            summary, dkim['v'], who,
+                            ' (partial body)' if dkim['_DKIM_PARTIAL'] else '')
+
+                        status += '     (using %s %s with %s at %s)\n' % (
+                            dkim['c'], dkim['a'], dkim['s'],
+                            dkim.get('t', 'unspecified time'))
+
+                report.append('## DKIM verification\n\n%s' % status.rstrip())
+
+            if self.settings.with_keywords:
+                kw = parsed.get('_KEYWORDS')
+                if not kw:
+                    report.append('## Keywords unavailable')
+                else:
+                    special = [k for k in kw if ':' in k]
+                    others = [k for k in kw if ':' not in k]
+                    report.append("""## Keywords
+
+These are the %d searchable keywords for this message:
+
+%s\n\n%s""" % (
+                        len(special) + len(others),
+                        _wrap(', '.join(special)),
+                        _wrap(', '.join(others))))
+
+            if self.settings.with_headers:
+                from moggie.email.headers import ADDRESS_HEADERS, SINGLETONS
+
+                seen = sorted([k for k in parsed if not k[:1] == '_'])
+                report.append("## Message headers\n\n%s"
+                    % _indent(parsed['_RAW_HEADERS'], code=True))
+
+            if self.settings.with_text:
+                report.append('## Message text')
+                for part in parsed.iter_parts(parsed):
+                    if part['content-type'][0] == 'text/plain':
+                        report[-1] += ('\n\n'
+                            + _indent(part['_TEXT'].strip(), code=True))
+
+            if self.settings.with_html_text:
+                report.append('## Message text (from HTML)')
+                for part in parsed.iter_parts(parsed):
+                    if part['content-type'][0] == 'text/html':
+                        report[-1] += ('\n\n'
+                            + _indent(part['_HTML_TEXT'].strip(), code=True))
+
+            if self.settings.with_html:
+                report.append('## Message HTML')
+                for part in parsed.iter_parts(parsed):
+                    if part['content-type'][0] == 'text/html':
+                        report[-1] += ('\n\n'
+                            + _indent(part['_TEXT'].strip(), code=True))
+
+            if self.settings.with_html_clean:
+                report.append('## Message HTML, sanitized')
+                for part in parsed.iter_parts(parsed):
+                    if part['content-type'][0] == 'text/html':
+                        report[-1] += ('\n\n'
+                            + _indent(part['_HTML_CLEAN'].strip(), code=True))
+
+        return '\n\n'.join(report) + '\n\n'
+
+    def emit_html(self, parsed):
+        if parsed is not None:
+            import markdown
+            self.print(markdown.markdown(self.generate_markdown(parsed)))
+
+    def emit_text(self, parsed):
+        if parsed is not None:
+            self.print(self.generate_markdown(parsed))
+
+    def emit_sexp(self, parsed):
+        if not self.emitted:
+            self.print('(', nl='')
+        if parsed is None:
+            self.print(')')
+        else:
+            if self.emitted:
+                self.print(',')
+            self.print_sexp(parsed)
+            self.emitted += 1
+
+    def emit_json(self, parsed):
+        if not self.emitted:
+            self.print('[')
+        if parsed is None:
+            self.print(']')
+        else:
+            if self.emitted:
+                self.print(',')
+            self.print_json(parsed)
+            self.emitted += 1
+
+    async def gather_emails(self):
+        for search in self.searches:
+            worker = self.connect()
+
+            metadata = None
+            if isinstance(search, (dict, list)):
+                # Metadata as dict!
+                metadata = search
+            elif search[:1] in ('{', '[') and search[-1:] in (']', '}'):
+                metadata = search
+
+            if metadata:
+                result = {'emails': [Metadata.FromParsed(metadata)]}
+            else:
+                request = RequestSearch(context=self.context, terms=search)
+                result = await self.repeatable_async_api_request(
+                    self.access, request)
+
+            if result and 'emails' in result:
+                for metadata in result['emails']:
+                    req = RequestEmail(
+                            metadata=metadata,
+                            full_raw=True,
+                            username=self.options['--username='][-1],
+                            password=self.options['--password='][-1])
+                    msg = await self.worker.async_api_request(self.access, req)
+                    md = Metadata(*metadata)
+                    if msg and 'email' in msg:
+                        yield {
+                            'data': base64.b64decode(msg['email']['_RAW']),
+                            'metadata': md,
+                            'search': search}
+                    else:
+                        yield {
+                            'error': 'Not found',
+                            'metadata': md,
+                            'search': search}
+            else:
+                yield {
+                    'error': 'Not found',
+                    'search': search}
+
+    def get_emitter(self):
+        if self.options['--format='][-1] == 'sexp':
+            return self.emit_sexp
+        if self.options['--format='][-1] == 'html':
+            return self.emit_html
+        if self.options['--format='][-1] == 'text':
+            return self.emit_text
+        else:
+            return self.emit_json
+
+    async def run(self):
+        emitter = self.get_emitter()
+
+        if self.searches:
+            async for message in self.gather_emails():
+                emitter(await self.Parse(self, message, self.settings,
+                    allow_network=self.allow_network))
+
+        if self.messages:
+            for message in self.messages:
+                emitter(await self.Parse(self, message, self.settings,
+                    allow_network=self.allow_network))
+
+        emitter(None)
+
+
 class CommandEmail(CLICommand):
     """moggie email [<options> ...]
 
@@ -1227,886 +2109,3 @@ class CommandEmail(CLICommand):
                 await self.do_send()
             else:
                 await self.render_result()
-
-
-class CommandParse(CLICommand):
-    """moggie parse [options] <terms>
-
-    This command will load and parse e-mails matching the search terms,
-    provided as files or standard input. Terms can also be full Moggie
-    metadata objects (for API use).
-
-    The output is either a human readable report (text or HTML), or a
-    JSON data structure explaining the contents, structure and technical
-    characteristics of the e-mail.
-
-    ### Options
-
-    %(OPTIONS)s
-
-    ### Examples
-
-        ...
-
-    FIXME
-    """
-    NAME = 'parse'
-    ROLES = AccessConfig.GRANT_READ
-    WEBSOCKET = False
-    WEB_EXPOSE = True
-    CONNECT = False    # We manually connect if we need to!
-    OPTIONS = [[
-        (None, None, 'moggie'),
-        ('--context=', ['default'], 'Context to use for default settings'),
-        ('--format=',     ['text'], 'X=(text*|html|json|sexp)'),
-        ('--stdin=',            [], None), # Allow lots to send stdin (internal)
-        ('--input=',            [], 'Load e-mail from file X, "-" for stdin'),
-        ('--username=',     [None], 'Username with which to access the email'),
-        ('--password=',     [None], 'Password with which to access the email'),
-        ('--or',           [False], 'Use OR instead of AND with search terms'),
-        ('--allow-network',     [False], 'Allow outgoing network requests'),
-        ('--forbid-filesystem', [False], 'Forbid loading local files'),
-        ('--write-back',        [False], 'Write parse results to search index'),
-        ] + CommandOpenPGP.OPTIONS_PGP_SETTINGS + [
-    ],[
-        (None, None, 'features'),
-        ('--with-metadata=',    ['N'], 'X=(Y|N*), include moggie metadata'),
-        ('--with-headers=',     ['Y'], 'X=(Y*|N), include parsed message headers'),
-        ('--with-path-info=',   ['Y'], 'X=(Y*|N), include path through network'),
-        ('--with-structure=',   ['Y'], 'X=(Y*|N), include message structure'),
-        ('--with-text=',        ['Y'], 'X=(Y*|N), include message text parts'),
-        ('--with-html=',        ['N'], 'X=(Y|N*), include raw message HTML'),
-        ('--with-html-clean=',  ['N'], 'X=(Y|N*), include sanitized message HTML'),
-        ('--with-html-text=',   ['Y'], 'X=(Y*|N), include text extracted from HTML'),
-        ('--with-data=',        ['N'], 'X=(Y|N*), include attachment data'),
-        ('--with-headprints=',  ['N'], 'X=(Y|N*), include header fingerprints'),
-        ('--with-keywords=',    ['N'], 'X=(Y|N*), include search-engine keywords'),
-        ('--with-openpgp=',     ['N'], 'X=(Y|N*), process OpenPGP content'),
-        ('--scan-moggie-zips=', ['Y'], 'X=(Y*|N), scan moggie-specific archives'),
-        ('--scan-archives=',    ['N'], 'X=(Y|N*), scan all archives for attachments'),
-        ('--zip-password=',        [], 'Password to use for ZIP decryption'),
-        ] + CommandOpenPGP.OPTIONS_DECRYPTING
-          + CommandOpenPGP.OPTIONS_VERIFYING + [
-    #   ('--decrypt=',          ['N'], '? X=(Y|N*), attempt to decrypt contents'),
-    #   ('--verify-pgp=',       ['N'], '? X=(Y|N*), attempt to verify PGP signatures'),
-        ('--verify-dates=',     ['Y'], 'X=(Y*|N), attempt to validate message dates'),
-        ('--verify-dkim=',      ['Y'], 'X=(Y*|N), attempt to verify DKIM signatures'),
-        ('--dkim-max-age=',     [180], 'X=Max age (days, default=180) for DKIM validation'),
-        ('--with-nothing=',     ['N'], 'X=(Y|N*), parse nothing by default'),
-        ('--with-everything=',  ['N'], 'X=(Y|N*), try to parse everything!'),
-        ('--ignore-index=',     ['N'], 'X=(Y|N*), Ignore contents of search index'),
-    ]]
-
-    class Settings:
-        def __init__(self, **kwargs):
-            def _opt(k, a, defaults):
-                val = kwargs.get(a) or kwargs.get(k)
-                if val is None:
-                    if defaults:
-                        val = defaults[-1]
-                elif isinstance(val, list):
-                    if len(val) > (1 if defaults else 0):
-                        val = val[-1]
-                    elif defaults:
-                        val = defaults[-1]
-                    else:
-                        val = False
-                if val in (True, 'Y', 'y', 'true', 'True', 'TRUE'):
-                    return True
-                if val in (False, 'N', 'n', 'false', 'False', 'FALSE', None):
-                    return False
-                return val
-
-            w_none = _opt('--with-nothing=', 'with_nothing', None)
-            w_all = _opt('--with-everything=', 'with_everything', None)
-            for key, defaults, comment in CommandParse.OPTIONS[1]:
-                if w_none:
-                    defaults = [False]
-                elif w_all and key not in (
-                        '--ignore-index=',
-                        '--dkim-max-age=',
-                        '--verify-from=', '--decrypt-with=',
-                        '--with-nothing=', '--with-everything='):
-                    defaults = [True]
-                if key:
-                    attr = key[2:-1].replace('-', '_')
-                    if False and w_all and key not in (
-                            '--ignore-index=',
-                            '--dkim-max-age=',
-                            '--verify-from=', '--decrypt-with=',
-                            '--with-nothing=', '--with-everything='):
-                        self.__setattr__(attr, True)
-                    self.__setattr__(attr, _opt(key, attr, defaults))
-
-    class OpenPGPSettings:
-        def __init__(self, cli_obj, settings, parsed_message):
-            self.cli_obj = cli_obj
-            self.context = cli_obj.context
-            self.access = cli_obj.access
-            self.worker = None
-
-            if settings.decrypt_with and settings.verify_from:
-                self.options = cli_obj.options
-
-            else:
-                self.options = copy.copy(cli_obj.options)
-                if not settings.decrypt_with:
-                    dw = self.options['--decrypt-with='] = []
-                    for r in parsed_message.get('to', []):
-                        dw.append('PGP:@PKEY:%s' % r['address'])
-                    for r in parsed_message.get('cc', []):
-                        dw.append('PGP:@PKEY:%s' % r['address'])
-
-                if not settings.verify_from:
-                    frm = parsed_message.get('from')
-                    if frm:
-                        self.options['--verify-from='] = [
-                            'PGP:@CERT:%s' % frm['address']]
-
-        def connect(self):
-            self.worker = self.cli_obj.connect()
-            return self.worker
-
-    @classmethod
-    async def parse_openpgp(cls, cli_obj, settings, parsed_message):
-        import sop
-        # parse_message.decrypt is sync, but crypto ops are async, ugh.
-        # So we do this in two passes, first we gather the things to
-        # process, then we inject the results back into the parse tree.
-
-        openpgp_cfg = cls.OpenPGPSettings(cli_obj, settings, parsed_message)
-        _gathered = {}
-        _done = {}
-
-        def _decrypt_mep(part_bin, p_idx, part, parent):
-            ctype = part['content-type']
-            if p_idx in _done:
-                data, verifications, sessionkeys = _done[p_idx]
-                new_part = {
-                    '_CRYPTO': {
-                        'openpgp_decrypted_part': p_idx,
-                        'openpgp_verifications': [
-                            CommandOpenPGP.verification_as_dict(v)
-                            for v in verifications],
-                        },
-                    'content-type': ['multipart/mixed', {}]}
-
-                del _done[p_idx]
-                return (p_idx, p_idx+3), [(new_part, data)]
-
-            if ctype[1].get('protocol') != 'application/pgp-encrypted':
-                return None
-
-            mpart = parent['_PARTS'][p_idx + 1]
-            ppart = parent['_PARTS'][p_idx + 2]
-
-            mpart_content = str(parent._bytes(mpart), 'latin-1').strip()
-            if (mpart_content.lower().split() != ['version:', '1']
-                    or ppart['content-type'][0] != 'application/octet-stream'):
-                return None
-
-            _gathered[p_idx] = ('decrypt', (parent._bytes(ppart),))
-            return None
-
-        def _verify_signed(part_bin, p_idx, part, parent):
-            sig = None
-            subs = []
-            for p in parent['_PARTS'][p_idx+1:]:
-                if p['_DEPTH'] == part['_DEPTH']:
-                    break
-                if (p['content-type'][0] == 'application/pgp-signature'
-                        and p['_DEPTH'] == part['_DEPTH'] + 1):
-                    sig = parent._bytes(p)
-                    break
-                else:
-                    subs.append(p)
-
-            if p_idx in _done:
-                text, verifications = _done[p_idx]
-                _crypto = {'openpgp_verifications': [
-                    CommandOpenPGP.verification_as_dict(v)
-                    for v in verifications]}
-                for p in subs:
-                    p['_CRYPTO'] = _crypto
-                del _done[p_idx]
-                return None
-
-            if sig:
-                dpart = CommandOpenPGP.normalize_text(
-                    parent._raw(parent['_PARTS'][p_idx + 1], header=True)
-                    ).rstrip() + b'\r\n'
-                _gathered[p_idx] = ('verify', (dpart, sig))
-            return None
-
-        def _decrypt_or_verify_inline(part_bin, p_idx, part, parent):
-            text = part.get('_TEXT', '')
-            decrypt = re.match('^\s*-----BEGIN PGP MESSAGE', text, flags=re.S)
-            verify = re.match('^\s*-----BEGIN PGP SIGNED', text, flags=re.S)
-
-            if p_idx in _done:
-                ctype = part['content-type']
-                cdisp = part.get('content-disposition')
-                if decrypt:
-                    data, verifications, sessionkeys = _done[p_idx]
-                    new_part = {
-                        '_CRYPTO': {
-                            'openpgp_decrypted_part': p_idx,
-                            'openpgp_verifications': [
-                                CommandOpenPGP.verification_as_dict(v)
-                                for v in verifications]},
-                        'content-type': ['text/plain', {'charset': 'utf-8'}]}
-                    if cdisp:
-                        new_part['content-disposition'] = cdisp
-                    del _done[p_idx]
-                    return (p_idx, p_idx+1), [(new_part, data)]
-
-                if verify:
-                    text, verifications = _done[p_idx]
-                    new_part = {
-                        '_CRYPTO': {
-                            'openpgp_verifications': [
-                                CommandOpenPGP.verification_as_dict(v)
-                                for v in verifications if v]},
-                        'content-type': ['text/plain', {'charset': 'utf-8'}]}
-                    if cdisp:
-                        new_part['content-disposition'] = cdisp
-                    del _done[p_idx]
-                    return (p_idx, p_idx+1), [(new_part, text)]
-
-                del _done[p_idx]
-                return None
-
-            if decrypt:
-                _gathered[p_idx] = ('decrypt', (text,))
-            elif verify:
-                _gathered[p_idx] = ('verify', (text,))
-            return None
-
-        errors = 0
-        parsed_message['_OPENPGP_ERRORS'] = []
-        for tries in range(0, 3):
-            parsed_message.decrypt({
-                'multipart/encrypted': [_decrypt_mep],
-                'multipart/signed': [_verify_signed],
-                'text/plain:first': [_decrypt_or_verify_inline]})
-            if not _gathered:
-                break
-
-            for idx, (op, data) in list(_gathered.items()):
-                action = None
-                try:
-                    if op == 'decrypt':
-                        action = CommandOpenPGP.get_decryptor(
-                            openpgp_cfg, data=data[0])
-                        _done[idx] = await action(*data)
-                    elif op == 'verify':
-                        action = CommandOpenPGP.get_verifier(
-                            openpgp_cfg, sig=data[-1])
-                        _done[idx] = await action(*data)
-                except Exception as e:
-                    if not action:
-                        parsed_message['_OPENPGP_ERRORS'].append(
-                            'Missing information (keys?), cannot %s' % op)
-                    else:
-                        parsed_message['_OPENPGP_ERRORS'].append(str(e))
-                    errors += 1
-
-                del _gathered[idx]
-            if errors:
-                break
-
-    @classmethod
-    async def Parse(cls, cli_obj, data,
-            settings=None, allow_network=False,
-            get_appworker=None, get_context=None,
-            **kwargs):
-        t0 = time.time()
-
-        if settings is None:
-            settings = cls.Settings(**kwargs)
-
-        result = {}
-        if isinstance(data, dict):
-            result = data
-        else:
-            result['data'] = data
-        data = result.get('data')
-
-        md = result.get('metadata')
-        html_magic = (settings.with_html
-            or settings.with_html_text or settings.with_html_clean)
-        if data:
-            from moggie.email.util import make_ts_and_Metadata, quick_msgparse
-            from moggie.email.parsemime import parse_message
-            header_end, header_summary = quick_msgparse(data, 0)
-
-            p = parse_message(data, fix_mbox_from=(data[:5] == b'From '))
-
-            p['_HEADER_BYTES'] = header_end
-            result['parsed'] = p
-
-            if (md is None) or settings.ignore_index:
-                ignored_ts, md = make_ts_and_Metadata(
-                    time.time(), 0, header_summary, [], header_summary)
-                result['metadata'] = md
-
-            if settings.with_path_info:
-                from moggie.security.headers import validate_smtp_hops
-                p['_PATH_INFO'] = await validate_smtp_hops(p,
-                    check_dns=allow_network)
-            if settings.with_headers:
-                p['_RAW_HEADERS'] = str(
-                    data[:header_end], 'utf-8', 'replace').rstrip()
-            if settings.verify_dates:
-                from moggie.security.headers import validate_dates
-                p['_DATE_VALIDITY'] = validate_dates(md.timestamp, p)
-
-            if settings.with_openpgp:
-                p.with_structure().with_text()
-                await cls.parse_openpgp(cli_obj, settings, p)
-            elif settings.with_structure:
-                p.with_structure()
-
-            if settings.scan_moggie_zips or settings.scan_archives:
-                p.with_archive_contents(
-                    moggie_archives=settings.scan_moggie_zips,
-                    zip_archives=settings.scan_archives,
-                    zip_passwords=settings.zip_password)
-
-            if settings.with_text or html_magic or settings.with_keywords:
-                p.with_text()
-            if settings.with_data:
-                p.with_data()
-
-            if html_magic:
-                for part in p.iter_parts(p):
-                    if part.get('content-type', [None])[0] == 'text/html':
-                        html = part['_TEXT']
-                        if settings.with_html_clean:
-                            from moggie.security.html import clean_email_html
-                            part['_HTML_CLEAN'] = clean_email_html(md, p, part,
-                                # FIXME: Make these configurable
-                                inline_images=True,
-                                remote_images=True,
-                                target_blank=True)
-
-                        if settings.with_html_text:
-                            from moggie.security.html import html_to_markdown
-                            part['_HTML_TEXT'] = html_to_markdown(html)
-
-            if settings.with_headprints:
-                from moggie.search.headerprint import HeaderPrints
-                p['_HEADPRINTS'] = HeaderPrints(p)
-
-            if settings.verify_dkim:
-                from moggie.security.dkim import verify_all_async
-                hcount = len(p.get('dkim-signature', []))
-                verifications = []
-                if not settings.ignore_index:
-                    ts, verifications = md.get_dkim_status()
-                if not verifications and p.get('dkim-signature'):
-                    now = time.time()
-                    maxage = 24 * 3600 * int(settings.dkim_max_age)
-                    if (md.timestamp >= now - maxage) and allow_network:
-                        verifications = await verify_all_async(
-                            hcount, data, logger=logging)
-                        if verifications:
-                            md.set_dkim_status(verifications, ts=now)
-                    else:
-                        for dkim in p['dkim-signature']:
-                            dkim['_DKIM_TOO_OLD'] = True
-                            dkim['_DKIM_VERIFIED'] = False
-                            dkim['_DKIM_PARTIAL'] = False
-                for i, ok in enumerate(verifications):
-                    dkim = p['dkim-signature'][i]
-                    dkim['_DKIM_VERIFIED'] = ok
-                    dkim['_DKIM_PARTIAL'] = False
-                    if dkim.get('l'):
-                        if int(dkim['l']) < (len(data) - header_end):
-                            dkim['_DKIM_PARTIAL'] = True
-
-            # Important: This must come last, it checks for the output of
-            #            the above sections!
-            if settings.with_keywords:
-                from moggie.search.extractor import KeywordExtractor
-                kwe = KeywordExtractor()
-                more, kws = kwe.extract_email_keywords(None, p)
-                p['_KEYWORDS'] = sorted(list(kws))
-
-            # Cleanup phase; depending on our --with-... arguments, we may
-            # want to remove some stuff from the output.
-
-            removing = []
-            if not settings.with_headers:
-                removing.extend(k for k in p if not k[:1] == '_')
-                if settings.verify_dkim and 'dkim-signature' in removing:
-                    removing.remove('dkim-signature')
-                removing.append('_DATE_TS')
-                removing.append('_RAW_HEADERS')
-                removing.append('_mbox_separator')
-                removing.append('_ORDER')
-            if not settings.with_structure:
-                removing.append('_HEADER_BYTES')
-            if not (settings.with_structure
-                    or settings.with_text
-                    or settings.with_data
-                    or html_magic):
-                removing.append('_PARTS')
-            for hdr in removing:
-                if hdr in p:
-                    del p[hdr]
-
-            if settings.with_metadata:
-                result['metadata'] = result['metadata'].parsed()
-            else:
-                del result['metadata']
-
-            if not settings.with_structure and '_PARTS' in p:
-                parts = p['_PARTS']
-                for i in reversed(range(0, len(parts))):
-                    ctype = parts[i]['content-type'][0]
-                    if ctype.startswith('multipart/'):
-                        parts.pop(i)
-                    elif not (settings.with_data
-                            or ctype in ('text/plain', 'text/html')):
-                        parts.pop(i)
-                    else:
-                        for key in [k for k in parts[i] if k[:1] == '_']:
-                            if key == '_TEXT' and settings.with_text:
-                                pass
-                            elif key.startswith('_HTML') and html_magic:
-                                pass
-                            elif key == '_DATA' and settings.with_data:
-                                pass
-                            else:
-                                del parts[i][key]
-
-        if 'data' in result:
-            del result['data']
-
-        result['_PARSE_TIME_MS'] = int(1000 * (time.time() - t0))
-        return result
-
-    def __init__(self, *args, **kwargs):
-        self.emitted = 0
-        self.settings = None
-        self.searches = []
-        self.messages = []
-        super().__init__(*args, **kwargs)
-
-    def configure(self, args):
-        args = self.strip_options(args)
-
-        # FIXME: Think about this, how DO we want to restrict access to the
-        #        filesytem? It is probaby per user/context.
-        self.allow_fs = not self.options['--forbid-filesystem'][-1]
-        self.allow_network = self.options['--allow-network'][-1]
-        self.write_back = self.options['--write-back'][-1]
-
-        self.settings = self.Settings(**self.options)
-        self.settings.zip_password = self.options['--zip-password=']
-
-        if not self.allow_network:
-            self.settings.verify_dkim = False
-            if len(self.options['--verify-dkim=']) > 1:
-                raise Nonsense('Cannot verify DKIM without network access')
-
-        def _load(t, target):
-            if t[:1] == '-':
-                if self.options['--stdin=']:
-                    data = self.options['--stdin='].pop(0)
-                else:
-                    data = sys.stdin.buffer.read()
-                target.append({
-                    'stdin': True,
-                    'data': data})
-                return True
-            elif t[:7] == 'base64:':
-                target.append({
-                    'base64': True,
-                    'data': base64.b64decode(t[7:])})
-                return True
-            elif self.allow_fs and (os.path.sep in t) and os.path.exists(t):
-                with open(t, 'rb') as fd:
-                    target.append({
-                        'path': t,
-                        'data': fd.read()})
-                return True
-            return False
-
-        def _read_file(current, i, t, target):
-            if _load(t, target):
-                current[i] = None
-
-        # This lets the caller provide messages for forwarding or replying to
-        # directly, instead of searching. Anything left in the options after
-        # this will be treated as a search term.
-        for target, key in (
-                (self.messages, '--input='),
-                (self.messages, None)):
-            current = self.options.get(key, []) if key else args
-            i = None
-            for i, t in enumerate(current):
-                _read_file(current, i, t, target)
-            if key:
-                self.options[key] = [t for t in current if t]
-            else:
-                if i is None:
-                    _read_file(['-'], 0, '-', self.messages)
-                else:
-                    args = [t for t in current if t]
-
-        return self.configure2(args)
-
-    def configure2(self, args):
-        if args:
-            self.searches.append(self.combine_terms(args))
-        self.searches.extend(self.options['--input='])
-        self.options['--input='] = []
-        return []
-
-    def generate_markdown(self, parsed):
-        def _indent(blob, indent='    ', code=False):
-            if code:
-                lines = ['```'] + blob.splitlines() + ['```']
-            else:
-                lines = blob.splitlines()
-            return '\n'.join(indent+l for l in lines)
-
-        def _wrap(words, maxlen=72, indent=''):
-            lines = [indent]
-            if isinstance(words, str):
-                words = words.split()
-            for word in words:
-                if len(lines[-1]) + len(word) < maxlen:
-                    lines[-1] += word + ' '
-                else:
-                    lines[-1] = lines[-1].rstrip()
-                    lines.append(indent + word + ' ')
-            return '\n'.join(lines)
-
-        report = []
-        if parsed.get('stdin'):
-            report.append('# Parsed e-mail from standard input')
-        elif parsed.get('search'):
-            s = '%s' % parsed['search']
-            if s[:1] == '{' and s[-1:] == '}':
-                s = '(internal metadata)'
-                report.append('# Parsed e-mail')
-            else:
-                if len(s) > 42:
-                    s = s[:40] + '..'
-                report.append('# Parsed e-mail from search: %s' % s)
-
-        if self.settings.with_metadata:
-            md = parsed.get('metadata')
-            if not md:
-                report.append("""## Metadata unavailable""")
-            else:
-                if md['idx']:
-                    msg = 'This is the metadata stored in the search index'
-                else:
-                    msg = 'This is the message metadata'
-                report.append("""## Metadata\n\n%s:\n\n%s\n
-    data_type=%s
-    uuid=%s
-    ts=%d, id=%s, parent=%s, thread=%s, pointers=%s
-    extras=%s""" % (msg,
-                    '\n'.join('    %s' % h for h in md['raw_headers'].splitlines()),
-                    md['data_type'],
-                    md['uuid'],
-                    md['ts'],
-                    md['idx'],
-                    md.get('parent_id', '(none)'),
-                    md.get('thread_id', '(none)'),
-                    len(md['ptrs']),
-                    dict((k, md[k]) for k in md['_MORE'])))
-
-        if 'error' in parsed:
-            report.append('Error loading message: %s' % parsed['error'])
-
-        elif 'parsed' in parsed:
-            parsed = parsed['parsed']
-
-            if self.settings.with_structure:
-                # FIXME: We need to explain the structure of encrypted/signed
-                #        messages! What became what? What was signed?
-                atts = 0
-                hlen = parsed['_HEADER_BYTES']
-                structure = [
-                   '## Message structure\n',
-                   '   * Message header (%s bytes)' % hlen]
-                errors = []
-                replaced = {}
-                for i, p in enumerate(parsed['_PARTS']):
-                    _id = '%d' % (i+1)
-                    if '_REPLACE' in p:
-                        replacement = '%d' % (p['_REPLACE']+1)
-                        replaced[replacement] = _id
-                    if _id in replaced:
-                        _id = 'Decrypted Part %s (Part %s)' % (replaced[_id], _id)
-                    elif p.get('_CRYPTO', {}).get('openpgp_verifications'):
-                        _id = 'Signed Part ' + _id
-                    elif p.get('_CRYPTO', {}).get('openpgp_decrypted_part'):
-                        _id = 'Decrypted Part ' + _id
-                    else:
-                        _id = 'Part ' + _id
-
-                    plen = p['_BYTES'][2] - p['_BYTES'][1]
-                    disp = p.get('content-disposition') or [None, {}]
-                    filename = (p['content-type'][1].get('name')
-                        or disp[1].get('filename'))
-                    error = p.get('_DECRYPT_FAILED')
-                    if error:
-                        error = 'Decrypt failed: ' + ', '.join(error)
-                    structure.append('   %s* %s: %s (%d bytes%s)%s' % (
-                        '   ' * p['_DEPTH'], _id,
-                        p['content-type'][0],
-                        plen,
-                        ', %s' % filename if filename else '',
-                        ' !!' if error else ''))
-                    if error:
-                        errors.append((i, error))
-                    if filename:
-                        atts += 1
-                if errors:
-                    structure.append('\nErrors:\n')
-                    structure.extend('   * Part %s: %s' % (_id, err)
-                       for i, err in errors)
-                if atts:
-                    structure.append("""
-Note: attachment sizes include the MIME encoding overhead, once decoded
-      the files will be about 25% smaller.""")
-                report.append('\n'.join(structure))
-
-            if self.settings.verify_dates:
-                from email.utils import formatdate
-                dv = parsed['_DATE_VALIDITY']
-                d0 = dv['timestamps'][0]
-                dn = dv['timestamps'][-1]
-                hints = ''
-                if dv.get('time_went_backwards'):
-                    hints = """\n
-The header dates are not in the expected order, or appear to be from the
-future. One or more machines involved in creating or delivering the message
-probably has an incorrect clock."""
-                elif dv.get('delta_large'):
-                    hints = """\n
-Large deltas may indicate that an old message has been resent, or that
-one or more machines involved in creating or delivering the message have
-incorrect clocks."""
-                elif dv.get('delta_tzbug'):
-                    hints = """\n
-Deltas that are a multiple of 3600 seconds (1 hour) may be indicative of
-incorrect time zones on one or more machines involved in processing the
-message."""
-
-                report.append("""\
-## Dates and times
-
-Dates and times in header span %d seconds from %d time zones.
-
-   * Earliest: %s
-   * Latest: %s%s\
-""" % (         dv['delta'], len(dv['timezones']),
-                formatdate(d0), formatdate(dn), hints))
-
-            if self.settings.with_headprints:
-                report.append('## Header fingerprints\n\n'
-                    + '\n'.join('   * %s: %s' % (hp, val)
-                        for hp, val
-                        in sorted(list(parsed['_HEADPRINTS'].items()))))
-
-            if self.settings.with_path_info:
-                hops = parsed.get('_PATH_INFO', {}).get('hops')
-                if not hops:
-                    status = 'No network path information found.\n'
-                else:
-                    status = 'Hops:\n\n'
-                    for hop in reversed(hops):
-                        status += '   * %s at %s\n' % (
-                            hop.get('from_ip', '(unknown)'),
-                            formatdate(hop['received_ts']))
-
-                # FIXME: Any anomalies? Report DNS info?
-
-                report.append('## Network path information\n\n%s'
-                    % status.rstrip())
-
-            if self.settings.verify_dkim:
-                if not parsed.get('dkim-signature'):
-                    status = 'No DKIM signatures found in header.\n'
-                else:
-                    status = ''
-                    for dkim in parsed['dkim-signature']:
-                        who = dkim.get('i', '')
-                        if not who.endswith(dkim['d']):
-                            who += ('/' if who else '') + dkim['d']
-
-                        if dkim.get('_DKIM_TOO_OLD'):
-                            summary = 'Too old'
-                        elif dkim['_DKIM_VERIFIED']:
-                            summary = 'Good'
-                        else:
-                            summary = 'Invalid'
-
-                        status += '   * %s: v%s signature from %s%s\n' % (
-                            summary, dkim['v'], who,
-                            ' (partial body)' if dkim['_DKIM_PARTIAL'] else '')
-
-                        status += '     (using %s %s with %s at %s)\n' % (
-                            dkim['c'], dkim['a'], dkim['s'],
-                            dkim.get('t', 'unspecified time'))
-
-                report.append('## DKIM verification\n\n%s' % status.rstrip())
-
-            if self.settings.with_keywords:
-                kw = parsed.get('_KEYWORDS')
-                if not kw:
-                    report.append('## Keywords unavailable')
-                else:
-                    special = [k for k in kw if ':' in k]
-                    others = [k for k in kw if ':' not in k]
-                    report.append("""## Keywords
-
-These are the %d searchable keywords for this message:
-
-%s\n\n%s""" % (
-                        len(special) + len(others),
-                        _wrap(', '.join(special)),
-                        _wrap(', '.join(others))))
-
-            if self.settings.with_headers:
-                from moggie.email.headers import ADDRESS_HEADERS, SINGLETONS
-
-                seen = sorted([k for k in parsed if not k[:1] == '_'])
-                report.append("## Message headers\n\n%s"
-                    % _indent(parsed['_RAW_HEADERS'], code=True))
-
-            if self.settings.with_text:
-                report.append('## Message text')
-                for part in parsed.iter_parts(parsed):
-                    if part['content-type'][0] == 'text/plain':
-                        report[-1] += ('\n\n'
-                            + _indent(part['_TEXT'].strip(), code=True))
-
-            if self.settings.with_html_text:
-                report.append('## Message text (from HTML)')
-                for part in parsed.iter_parts(parsed):
-                    if part['content-type'][0] == 'text/html':
-                        report[-1] += ('\n\n'
-                            + _indent(part['_HTML_TEXT'].strip(), code=True))
-
-            if self.settings.with_html:
-                report.append('## Message HTML')
-                for part in parsed.iter_parts(parsed):
-                    if part['content-type'][0] == 'text/html':
-                        report[-1] += ('\n\n'
-                            + _indent(part['_TEXT'].strip(), code=True))
-
-            if self.settings.with_html_clean:
-                report.append('## Message HTML, sanitized')
-                for part in parsed.iter_parts(parsed):
-                    if part['content-type'][0] == 'text/html':
-                        report[-1] += ('\n\n'
-                            + _indent(part['_HTML_CLEAN'].strip(), code=True))
-
-        return '\n\n'.join(report) + '\n\n'
-
-    def emit_html(self, parsed):
-        if parsed is not None:
-            import markdown
-            self.print(markdown.markdown(self.generate_markdown(parsed)))
-
-    def emit_text(self, parsed):
-        if parsed is not None:
-            self.print(self.generate_markdown(parsed))
-
-    def emit_sexp(self, parsed):
-        if not self.emitted:
-            self.print('(', nl='')
-        if parsed is None:
-            self.print(')')
-        else:
-            if self.emitted:
-                self.print(',')
-            self.print_sexp(parsed)
-            self.emitted += 1
-
-    def emit_json(self, parsed):
-        if not self.emitted:
-            self.print('[')
-        if parsed is None:
-            self.print(']')
-        else:
-            if self.emitted:
-                self.print(',')
-            self.print_json(parsed)
-            self.emitted += 1
-
-    async def gather_emails(self):
-        for search in self.searches:
-            worker = self.connect()
-
-            metadata = None
-            if isinstance(search, (dict, list)):
-                # Metadata as dict!
-                metadata = search
-            elif search[:1] in ('{', '[') and search[-1:] in (']', '}'):
-                metadata = search
-
-            if metadata:
-                result = {'emails': [Metadata.FromParsed(metadata)]}
-            else:
-                request = RequestSearch(context=self.context, terms=search)
-                result = await self.repeatable_async_api_request(
-                    self.access, request)
-
-            if result and 'emails' in result:
-                for metadata in result['emails']:
-                    req = RequestEmail(
-                            metadata=metadata,
-                            full_raw=True,
-                            username=self.options['--username='][-1],
-                            password=self.options['--password='][-1])
-                    msg = await self.worker.async_api_request(self.access, req)
-                    md = Metadata(*metadata)
-                    if msg and 'email' in msg:
-                        yield {
-                            'data': base64.b64decode(msg['email']['_RAW']),
-                            'metadata': md,
-                            'search': search}
-                    else:
-                        yield {
-                            'error': 'Not found',
-                            'metadata': md,
-                            'search': search}
-            else:
-                yield {
-                    'error': 'Not found',
-                    'search': search}
-
-    def get_emitter(self):
-        if self.options['--format='][-1] == 'sexp':
-            return self.emit_sexp
-        if self.options['--format='][-1] == 'html':
-            return self.emit_html
-        if self.options['--format='][-1] == 'text':
-            return self.emit_text
-        else:
-            return self.emit_json
-
-    async def run(self):
-        emitter = self.get_emitter()
-
-        if self.searches:
-            async for message in self.gather_emails():
-                emitter(await self.Parse(self, message, self.settings,
-                    allow_network=self.allow_network))
-
-        if self.messages:
-            for message in self.messages:
-                emitter(await self.Parse(self, message, self.settings,
-                    allow_network=self.allow_network))
-
-        emitter(None)
