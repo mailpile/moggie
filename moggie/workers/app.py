@@ -297,7 +297,8 @@ class AppWorker(PublicWorker):
         if (access is True) or (access and
                 access.config_key == self.app.config.ACCESS_ZERO):
             loop = asyncio.get_event_loop()
-            return await self.async_call(loop, 'rpc/api', request_obj)
+            return await self.async_call(
+                loop, 'rpc/api', request_obj, hide_qs=True)
         else:
             raise PermissionError('Access denied')
 

@@ -26,6 +26,9 @@ import json
 import logging
 import zlib
 
+from base64 import urlsafe_b64encode as us_b64encode
+from base64 import urlsafe_b64decode as us_b64decode
+
 from urllib.parse import quote, unquote, unquote_to_bytes
 
 from ..crypto.aes_utils import aes_ctr_encrypt, aes_ctr_decrypt, make_aes_key
@@ -94,25 +97,25 @@ def dumb_encode_asc(v,
         assert(len(iv) == 16)
         encoded = dumb_encode_bin(v, compress=compress, comp_asc=comp_asc)
         encrypted = aes_ctr_encrypt(key, iv, encoded)
-        return 'E' + str(binascii.b2a_base64(iv + encrypted, newline=False), 'latin-1')
+        return 'E' + str(us_b64encode(iv + encrypted), 'latin-1')
 
     try:
         if compress and len(v) > compress:
             marker, compressor = comp_asc
-            compressed = str(binascii.b2a_base64(
-                compressor.compress(dumb_encode_bin(v, compress=False)),
-                newline=False), 'latin-1')
+            compressed = str(us_b64encode(
+                    compressor.compress(dumb_encode_bin(v, compress=False))),
+                'latin-1')
             if len(compressed) < len(v):
                 return marker + compressed
     except TypeError:
         pass
 
-    if isinstance(v, bytes):     return ('B' + str(binascii.b2a_base64(v, newline=False), 'latin-1'))
+    if isinstance(v, bytes):     return ('B' + str(us_b64encode(v), 'latin-1'))
     if isinstance(v, str):       return ('U' + quote(v, safe='').replace('.', '%2E'))
     if isinstance(v, bool):      return ('y' if v else 'n')
     if isinstance(v, int):       return ('d%d' % v)
     if isinstance(v, float):     return ('f%f' % v)
-    if isinstance(v, bytearray): return ('B' + str(binascii.b2a_base64(v, newline=False), 'latin-1'))
+    if isinstance(v, bytearray): return ('B' + str(us_b64encode(v), 'latin-1'))
     if v is None:                return ('-')
 
     if hasattr(v, 'dumb_encode_asc'): return v.dumb_encode_asc()
@@ -172,13 +175,13 @@ def dumb_decode(v,
     if isinstance(v, bytes):
         if v[:1] == b' ': v = v.lstrip(b' ')
         if v[:1] == b'b': return v[1:]
-        if v[:1] == b'B': return binascii.a2b_base64(v[1:])
+        if v[:1] == b'B': return us_b64decode(v[1:])
         if v[:1] == b'u': return str(v[1:], 'utf-8')
         if v[:1] == b'U': return unquote(str(v[1:], 'latin-1'))
     else:
         if v[:1] == ' ': v = v.lstrip(' ')
         if v[:1] == 'b': return v[1:].encode('latin-1')
-        if v[:1] == 'B': return binascii.a2b_base64(v[1:])
+        if v[:1] == 'B': return us_b64decode(v[1:])
         if v[:1] == 'u': return str(v[1:].encode('latin-1'), 'utf-8')
         if v[:1] == 'U': return unquote(v[1:])
 
@@ -205,7 +208,7 @@ def dumb_decode(v,
 
     for ms, mb, decomp in ([('Z', b'Z', zlib.decompress)] + decomp_asc):
         if v[:1] in (ms, mb):
-            return dumb_decode(decomp(binascii.a2b_base64(v[1:])))
+            return dumb_decode(decomp(us_b64decode(v[1:])))
 
     for ms, mb, decomp in ([('z', b'z', zlib.decompress)] + decomp_bin):
         if v[:1] == mb:
@@ -214,7 +217,7 @@ def dumb_decode(v,
             return dumb_decode(decomp(v[1:].encode('latin-1')))
 
     if v[:1] in ('E', b'E'):
-        v = b'e' + binascii.a2b_base64(v[1:])
+        v = b'e' + us_b64decode(v[1:])
     if v[:1] in ('e', b'e'):
         iv, data = v[1:17], v[17:]
         if iv_to_aes_key is not None:

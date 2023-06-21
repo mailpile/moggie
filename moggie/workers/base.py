@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import inspect
 import logging
@@ -19,7 +20,6 @@ try:
 except ImportError:
     setproctitle = None
 
-from base64 import b64encode
 from multiprocessing import Process
 
 from ..api.exceptions import *
@@ -112,7 +112,7 @@ class BaseWorker(Process):
 
         self.log_level = log_level
         self._notify = notify
-        self._secret = b64encode(os.urandom(18), b'-_').strip()
+        self._secret = base64.b64encode(os.urandom(18), b'-_').strip()
         self._auth_header = ''
         self._status_file = os.path.join(status_dir, self.name + '.url')
         self._want_host = host or self.LOCALHOST
