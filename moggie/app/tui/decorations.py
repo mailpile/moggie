@@ -15,6 +15,8 @@ EMOJI = {
     'mailbox':        '\U0001F4EA',  # Mailbox, flag down
     'search':         '\U0001F50E',  # Magnifying glass
     'attachment':     '\U0001F4CE',  # Paperclip
+    'encrypted':      '\U0001F512',  # Lock
+    'verified':       '\U00002705',  # Check mark button
     'lock':           '\U0001F512'}  # Lock
 
 
@@ -87,16 +89,25 @@ DEFAULT_PALETTE = [
             ('check_date',     'dark green',  'black',     ''),
             ('email_key_from', 'dark gray',   'black',     ''),
             ('email_val_from', 'light blue',  'black',     ''),
+            ('email_cs_from',  'dark gray',   'black',     ''),
             ('email_key_att',  'dark gray',   'black',     ''),
             ('email_val_att',  'light blue',  'black',     ''),
+            ('email_cs_att',   'dark gray',   'black',     ''),
             ('email_key_to',   'dark gray',   'black',     ''),
             ('email_val_to',   'dark gray',   'black',     ''),
+            ('email_cs_to',    'dark gray',   'black',     ''),
             ('email_key_cc',   'dark gray',   'black',     ''),
             ('email_val_cc',   'dark gray',   'black',     ''),
+            ('email_cs_cc',    'dark gray',   'black',     ''),
             ('email_key_date', 'dark gray',   'black',     ''),
             ('email_val_date', 'dark gray',   'black',     ''),
+            ('email_cs_date',  'dark gray',   'black',     ''),
             ('email_key_subj', 'dark gray',   'black',     ''),
             ('email_val_subj', 'light green', 'black',     ''),
+            ('email_cs_subj',  'dark gray',   'black',     ''),
+            ('email_body',     'light gray',  'black',     ''),
+            ('email_body_bg',  'dark gray',   'black',     ''),
+            ('email_cstate',   'yellow',      'black',     ''),
             ('browse_name',    'white',       'black',     ''),
             ('browse_info',    'dark gray',   'black',     ''),
             ('browse_label',   'dark gray',   'black',     ''),

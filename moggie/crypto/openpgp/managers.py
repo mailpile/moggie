@@ -1,6 +1,8 @@
 import logging
 
 class CachingKeyManager:
+    NONE = (None,)
+
     def __init__(self, sop, keys):
         self.sop = sop
         self.keys = keys
@@ -23,6 +25,8 @@ class CachingKeyManager:
                 if len(pkeys) == 1:
                     logging.debug('Cached private key for %s' % fpr)
                     self.pkey_cache[fpr] = pkeys[0]
+                else:
+                    return self.NONE
             else:
                 self.pkey_cache[fpr] = (
                     self.keys.get_private_key(fpr, keypasswords))
@@ -37,6 +41,8 @@ class CachingKeyManager:
                 if len(certs) == 1:
                     logging.debug('Cached certificate for %s' % fpr)
                     self.cert_cache[fpr] = certs[0]
+                else:
+                    return self.NONE
             else:
                 self.cert_cache[fpr] = self.keys.get_cert(fpr)
         return self.cert_cache[fpr]
@@ -50,8 +56,13 @@ class CachingKeyManager:
         elif isinstance(v, dict):
             for k in v:
                 v[k] = self.filter_key_args(v[k], _all=(_all or v))
+            for k in list(v.keys()):
+                if v[k] is self.NONE:
+                    del v[k]
         elif isinstance(v, list):
-            v = [self.filter_key_args(item, _all=(_all or v)) for item in v]
+            v = [arg for arg in
+                    (self.filter_key_args(i, _all=(_all or v)) for i in v)
+                if (arg is not self.NONE)]
         elif isinstance(v, tuple):
             v = tuple(self.filter_key_args(item, _all=(_all or v)) for item in v)
         return v 

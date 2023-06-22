@@ -182,10 +182,11 @@ class CommandParse(CLICommand):
                         dw.append('PGP:@PKEY:%s' % r['address'])
 
                 if not settings.verify_from:
-                    frm = parsed_message.get('from')
-                    if frm:
-                        self.options['--verify-from='] = [
-                            'PGP:@CERT:%s' % frm['address']]
+                    for hdr in ('from', 'reply-to'):
+                        frm = parsed_message.get(hdr)
+                        if frm and frm['address']:
+                            self.options['--verify-from='].append(
+                                'PGP:@CERT:%s' % frm['address'])
 
         def connect(self):
             self.worker = self.cli_obj.connect()

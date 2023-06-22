@@ -188,7 +188,6 @@ def HeaderPrints(parsed_message):
     sender = (
             parsed_message.get('reply-to') or
             parsed_message.get('x-original-from') or
-            parsed_message.get('resent-from') or
             parsed_message.get('from', {})
         ).get('address', '-')
 

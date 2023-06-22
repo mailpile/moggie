@@ -59,7 +59,7 @@ However, Moggie has yet to receive a copy.
         self.rendered_width = self.COLUMN_NEEDS
         self.widgets = urwid.SimpleListWalker([])
         self.header_lines = list(self.headers())
-        self.email_display = self.no_body('Loading ...')
+        self.email_display = [self.no_body('Loading ...')]
         urwid.ListBox.__init__(self, self.widgets)
         self.update_content()
 
@@ -76,7 +76,7 @@ However, Moggie has yet to receive a copy.
 
     def send_email_request(self):
         if self.metadata.get('missing'):
-            self.email_display = self.no_body(self.MESSAGE_MISSING)
+            self.email_display = [self.no_body(self.MESSAGE_MISSING)]
             self.update_content()
 
         self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
@@ -103,7 +103,25 @@ However, Moggie has yet to receive a copy.
         return super().keypress(size, key)
 
     def update_content(self, update=False):
-        self.widgets[:] = self.header_lines + [self.email_display]
+        self.widgets[:] = self.header_lines + self.email_display
+
+    def describe_crypto_state(self, part, short=False):
+        crypto = (part.get('_CRYPTO') or {}).get('summary', '')
+        cstate = ''
+        if 'verified' in crypto:
+            cstate += EMOJI.get('verified', 'v ')
+        else:
+            cstate += '  '
+        if 'decrypted' in crypto:
+            cstate += EMOJI.get('encrypted', 'e ')
+        else:
+            cstate += '  '
+
+        # FIXME: Describe better
+        if not short:
+            cstate = crypto.replace('+', ', ') + ' ' + cstate
+
+        return cstate
 
     def headers(self):
         att_label = EMOJI.get('attachment', 'Attachment')
@@ -119,22 +137,25 @@ However, Moggie has yet to receive a copy.
         def _on_attachment(att, filename):
             return lambda e: self.on_attachment(att, filename)
 
-        def line(fkey, field, value, action=None):
+        def line(fkey, field, value, cstate, action=None):
             fkey = fkey[:4]
             field = urwid.Text(('email_key_'+fkey, field), align='right')
             value = urwid.Text(('email_val_'+fkey, value))
+            cstate = urwid.Text(('email_cs_'+fkey, cstate))
             if action is not None:
                 value = Selectable(value, on_select={'enter': action})
             return urwid.Columns([
-                    ('fixed', fwidth, field),
-                    ('weight',     4, value),
+                    ('fixed', fwidth,  field),
+                    ('weight',     4,  value),
+                    ('fixed',      4, cstate),
                 ], dividechars=1)
 
         for field, default in fields.items():
+            cstate = '    '  # FIXME?
             fkey = field[:-1].lower()
             if fkey not in self.metadata:
                 if default:
-                    yield line(fkey, field, default)
+                    yield line(fkey, field, default, cstate)
                 continue
 
             value = self.metadata[fkey]
@@ -153,19 +174,26 @@ However, Moggie has yet to receive a copy.
                     val = str(val).strip()
                 if not val and not default:
                     continue
-                yield line(fkey, field, val or default)
+                yield line(fkey, field, val or default, cstate)
                 field = ''
 
         if self.email:
             self.has_attachments = []
             for part in MessagePart.iter_parts(self.email):
-                filename = None
                 ctype = part.get('content-type', ['', {}])
+                if (ctype[0] == 'application/pgp-signature'
+                        and not self.email.get('_OPENPGP_ERRORS')):
+                    continue
+
+                # Get crypto summary, if we have one
+                cstate = self.describe_crypto_state(part, short=True)
+
+                filename = None
                 disp = part.get('content-disposition', ['', {}])
                 if disp[0] == 'attachment':
                     filename = ctype[1].get('name') or disp[1].get('filename')
                 if filename:
-                    yield line('att', att_label, filename,
+                    yield line('att', att_label, filename, cstate,
                         action=_on_attachment(part, filename))
                     self.has_attachments.append(filename)
 
@@ -229,7 +257,7 @@ However, Moggie has yet to receive a copy.
         if message['req_id'] != self.search_obj['req_id']:
             return
 
-        self.email_display = None
+        self.email_display = []
         if message['mimetype'] == 'application/moggie-internal':
             for data in message['data']:
                 if isinstance(data, dict):
@@ -237,54 +265,77 @@ However, Moggie has yet to receive a copy.
                     break
             if self.email:
                 self.header_lines = list(self.headers())
-                self.email_display = self.parsed_email_to_text()
+                self.email_display = self.parsed_email_to_widget_list()
 
         elif message['mimetype'] in ('text/plain', 'message/rfc822'):
             if message['data'].strip():
-                self.email_display = urwid.Text(message['data'], wrap='any')
+                self.email_display = [urwid.Text(message['data'], wrap='any')]
             else:
-                self.email_display = self.empty_body()
+                self.email_display = [self.empty_body()]
 
         if not self.email_display:
-            self.email_display = self.no_body(
-                'Failed to load or parse message, sorry!')
+            self.email_display = [self.no_body(
+                'Failed to load or parse message, sorry!')]
 
         self.crumb = self.VIEW_CRUMBS[self.view]
         self.tui_frame.update_topbar()
         self.update_content()
 
-    def parsed_email_to_text(self):
+    def parsed_email_to_widget_list(self):
         from moggie.security.html import html_to_markdown
         def _to_md(txt):
             return html_to_markdown(txt,
                 no_images=True,
                 wrap=min(self.COLUMN_WANTS, self.rendered_width-1))
 
-        email_txts = {'text/plain': '', 'text/html': ''}
+        # FIXME: If some parts are verified, but others not, or some parts
+        #        encrypted but others not, we should do something clever
+        #        with the colors to de-emphasize the parts which lack crypto.
+
+        email_txts = {'text/plain': [], 'text/html': []}
+        email_lens = {'text/plain': 0, 'text/html': 0}
+        have_cstate = False
         for ctype, fmt in (
                 ('text/plain', lambda t: t),
                 ('text/html',  _to_md)):
+            # FIXME: Make notes of the crypto-states of each part
             for part in MessagePart.iter_parts(self.email):
                 if part['content-type'][0] == ctype:
-                    email_txts[ctype] += fmt(part.get('_TEXT', ''))
+                    text = fmt(part.get('_TEXT', ''))
+                    cstate = self.describe_crypto_state(part).strip()
+                    have_cstate = have_cstate or cstate
+                    email_txts[ctype].append((cstate, text))
+                    email_lens[ctype] += len(text)
 
         # This is a heuristic to avoid the case where silly people
         # send a plain-text part that says "there is no text part".
-        len_html = len(email_txts['text/html'])
-        len_text = len(email_txts['text/plain'])
-        if len_html > 60:
+        if email_lens['text/html'] > 60:
             email_text = email_txts['text/html']
         else:
             email_text = email_txts['text/plain']
 
-        email_text = re.sub(
-            r'\n\s*\n', '\n\n', email_text.replace('\r', ''), flags=re.DOTALL
-            ).strip()
+        widgets = []
+        last_cstate = ''
+        for cstate, text in email_text:
+            text = re.sub(
+                r'\n\s*\n', '\n\n', text.replace('\r', ''), flags=re.DOTALL
+                ).strip()
+            if text:
+                if cstate != last_cstate:
+                    label = cstate
+                    if have_cstate and not label:
+                        label = 'unverified, unencrypted'
+                    widgets.append(urwid.Text(
+                        ('email_cstate', label + '   '), align='right'))
+                    last_cstate = cstate
+                bg = '' if (cstate or not have_cstate) else '_bg'
+                widgets.append(urwid.Text(
+                    ('email_body' + bg, text + '\n\n')))
 
-        if email_text:
-            return urwid.Text(email_text.strip())
+        if widgets:
+            return widgets
         else:
-            return self.empty_body()
+            return [self.empty_body()]
 
     def no_body(self, message):
         rows = self.tui_frame.max_child_rows() - len(self.header_lines)
