@@ -314,6 +314,7 @@ However, Moggie has yet to receive a copy.
         else:
             email_text = email_txts['text/plain']
 
+        dl = EMOJI.get('downleft', '') + ' '
         widgets = []
         last_cstate = ''
         for cstate, text in email_text:
@@ -326,7 +327,7 @@ However, Moggie has yet to receive a copy.
                     if have_cstate and not label:
                         label = 'unverified, unencrypted'
                     widgets.append(urwid.Text(
-                        ('email_cstate', label + '   '), align='right'))
+                        ('email_cstate', dl + label + '   '), align='right'))
                     last_cstate = cstate
                 bg = '' if (cstate or not have_cstate) else '_bg'
                 widgets.append(urwid.Text(

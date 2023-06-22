@@ -15,6 +15,7 @@ EMOJI = {
     'mailbox':        '\U0001F4EA',  # Mailbox, flag down
     'search':         '\U0001F50E',  # Magnifying glass
     'attachment':     '\U0001F4CE',  # Paperclip
+    'downleft':       '\U00002199',  # Down left arrow
     'encrypted':      '\U0001F512',  # Lock
     'verified':       '\U00002705',  # Check mark button
     'lock':           '\U0001F512'}  # Lock
