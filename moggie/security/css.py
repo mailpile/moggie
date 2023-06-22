@@ -240,17 +240,18 @@ class CSSCleaner(CSSParser):
     CHECK_OUTLINE   = _rc(r'^none$')
     CHECK_HALIGN    = _rc(r'^(inherit|left|center|right|justify)$')
     CHECK_FONT_FAM  = _rc(r'^[a-z0-9,\s\'\"-]+$')
-    CHECK_FONT_SIZE = _rc(r'^(inherit|-?\d+(\.\d+)?\s*(px|em|%|))$')
+    CHECK_FONT_SIZE = _rc(r'^(inherit|-?\d+(\.\d+)?\s*(pt|px|em|%|))$')
     CHECK_FONT_STYL = _rc(r'^(inherit|normal|italic)$')
     CHECK_FONT_WGHT = _rc(r'^(inherit|normal|bold|\d\d\d)$')
-    CHECK_SIZE      = _rc(r'^((auto|inherit|-?\d+(\.\d+)?\s*(px|em|%|))\s*){1,4}$')
-    CHECK_TEXT_DECO = _rc(r'^(inherit|none|underline)$')
+    CHECK_SIZE      = _rc(r'^((auto|inherit|-?\d+(\.\d+)?\s*(pt|px|em|%|))\s*){1,4}$')
+    CHECK_TEXT_DECO = _rc(r'^(inherit|none|underline|overline|line-through|initial)$')
     CHECK_TEXT_TFRM = _rc(r'^(inherit|none|uppercase|lowercase)$')
-    CHECK_VALIGN    = _rc(r'^(inherit|top|center|middle|bottom)$')
+    CHECK_VALIGN    = _rc(r'^(inherit|baseline|sub|super|top|text-top|middle|bottom|text-bottom|initial)$')
     CHECK_VISI      = _rc(r'^visible$')  # Disallow hidden
+    CHECK_WHITESPCE = _rc(r'^(inherit|normal|nowrap|pre|pre-line|pre-wrap|initial)$')
     CHECK_WORDBREAK = _rc(r'^(inherit|normal|break-word)$')
     CHECK_WORDSPACE = _rc(r'^(inherit|normal)$')
-    CHECK_ZERO      = _rc(r'^(none|(0\s*(px|em|))*)$')
+    CHECK_ZERO      = _rc(r'^(none|(0\s*(pt|px|em|))*)$')
 
     ALLOWED_STYLES = {
         'background': CHECK_COLOR,
@@ -288,10 +289,12 @@ class CSSCleaner(CSSParser):
         'padding-right': CHECK_SIZE,
         'text-align': CHECK_HALIGN,
         'text-decoration': CHECK_TEXT_DECO,
+        'text-decoration-line': CHECK_TEXT_DECO,
         'text-transform': CHECK_TEXT_TFRM,
         'vertical-align': CHECK_VALIGN,
         'visibility': CHECK_VISI,
         'width': CHECK_SIZE,
+        'white-space': CHECK_WHITESPCE,
         'word-break': CHECK_WORDBREAK,
         'word-spacing': CHECK_WORDSPACE}
 
