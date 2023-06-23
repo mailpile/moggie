@@ -19,6 +19,8 @@ class SaveOrOpenDialog(MessageDialog):
         self.filename = filename
         self.target = os.path.join(target or self.DEFAULT_TARGET, filename)
 
+        self.overwrite = None
+
         self.save_dest_input = None
         self.save_to = None
         self.want_open = False
@@ -45,9 +47,12 @@ class SaveOrOpenDialog(MessageDialog):
         urwid.connect_signal(
             self.save_dest_input, 'enter', lambda b: self.focus_next())
 
-        return [
-            self.save_dest_input,
-            urwid.Divider()]
+        widgets = [self.save_dest_input]
+        if self.overwrite is not None:
+            widgets.append(self.overwrite)
+        widgets.append(urwid.Divider())
+
+        return widgets
 
     def validate(self):
         dest_file = os.path.expanduser(self.save_dest_input.edit_text)
@@ -55,7 +60,13 @@ class SaveOrOpenDialog(MessageDialog):
         if not os.path.exists(dest_dir):
             self.update_pile(message='Directory does not exist!')
             return False
-        if os.path.exists(dest_file):
+        overwrite = self.overwrite and self.overwrite.get_state()
+        if os.path.exists(dest_file) and not overwrite:
+            if self.overwrite is None:
+                self.message = None
+                self.overwrite = urwid.CheckBox(
+                    'Overwrite existing file', False)
+                self.widgets.append(self.overwrite)
             self.update_pile(message='File already exists!')
             return False
         return dest_file
@@ -87,7 +98,8 @@ class SaveOrOpenDialog(MessageDialog):
                     fd.write(base64.b64decode(self.part['_DATA']))
                 if self.want_open:
                     subprocess.Popen(['xdg-open', self.save_to])
-                self._emit('close')
+                self.update_pile(message='Saved!')
+                emit_soon(self, 'close', seconds=1)
                 return True
             except (OSError, IOError) as e:
                 self.update_pile(message=str(e))

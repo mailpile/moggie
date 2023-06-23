@@ -45,19 +45,20 @@ class MessageDialog(urwid.WidgetWrap):
         button_bar.set_focus(1)
 
         widgets = [urwid.Columns([
-                ('weight', 1, urwid.Text(('status', message), 'center')),
-                ('fixed',  3, self.close_button)])
-            ] + self.widgets
+            ('weight', 1, urwid.Text(('status', message), 'center')),
+            ('fixed',  3, self.close_button)])]
+        widgets.extend(self.widgets)
         if self.message:
             widgets.append(urwid.Text(('popsubtle', self.message)))
+        else:
+            widgets.append(urwid.Divider())
         widgets.append(button_bar)
 
         self.pile.contents = ([(w, ('pack', None)) for w in widgets])
         self.focus_next(first=focus)
 
     def wanted_height(self):
-        return (
-            (5 if self.message else 4) +
+        return (5 +
             len((self.message or '').splitlines()) +
             len(self.widgets))
 
