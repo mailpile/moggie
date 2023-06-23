@@ -12,6 +12,7 @@ from ...util.dumbcode import to_json
 from .widgets import *
 from .messagedialog import MessageDialog
 from .decorations import EMOJI, ENVELOPES
+from .saveoropendialog import SaveOrOpenDialog
 
 
 class EmailDisplay(urwid.ListBox):
@@ -230,6 +231,7 @@ However, Moggie has yet to receive a copy.
                 '--with-headers=Y',
                 '--with-structure=Y',
                 '--with-text=Y',
+                '--with-data=Y',    # FIXME: implement get_data!
                 '--with-openpgp=Y',
                 '--ignore-index=N',
                 # We convert the HTML to text here, so we can wrap lines.
@@ -288,17 +290,12 @@ However, Moggie has yet to receive a copy.
                 no_images=True,
                 wrap=min(self.COLUMN_WANTS, self.rendered_width-1))
 
-        # FIXME: If some parts are verified, but others not, or some parts
-        #        encrypted but others not, we should do something clever
-        #        with the colors to de-emphasize the parts which lack crypto.
-
         email_txts = {'text/plain': [], 'text/html': []}
         email_lens = {'text/plain': 0, 'text/html': 0}
         have_cstate = False
         for ctype, fmt in (
                 ('text/plain', lambda t: t),
                 ('text/html',  _to_md)):
-            # FIXME: Make notes of the crypto-states of each part
             for part in MessagePart.iter_parts(self.email):
                 if part['content-type'][0] == ctype:
                     text = fmt(part.get('_TEXT', ''))
@@ -346,8 +343,11 @@ However, Moggie has yet to receive a copy.
 
     def on_attachment(self, att, filename):
         logging.debug('FIXME: User selected part %s' % att)
-        self.tui_frame.topbar.open_with(
-            MessageDialog, 'FIXME: Do things with %s' % filename)
+        self.tui_frame.topbar.open_with(SaveOrOpenDialog,
+            'Save or Open Attachment', self, att, filename)
+
+    def get_data(self, att, callback=None):
+        logging.debug('FIXME: Should fetch attachment: %s' % att)
 
     def on_forward(self):
         logging.debug('FIXME: User wants to forward')

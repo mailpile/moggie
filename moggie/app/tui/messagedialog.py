@@ -10,19 +10,21 @@ class MessageDialog(urwid.WidgetWrap):
 
     signals = ['close']
 
-    def __init__(self, tui_frame, message):
+    def __init__(self, tui_frame, message='', title=''):
         self.tui_frame = tui_frame
-        self.doingit = False
 
         self.close_button = CloseButton(
             lambda x: self._emit('close'), style='popsubtle')
         self.buttons = self.make_buttons()
         self.widgets = self.make_widgets()
 
-        self.message = self.wrap(message, self.WANTED_WIDTH-3) + '\n'
+        if message:
+            self.message = self.wrap(message, self.WANTED_WIDTH-3) + '\n'
+        else:
+            self.message = None
 
         self.pile = urwid.Pile([])
-        self.update_pile()
+        self.update_pile(title)
 
         super().__init__(urwid.LineBox(
             urwid.AttrWrap(urwid.Filler(self.pile), 'popbg')))
@@ -42,19 +44,22 @@ class MessageDialog(urwid.WidgetWrap):
         button_bar = urwid.Columns(button_bar, dividechars=1)
         button_bar.set_focus(1)
 
-        widgets = [
-            urwid.Columns([
+        widgets = [urwid.Columns([
                 ('weight', 1, urwid.Text(('status', message), 'center')),
                 ('fixed',  3, self.close_button)])
-        ] + self.widgets + [
-            urwid.Text(('popsubtle', self.message)),
-            button_bar]
+            ] + self.widgets
+        if self.message:
+            widgets.append(urwid.Text(('popsubtle', self.message)))
+        widgets.append(button_bar)
 
         self.pile.contents = ([(w, ('pack', None)) for w in widgets])
         self.focus_next(first=focus)
 
     def wanted_height(self):
-        return len(self.message.splitlines()) + len(self.widgets) + 5
+        return (
+            (5 if self.message else 4) +
+            len((self.message or '').splitlines()) +
+            len(self.widgets))
 
     def on_ok(self):
         self._emit('close')
