@@ -216,7 +216,7 @@ class ImportWorker(BaseWorker):
                 added |= set(idxs)
                 batch.append([idxs, kw])
                 del keywords[kw]
-                if bc >= 1000:
+                if (bc >= 1000) or (len(batch) > 100):
                     progress['pct'] = ('%s %d%%, %d/%d' % (
                         what, (100 * kc) // len(kw_batch), kc, len(kw_batch)))
                     self.search.add_results(batch, wait=True)
@@ -224,6 +224,8 @@ class ImportWorker(BaseWorker):
                     if int(time.time()) > ntime:
                         ntime = int(time.time())
                         self._notify_progress(progress)
+                    else:
+                        time.sleep(0.02)
         if batch:
             self.search.add_results(batch, wait=True)
             progress['pct'] = ''

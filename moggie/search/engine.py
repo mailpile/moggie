@@ -69,9 +69,11 @@ class PostingListBucket:
     A PostingListBucket is an unsorted sequence of binary packed
     (keyword, comment, IntSet) tuples.
     """
+    DEFAULT_COMPRESS = 16*1024
+
     def __init__(self, blob, deleted=None, compress=None):
         self.blob = blob
-        self.compress = compress
+        self.compress = self.DEFAULT_COMPRESS if (compress is None) else compress
         self.deleted = deleted
 
     def __iter__(self):
@@ -207,7 +209,7 @@ class SearchEngine:
         self.records = RecordStore(os.path.join(workdir, name), name,
             salt=None, # FIXME: This must be set, OR ELSE
             aes_keys=encryption_keys or None,
-            compress=96,
+            compress=64*1024,
             sparse=True,
             est_rec_size=128,
             target_file_size=64*1024*1024)
@@ -244,7 +246,7 @@ class SearchEngine:
         self.lock = threading.RLock()
 
         # Profiling...
-        self.profile1 = self.profile2 = self.profile3 = 0
+        self.profileB = self.profile1 = self.profile2 = self.profile3 = 0
 
         # Someday, these might be configurable/pluggable?
 
@@ -685,22 +687,25 @@ class SearchEngine:
             'changed': cset_all,
             ('history' if record_history else 'changes'): changes}
 
-    def profile_updates(self, which, t0, t1, t2, t3):
+    def profile_updates(self, which, bc, t0, t1, t2, t3):
         p1 = int((t1 - t0) * 1000)
         p2 = int((t2 - t1) * 1000)
         p3 = int((t3 - t2) * 1000)
+        self.profileB += bc
         self.profile1 += p1
         self.profile2 += p2
         self.profile3 += p3
         logging.debug(
-            'Profiling(%s): prep/write/update .. now(%d/%d/%d) total(%d/%d/%d)'
-            % (which, p1, p2, p3, self.profile1, self.profile2, self.profile3))
+            'Profiling(%s): prep/write/update .. now(%d=%d/%d/%d) total(%d=%d/%d/%d)'
+            % (which, bc, p1, p2, p3,
+               self.profileB, self.profile1, self.profile2, self.profile3))
 
     def del_results(self, results, tag_namespace=''):
         t0 = time.time()
         (kw_idx_list, keywords, hits
             ) = self._prep_results(results, False, tag_namespace)
         t1 = time.time()
+        bc = 0
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 plb = PostingListBucket(self.records.get(idx) or b'')
@@ -708,9 +713,10 @@ class SearchEngine:
                 plb.deleted |= keywords[kw]
                 plb.add(kw, [])
                 self.records[idx] = plb.blob
+                bc += len(plb.blob)
         t2 = time.time()
         self.update_terms(keywords)
-        self.profile_updates('-%d' % len(kw_idx_list), t0, t1, t2, time.time())
+        self.profile_updates('-%d' % len(kw_idx_list), bc, t0, t1, t2, time.time())
         return {'keywords': len(keywords), 'hits': hits}
 
     def add_results(self, results, prefer_l1=None, tag_namespace=''):
@@ -718,6 +724,7 @@ class SearchEngine:
         (kw_idx_list, keywords, hits
             ) = self._prep_results(results, prefer_l1, tag_namespace)
         t1 = time.time()
+        bc = 0
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 # These are instances of PostingList
@@ -725,9 +732,10 @@ class SearchEngine:
                 plb.deleted = self.deleted
                 plb.add(kw, keywords[kw])
                 self.records[idx] = plb.blob
+                bc += len(plb.blob)
         t2 = time.time()
         self.part_spaces[1] |= set(keywords.keys())
-        self.profile_updates('+%d' % len(kw_idx_list), t0, t1, t2, time.time())
+        self.profile_updates('+%d' % len(kw_idx_list), bc, t0, t1, t2, time.time())
         return {'keywords': len(keywords), 'hits': hits}
 
     def __getitem__(self, keyword):

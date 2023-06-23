@@ -1,5 +1,7 @@
-import binascii
 import numpy
+
+from base64 import urlsafe_b64encode as us_b64encode
+from base64 import urlsafe_b64decode as us_b64decode
 
 from .dumbcode import register_dumb_decoder
 
@@ -101,7 +103,7 @@ class IntSet:
         if encoded[:1] in ('i', b'i'):
             binary = encoded[1:]
         elif encoded[:1] in ('I', b'I'):
-            binary = binascii.a2b_base64(encoded[1:])
+            binary = us_b64decode(encoded[1:])
         else:
             raise ValueError('Invalid IntSet encoding')
         return cls().frombytes(binary)
@@ -142,16 +144,14 @@ class IntSet:
         return self.ENC_BIN + self.tobytes()
 
     def dumb_encode_asc(self):
-        return self.ENC_ASC + str(
-            binascii.b2a_base64(self.tobytes(), newline=False),
-            'latin-1')
+        return self.ENC_ASC + str(us_b64encode(self.tobytes()), 'latin-1')
 
     def frombytes(self, binary):
         self.npa = numpy.copy(numpy.frombuffer(binary, dtype=self.dtype))
         return self
 
     def tobytes(self):
-        return self.npa.tostring()
+        return self.npa.tobytes()
 
     def __len__(self):
         # Estimate how large a naive binary encoding will be:

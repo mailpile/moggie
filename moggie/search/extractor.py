@@ -46,7 +46,7 @@ class KeywordExtractor:
         self.min_word_length = min_word_length
         self.max_word_length = max_word_length
 
-        # FIXME: 
+        # FIXME:
         #   - Make this configurable, somehow
         #   - Plugins?
         #   - Language/locale specific rules?
@@ -128,15 +128,20 @@ class KeywordExtractor:
             text = part.get('_TEXT')
             if text:
                 if part.get('content-type', [None])[0] == 'text/html':
-                    text, html_kw = self._parse_html(text)
+                    try:
+                        text, html_kw = self._parse_html(text)
+                        keywords |= html_kw
+                    except:
+                        keywords.add('has:errors')
+                        text = ''
                     keywords.add('has:html')
-                    keywords |= html_kw
                 else:
                     keywords.add('has:text')
-                ud = self.url_domains(text)
-                keywords |= self.words(text, url_domains=ud)
-                text_chars += len(text)
-                url_count += len(ud)
+                if text:
+                    ud = self.url_domains(text)
+                    keywords |= self.words(text, url_domains=ud)
+                    text_chars += len(text)
+                    url_count += len(ud)
             elif 'attachment' in part.get('content-disposition', []):
                 keywords.add('has:attachment')
 
@@ -167,7 +172,8 @@ class KeywordExtractor:
             keywords |= set(ts_to_keywords(ts))
 
         # Record the same message-ID-hashes as Mailpile v1 did
-        keywords.add('msgid:' + msg_id_hash(parsed_email.get('message-id')))
+        keywords.add('msgid:' + msg_id_hash(
+            parsed_email.get('message-id') or metadata.uuid_asc))
 
         subject = parsed_email.get('subject')
         if subject:
@@ -234,7 +240,7 @@ class KeywordExtractor:
         moggie.email.parsemime.
 
         Returns a tuple of (status-set, keyword-set), where status will
-        inform the caller whether additional processing is requested. 
+        inform the caller whether additional processing is requested.
         """
         bt_stat, bt_kws = self.body_text_keywords(parsed_email)
         hd_stat, hd_kws = self.header_keywords(metadata, parsed_email)
