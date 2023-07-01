@@ -75,23 +75,24 @@ class CLICommand:
 
     @classmethod
     async def MsgRunnable(cls, app, access, args):
-        reply_buffer = []
+        reply_buffers = [[]]
         def reply(msg, eof=False):
             if msg or eof:
                 if isinstance(msg, (bytes, bytearray)):
-                    reply_buffer.append(bytes(msg))
+                    reply_buffers[-1].append(bytes(msg))
                 elif isinstance(msg, str):
-                    reply_buffer.append(bytes(msg, 'utf-8'))
+                    reply_buffers[-1].append(bytes(msg, 'utf-8'))
                 else:
-                    reply_buffer.append(msg)
+                    reply_buffers[-1].append(msg)
         try:
             cmd_obj = cls(app.profile_dir, copy.copy(args),
                 access=access, appworker=app, connect=False)
             cmd_obj.set_msg_defaults(copy.copy(args))
+            cmd_obj.reply_buffers = reply_buffers
             cmd_obj.write_reply = reply
             cmd_obj.write_error = reply
             cmd_obj.stdin = []
-            return reply_buffer, cmd_obj
+            return reply_buffers[0], cmd_obj
         except PermissionError:
             raise
         except:
@@ -130,6 +131,7 @@ class CLICommand:
         self.write_reply = _writer
         self.write_error = _writer
         self.skip_json = False
+        self.reply_buffers = []
 
         self.filename = None
         self.disposition = None
@@ -252,6 +254,32 @@ class CLICommand:
         return ('<tr>%s</tr>' % ''.join(
             '<td class=%s>%s</td>' % (k, _link(k, _esc(row[k])))
             for k in columns if k in row))
+
+    def print_json_list_start(self, nl='\n'):
+        if self.skip_json:
+            new_list = []
+            self.reply_buffers[-1].append(new_list)
+            self.reply_buffers.append(new_list)
+        else:
+            self.write_reply('[' + nl)
+
+    def print_json_list_comma(self, nl='\n'):
+        if not self.skip_json:
+            self.write_reply(',' + nl)
+
+    def print_json_list_end(self, nl='\n'):
+        if self.skip_json:
+            if len(self.reply_buffers) > 1:
+                self.reply_buffers.pop(-1)
+                # Strip away the extra outermost 1-element list, in the case
+                # where the command is incrementally emitting its own list.
+                reply_buffer = self.reply_buffers[0]
+                if ((len(self.reply_buffers) == 1) and
+                        (len(reply_buffer) == 1) and
+                        (isinstance(reply_buffer[0], list))):
+                    reply_buffer[:] = reply_buffer[0]
+        else:
+            self.write_reply(']' + nl)
 
     def print_json(self, data, nl='\n'):
         if self.skip_json:

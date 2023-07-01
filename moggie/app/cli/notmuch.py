@@ -605,10 +605,13 @@ FIXME: Document html and html formats!
             return
         result = self._json_sanitize(result)
         if first:
-            self.print('[', nl='')
+            self.print_json_list_start(nl='')
         if result:
             self.print_json(result[1], nl='')
-        self.print(']' if last else ',')
+        if last:
+            self.print_json_list_end()
+        else:
+            self.print_json_list_comma()
 
     async def emit_result_sexp(self, result, first=False, last=False):
         if result is None:

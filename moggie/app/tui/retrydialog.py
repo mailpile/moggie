@@ -28,7 +28,7 @@ class RetryDialog(MessageDialog):
             'password': [('mask', '*')]}
 
         widgets = []
-        for need in self.needed_info:
+        for need in (self.needed_info or []):
             a = dict(e_args + e_more.get(need['datatype'], []))
             w = EditLine(need['label'] + ': ', **a)
             widgets.append(w)
