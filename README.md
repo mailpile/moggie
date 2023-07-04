@@ -8,7 +8,7 @@ A fast, secure e-mail client? Someday!
 
 ## Project status
 
-[Issue #1 tracks progress and gives a rough idea of what is planned](https://github.com/BjarniRunar/moggie/issues/1).
+[Issue #1 tracks progress and gives a rough idea of what is planned](https://github.com/mailpile/moggie/issues/1).
 
 
 ## Contributing
@@ -59,7 +59,7 @@ Install Moggie:
    1. apt install git python3-{numpy,cryptography,pycryptodome,urwid}
                       python3-{appdirs,setproctitle,pyqrcode,packaging}
                       python3-{aiosmtplib,aiodns,dkim,pgpy,pgpdump}
-   2. git clone https://github.com/BjarniRunar/moggie
+   2. git clone https://github.com/mailpile/moggie
    3. cd moggie
    4. git submodule init
    5. git submodule update
