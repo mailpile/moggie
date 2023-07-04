@@ -1,4 +1,4 @@
-NOTE: Please see the file COPYING.md for details on Mailpile licensing.
+NOTE: Please see the file COPYING.md for more details.
 
 
                     GNU AFFERO GENERAL PUBLIC LICENSE

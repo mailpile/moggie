@@ -1,6 +1,6 @@
-# Mailpile - a program for doing stuff with e-mail
+# Mailpile / moggie - Programs for doing stuff with e-mail
 
-Copyright (C) 2011-2015, Bjarni R. Einarsson, Mailpile ehf and friends.
+Copyright (C) 2011-2023, Bjarni R. Einarsson, Mailpile ehf and friends.
 
 This program is free software: you can redistribute it and/or modify it
 under the terms of the GNU Affero General Public License as published by
