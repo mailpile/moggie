@@ -66,9 +66,14 @@ Or, if you prefer a virtualenv:
 
    1. git clone --recurse-submodules https://github.com/mailpile/moggie
    2. cd moggie
-   3. virtualenv .venv
+   3. python3 -m venv --system-site-packages .venv
    4. source .venv/bin/activate
-   5. pip install -r requirements.txt
+   5. python3 -m pip install -r requirements.txt
+
+*(Note that the virtualenv method is somewhat prone to failure, since many
+of moggie's dependencies are tricky to build from source. A hybrid approach
+where as much is installed using the OS package manager as possible, and
+pip only used for missing packages may be more likely to succeed.)*
 
 Next, grab some e-mail to play with, in Maildir or mbox format. For example,
 browse around <https://lists.apache.org/> and download monthly archives, e.g.
