@@ -123,15 +123,24 @@ class CommandWebsocket(CLICommand):
                 break
             pending += str(data, 'utf-8')
             if pending.endswith('\n'):
-                args = shlex.split(pending.strip())
-                if args:
-                    message = to_json({
-                       'req_type': 'cli:%s' % args.pop(0),
-                       'req_id': int(time.time()),
-                       'args': args})
+                message = None
+                stripped = pending.strip()
+                if stripped[:1] == '{':
+                    if stripped[-1:] == '}':
+                        message = stripped
+                else:
+                    args = shlex.split(stripped)
+                    if args and args[0] == 'moggie':
+                        args.pop(0)
+                    if args:
+                        message = to_json({
+                           'req_type': 'cli:%s' % args.pop(0),
+                           'req_id': int(time.time()),
+                           'args': args})
+                if message:
                     sys.stdout.write('=> %s\n' % message)
                     bridge.send(message)
-                pending = ''
+                    pending = ''
 
     async def run(self):
         ev_loop = asyncio.get_event_loop()
