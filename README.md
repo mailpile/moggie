@@ -10,6 +10,8 @@ A fast, secure e-mail client? Someday!
 
 [Issue #1 tracks progress and gives a rough idea of what is planned](https://github.com/mailpile/moggie/issues/1).
 
+[I am writing a series of blog posts about this project](https://www.mailpile.is/blog/2023-05-01_A_Mail_Client_in_Six_Steps.html).
+
 
 ## Contributing
 
@@ -24,7 +26,6 @@ justified just yet. ;-)
 The work is published here in case I get hit by a bus, and so the
 Mailpile community (who directly and indirectly funded my work) can see
 what I am up to.
-
 
 
 ## Architectural overview
@@ -54,15 +55,20 @@ clear in the config file until I've figured out the UX and integrated
 
 First, brace yourself for nothing working: see Project Status above.
 
-Install Moggie:
+Install Moggie (on recent Debian/Ubuntu):
 
    1. apt install git python3-{numpy,cryptography,pycryptodome,urwid}
                       python3-{appdirs,setproctitle,pyqrcode,packaging}
                       python3-{aiosmtplib,aiodns,dkim,pgpy,pgpdump}
-   2. git clone https://github.com/mailpile/moggie
-   3. cd moggie
-   4. git submodule init
-   5. git submodule update
+   2. git clone --recurse-submodules https://github.com/mailpile/moggie
+
+Or, if you prefer a virtualenv:
+
+   1. git clone --recurse-submodules https://github.com/mailpile/moggie
+   2. cd moggie
+   3. virtualenv .venv
+   4. source .venv/bin/activate
+   5. pip install -r requirements.txt
 
 Next, grab some e-mail to play with, in Maildir or mbox format. For example,
 browse around <https://lists.apache.org/> and download monthly archives, e.g.
@@ -73,8 +79,14 @@ Play with Moggie:
     # The following commands run from the root of the git repo
     cd /path/to/moggie
 
+    # Read some instructions
+    python3 -m moggie help
+
     # Read some mail using Moggie:
     python3 -m moggie -f /path/to/archive.mbox
+
+    # Or browse an IMAP account
+    python3 -m moggie -y -f imap://user@domain@imap.example.org/
 
     # Start the Moggie background process/server
     python3 -m moggie start
