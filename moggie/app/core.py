@@ -16,41 +16,13 @@ from ..config.helpers import DictItemProxy, EncodingListItemProxy
 from ..api.requests import *
 from ..api.responses import *
 from ..api.exceptions import *
+from ..util.asyncio import async_run_in_thread
 from ..util.dumbcode import dumb_decode, to_json, from_json
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorkers
 from ..workers.search import SearchWorker
 from .cli import CLI_COMMANDS
-
-
-async def async_run_in_thread(method, *m_args, **m_kwargs):
-    def runner(l, q):
-        time.sleep(0.1)
-        try:
-            rv = method(*m_args, **m_kwargs)
-        except:
-            logging.exception('async in thread crashed, %s' % (method,))
-            rv = None
-        l.call_soon_threadsafe(q.put_nowait, rv)
-
-    loop = asyncio.get_event_loop()
-    queue = asyncio.Queue()
-    thr = threading.Thread(target=runner, args=(loop, queue))
-    thr.daemon = True
-    thr.start()
-    return await queue.get()
-
-
-def run_async_in_thread(method, *m_args, **m_kwargs):
-    result = []
-    def runner():
-        result.append(asyncio.run(method(*m_args, **m_kwargs)))
-    thr = threading.Thread(target=runner)
-    thr.daemon = True
-    thr.start()
-    thr.join()
-    return result[0]
 
 
 class AppCore:

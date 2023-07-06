@@ -6,9 +6,15 @@ import sys
 
 from ...api.requests import *
 from ...config import AppConfig, AccessConfig
+from ...util.asyncio import async_run_in_thread
 from ...util.rpc import AsyncRPCBridge
 from ...util.dumbcode import to_json, from_json
 from .command import Nonsense, CLICommand
+
+try:
+    import readline
+except ImportError:
+    readline = None
 
 
 class CommandWebsocket(CLICommand):
@@ -116,11 +122,24 @@ class CommandWebsocket(CLICommand):
 #
 #    count from:bre
 #    search --limit=10 bjarni
+#
+# Press CTRL+D or type `quit` to exit.
 #\n""")
         while True:
-            data = await reader.read(1)
-            if not data:
+            if readline is None:
+                data = await reader.read(1)
+            else:
+                await asyncio.sleep(0.1)
+                prompt = '   ... ' if pending else 'moggie '
+                data = await async_run_in_thread(input, prompt)
+                if data:
+                    data = bytes(data + '\n', 'utf-8')
+                else:
+                    sys.stderr.write('\n')
+            if data is None or (data.strip() == b'quit'):
                 break
+            if not data:
+                continue
             pending += str(data, 'utf-8')
             if pending.endswith('\n'):
                 message = None
@@ -140,6 +159,7 @@ class CommandWebsocket(CLICommand):
                 if message:
                     sys.stdout.write('=> %s\n' % message)
                     bridge.send(message)
+                    await asyncio.sleep(0.5)
                     pending = ''
 
     async def run(self):
@@ -167,13 +187,16 @@ class CommandWebsocket(CLICommand):
                 w_transport, w_protocol, reader, loop)
             return reader, writer
 
-        reader, writer = await connect_stdin_stdout(ev_loop)
         try:
+            reader = writer = None
             if self.options['--friendly']:
+                if readline is None:
+                    reader, writer = await connect_stdin_stdout(ev_loop)
                 await self.read_friendly_loop(reader, bridge)
             else:
+                reader, writer = await connect_stdin_stdout(ev_loop)
                 await self.read_json_loop(reader, bridge)
 
         except (KeyboardInterrupt, asyncio.exceptions.CancelledError):
-            pass
-
+            if readline is not None:
+                sys.stderr.write('\n')
