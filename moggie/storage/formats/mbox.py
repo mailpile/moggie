@@ -1,4 +1,13 @@
+# FIXME: Generate stable IDX values, which we can use as hints to find
+#        emails even if they move around.
+# FIXME: Apparently we assume a needs_compacting() call on the parent.
+#        Also add a standard needs_reindexing() command, use it? If so
+#        update how Maildir tries to do that too.
+# FIXME: Instead of throwing KeyError if our range is geborked, search
+#        for the message, like the Maildir does?
+#
 import copy
+import logging
 import email.utils
 import time
 import os
@@ -13,6 +22,7 @@ from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.parsemime import parse_message as ep_parse_message
 from ...email.util import quick_msgparse, make_ts_and_Metadata
+from ...email.util import mk_packed_idx, unpack_idx
 from ...util.dumbcode import *
 
 from . import tag_path
@@ -46,18 +56,67 @@ From: nobody <deleted@example.org>\r\n\
         except (IndexError, ValueError):
             return False
 
+    def _key_to_range_hash(self, key):
+        (beg, ln), _hash = unpack_idx(int(key[1:], 16), count=2)
+        return beg, beg+ln, _hash
+
+    def _key_to_range(self, key):
+        (beg, ln), _hash = unpack_idx(int(key[1:], 16), count=2)
+        return beg, beg+ln
+
+    def _range_to_key(self, beg, end, _data=b''):
+        # mod=6 gives us 6*16 = 96 bits of the hash
+        return b'@%x' % mk_packed_idx(_data, beg, end-beg, count=2, mod=6)
+
+    def _find_message_offsets(self, key):
+        (b, e, wanted_hash) = self._key_to_range_hash(key)
+        try:
+            beg = b
+            if b > 4096:
+                # Scan for our beginning marker; accommodates minor changes
+                # to the mailbox without having to rescan the whole thing.
+                beg = self.container.find(b'\nFrom ', b-40)
+                if beg < 0:
+                    raise KeyError('Message not found')
+                beg += 1
+                if beg != b:
+                    logging.debug('FIXME: beg changed, request a reindex?')
+
+            elif self.container[b:b+5] != b'From ':
+                raise KeyError('Message not found')
+
+            # Verify that we have the correct message
+            hend, hdrs = quick_msgparse(self.container, beg)
+            if self._range_to_key(b, e, _data=hdrs) != key:
+                raise KeyError('Message not found')
+
+            # Make sure we have the correct message length; it could have
+            # changed due to other clients adding/removing headers.
+            end = self.container.find(b'\nFrom ', hend-1)
+            if end < 0:
+                end = len(obj)-1
+            end += 1
+            if end != e:
+                logging.debug('FIXME: end changed, request a reindex?')
+
+            return beg, end
+        except KeyError:
+            pass
+
+        # Message not found: scan the entire mailbox?
+        for beg, hend, end, hdrs in self.iter_email_offsets():
+            if self._range_to_key(b, e, _data=hdrs) == key:
+                logging.debug('FIXME: message moved, request a reindex?')
+                return beg, end
+
+        raise KeyError('Message not found')
+
     def __getitem__(self, key):
-        b,e = self._key_to_range(key)
-        if not (self.container[b:b+5] == b'From '):
-            raise KeyError('Message not found')
+        (b, e) = self._find_message_offsets(key)
         return self.container[b:e]
 
     def __delitem__(self, key):
-        b,e = self._key_to_range(key)
-        if not (self.container[b:b+5] == b'From '):
-            # FIXME: We could do with a bit more checking here...
-            raise KeyError('Message not found')
-
+        (b, e) = self._find_message_offsets(key)
         length = e-b
         fill = (
             self.DELETED_MARKER +
@@ -75,11 +134,12 @@ From: nobody <deleted@example.org>\r\n\
         return super().append(data)
 
     def __setitem__(self, key, value):
-        b,e = self._key_to_range(key)
         if isinstance(value, str):
             value = bytes(value, 'utf-8')
         if value[:5] != b'From ':
             raise ValueError('That does not look like an e-mail')
+        (b, e) = self._find_message_offsets(key)
+        # FIXME: Do we trust super() here?  Think not... hmm.
         return super().__setitem__(key, value)
 
     def iter_email_offsets(self, skip=0, deleted=False):
@@ -111,7 +171,7 @@ From: nobody <deleted@example.org>\r\n\
                 self.parent.need_compacting(tag_path(*self.path))
 
     def keys(self, skip=0):
-        return (self._range_to_key(b, e)
+        return (self._range_to_key(b, e, _data=hdrs)
             for b, he, e, hdrs in self.iter_email_offsets(skip=skip))
 
     def iter_email_metadata(self, skip=0, iterator=None):
@@ -122,13 +182,16 @@ From: nobody <deleted@example.org>\r\n\
             if iterator is None:
                 iterator = self.iter_email_offsets(skip=skip)
             for beg, hend, end, hdrs in iterator:
-                path = self.get_tagged_path(self._range_to_key(beg, end))
+                key = self._range_to_key(beg, end, _data=hdrs)
+                path = self.get_tagged_path(key)
                 lts, md = make_ts_and_Metadata(
                     now, lts, obj[beg:hend], 
                     Metadata.PTR(Metadata.PTR.IS_FS, path, end-beg),
                     hdrs)
+                md[Metadata.OFS_IDX] = int(key[1:], 16)
                 yield(md)
         except (ValueError, TypeError):
+            traceback.print_exc()
             return
 
     # Thoughts:
@@ -200,8 +263,15 @@ if __name__ == "__main__":
 
         msgs1 = list(mbox.iter_email_offsets())
         ofs1 = msgs1[len(msgs1)//2]
-        key1 = mbox._range_to_key(ofs1[0], ofs1[2])
+
+        # Make a copy!
+        key1 = mbox._range_to_key(ofs1[0], ofs1[2], _data=ofs1[3])
         msg1 = copy.copy(mbox[key1])
+
+        # Make a copy using an obsolete invalid key!
+        keyX = mbox._range_to_key(0, 0, _data=ofs1[3])
+        msgX = copy.copy(mbox[keyX])
+
         ofs2 = msgs1[1]
         del mbox[key1]
         assert(msg1 not in (None, b'', ''))

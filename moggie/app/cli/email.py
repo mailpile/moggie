@@ -37,7 +37,7 @@ from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
 from ...security.html import HTMLCleaner
 from ...security.css import CSSCleaner
-from ...util.dumbcode import from_json
+from ...util.dumbcode import from_json, dumb_decode
 
 
 def _html_quote(t):
@@ -653,19 +653,25 @@ class CommandParse(CLICommand):
                     msg = 'This is the metadata stored in the search index'
                 else:
                     msg = 'This is the message metadata'
+                msg_headers =  '\n'.join(
+                    '    %s' % h for h in md['raw_headers'].splitlines())
+                msg_pointers = '    \n'.join(
+                    'pointer=%s,%s' % (p.ptr_type, dumb_decode(p.ptr_path),)
+                    for p in md['ptrs'])
                 report.append("""## Metadata\n\n%s:\n\n%s\n
     data_type=%s
     uuid=%s
-    ts=%d, id=%s, parent=%s, thread=%s, pointers=%s
+    ts=%d, id=%s, parent=%s, thread=%s
+    %s
     extras=%s""" % (msg,
-                    '\n'.join('    %s' % h for h in md['raw_headers'].splitlines()),
+                    msg_headers,
                     md['data_type'],
                     md['uuid'],
                     md['ts'],
                     md['idx'],
                     md.get('parent_id', '(none)'),
                     md.get('thread_id', '(none)'),
-                    len(md['ptrs']),
+                    msg_pointers,
                     dict((k, md[k]) for k in md['_MORE'])))
 
         if 'error' in parsed:

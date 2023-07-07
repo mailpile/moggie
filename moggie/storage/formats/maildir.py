@@ -4,6 +4,8 @@ import time
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.util import quick_msgparse, make_ts_and_Metadata
+from ...email.util import split_maildir_meta
+from ...email.util import mk_maildir_idx, unpack_maildir_idx
 from . import tag_path
 
 
@@ -25,22 +27,53 @@ class FormatMaildir:
                 return False
         return True
 
-    def __init__(self, parent, path, container):
+    def __init__(self, parent, path, container, needs_reindexing_cb=None):
         self.parent = parent
         self.path = path
         self.basedir = tag_path(*self.path)
         self.sep = bytes(os.path.sep, 'us-ascii')
+        self.needs_reindexing_cb = needs_reindexing_cb or (lambda *s: True)
+
+    def _find_by_idx(self, full_idx):
+        full_idx_pos, full_idx_hash = unpack_maildir_idx(full_idx)
+        partial_match = None
+        for i, (sub, fn) in enumerate(self.full_keys()):
+            idx = mk_maildir_idx(fn, i)
+            if idx == full_idx:
+                return sub, fn
+            idx_pos, idx_hash = unpack_maildir_idx(idx)
+            if idx_hash == full_idx_hash:
+                partial_match = sub, fn
+        if partial_match is not None:
+            self.needs_reindexing_cb(self)
+            return partial_match
+        raise KeyError(full_idx)
 
     def _key_to_paths(self, key):
-        for sub in (b'cur', b'new'):
-            yield os.path.join(self.basedir, sub + key)
+        if key[:3] in (b'id:', 'id:'):
+            sub, p = self._find_by_idx(int(key[3:]))  # Raises KeyError?
+            yield os.path.join(self.basedir, sub, p)
+
+        else:
+            for sub in (b'cur', b'new'):
+                yield os.path.join(self.basedir, sub + key)
+
+            # Since Maildirs keep metadata in the filename, we have to
+            # consider that the filename might have changed since we last
+            # looked. If we get this far we are still looking, so we scan
+            # the directory for new matching names.
+            key_basename = split_maildir_meta(key[1:])[0]
+            for sub, fn in self.full_keys():
+                if split_maildir_meta(fn)[0] == key_basename:
+                    yield os.path.join(self.basedir, sub, fn)
+                    self.needs_reindexing_cb(self)
 
     def __contains__(self, key):
         try:
             for p in self._key_to_paths(key):
                 if p in self.parent:
                     return True
-        except (OSError, ValueError):
+        except (OSError, ValueError, KeyError):
             pass
         return False
 
@@ -111,7 +144,7 @@ class FormatMaildir:
                 if skip > 0:
                     skip -= 1
                 else:
-                    yield (sub, fn)
+                    yield sub, fn
 
     def keys(self, skip=0):
         for sub, fn in self.full_keys(skip=skip):
@@ -121,7 +154,7 @@ class FormatMaildir:
         return self.keys()
 
     def __len__(self):
-        return sum(1 for sub, fn in self.full_keys())
+        return sum(1 for s_f_i in self.full_keys())
 
     def unlock(self, username, password, ask_key=None, set_key=None):
         return self
@@ -132,7 +165,7 @@ class FormatMaildir:
     def iter_email_metadata(self, skip=0):
         lts = 0
         now = int(time.time())
-        for sub, fn in self.full_keys(skip=skip):
+        for i, (sub, fn) in enumerate(self.full_keys(skip=skip)):
             try:
                 obj = self.get_email_headers(sub, fn)
                 hend, hdrs = quick_msgparse(obj, 0)
@@ -141,6 +174,7 @@ class FormatMaildir:
                     now, lts, obj[:hend],
                     [Metadata.PTR(Metadata.PTR.IS_FS, path, len(obj))],
                     hdrs)
+                md[Metadata.OFS_IDX] = mk_maildir_idx(fn, i)
                 yield md
             except (KeyError, ValueError, TypeError):
                 pass
@@ -170,10 +204,22 @@ if __name__ == "__main__":
 
     print('Tests passed OK')
 
+    def nr_cb(md):
+        print('Detected that %s needs reindexing' % md)
+
+    wanted1 = 'id:17493057840098'
+    wanted2 = 'id:17493057839106'
+    unwant3 = 'id:27493057840098'
+    wanted4 = b'/1390872109_0.14842.slinky,U=69,FMD5=844bb96d088d057aa1b32ac1fbc67b56'
     for path in sys.argv[1:]:
         path = bytes(path, 'utf-8')
-        md = FormatMaildir(fs, [path], None)
+        md = FormatMaildir(fs, [path], None, needs_reindexing_cb=nr_cb)
         print('=== %s (%d) ===' % (path, len(md)))
         print('%s' % '\n'.join('%s' % m for m in md.iter_email_metadata()))
+        for key in md.keys():
+            assert(split_maildir_meta(key)[0] in md)
+        for wanted in (wanted1, wanted2, unwant3, wanted4):
+            if wanted in md:
+                print('Found %s in mailbox!' % wanted)
         print('=== %s (%d) ===' % (path, len(md)))
 
