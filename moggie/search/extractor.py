@@ -203,10 +203,12 @@ class KeywordExtractor:
             for addrinfo in val:
                 if not isinstance(addrinfo, dict):
                     continue
-                txt.extend(addrinfo.values())
+                txt.extend(v for v in addrinfo.values() if isinstance(v, str))
                 if addrinfo.get('address'):
                     kws.add('%s:%s' % (kw, addrinfo['address']))
                     kws.add('email:%s' % (addrinfo['address'],))
+                # FIXME: If the addrinfo has a key fingerprint, should we
+                #        be generating keywords for that?
 
             keywords |= kws
             keywords |= set(kw.split(':')[-1] for kw in kws)

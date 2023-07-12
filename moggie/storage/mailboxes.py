@@ -46,7 +46,7 @@ class MailboxStorageMixin:
                 if username or password:
                     self.unlock_mailbox(
                         mailbox, username, password, context, secret_ttl)
-                parser = mailbox.iter_email_metadata(skip=skip)
+                parser = mailbox.iter_email_metadata(skip=skip, ids=ids)
 
         if (limit is None) and (ids is None):
             yield from parser

@@ -240,7 +240,7 @@ class FormatMailpilev1:
                     except (KeyError, ValueError):
                         pass
 
-    def iter_email_metadata(self, skip=0):
+    def iter_email_metadata(self, skip=0, ids=None):
         known_emails = {}
         def _to_emails(field):
             return [

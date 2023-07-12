@@ -165,12 +165,27 @@ class FormatMaildir:
     def compare_idxs(self, idx1, idx2):
         (p1, h1) = unpack_maildir_idx(idx1)
         (p2, h2) = unpack_maildir_idx(idx2)
-        return (h1 == h2)
+        return (h1 and h2 and (h1 == h2))
 
-    def iter_email_metadata(self, skip=0):
+    def iter_email_metadata(self, skip=0, ids=None):
         lts = 0
         now = int(time.time())
-        for i, (sub, fn) in enumerate(self.full_keys(skip=skip)):
+
+        if ids:
+            # Our IDs are entirely based on the keys, not the data. So if
+            # ids are requested, we can avoid loading all the mail.
+            h_ids = set([h for h in
+                (unpack_maildir_idx(i)[1] for i in ids) if h])
+            def _iterator():
+                for i, (sub, fn) in enumerate(self.full_keys(skip=skip)):
+                    (p, h) = unpack_maildir_idx(mk_maildir_idx(fn, i))
+                    if h in h_ids:
+                        yield i, (sub, fn)
+        else:
+            def _iterator():
+                yield from enumerate(self.full_keys(skip=skip))
+
+        for i, (sub, fn) in _iterator():
             try:
                 obj = self.get_email_headers(sub, fn)
                 hend, hdrs = quick_msgparse(obj, 0)

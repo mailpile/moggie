@@ -7,6 +7,7 @@ import pyzipper as zipfile
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.util import quick_msgparse, make_ts_and_Metadata
+from ...email.util import mk_maildir_idx, unpack_maildir_idx
 from ...util.mailpile import PleaseUnlockError
 
 from . import tag_path
@@ -66,11 +67,9 @@ class FormatMailzip(FormatBytes):
         if isinstance(key, bytes):
             key = str(key, 'utf-8')
         try:
-            logging.debug('Reading: %s' % key[1:])
             with self.zf.open(key[1:], 'r') as fd:
                 return fd.read()
         except RuntimeError as e:
-            logging.debug('Oops: %s' % e)
             try:
                 p = str(self.path[0], 'utf-8')
             except:
@@ -96,12 +95,32 @@ class FormatMailzip(FormatBytes):
         return sorted(['/' + i.filename
             for i in self.zf.infolist() if self.FILE_RE.search(i.filename)])
 
-    def iter_email_metadata(self, skip=0):
+    def compare_idxs(self, idx1, idx2):
+        (p1, h1) = unpack_maildir_idx(idx1)
+        (p2, h2) = unpack_maildir_idx(idx2)
+        return (h1 and h2 and (h1 == h2))
+
+    def iter_email_metadata(self, skip=0, ids=None):
         now = int(time.time())
         lts = 0
+
+        if ids:
+            # Our IDs are entirely based on the keys, not the data. So if
+            # ids are requested, we can avoid loading all the mail.
+            h_ids = set([h for h in
+                (unpack_maildir_idx(i)[1] for i in ids) if h])
+            def _iterator():
+                for i, key in enumerate(self.keys()):
+                    (p, h) = unpack_maildir_idx(mk_maildir_idx(key[1:], i))
+                    if h in h_ids:
+                        yield i, key
+        else:
+            def _iterator():
+                yield from enumerate(self.keys())
+
         obj = ''
         try:
-            for key in self.keys():
+            for i, key in _iterator():
                 if skip > 0:
                     skip -= 1
                     continue
@@ -112,6 +131,7 @@ class FormatMailzip(FormatBytes):
                     now, lts, obj[:hend],
                     Metadata.PTR(Metadata.PTR.IS_FS, path, len(obj)),
                     hdrs)
+                md[Metadata.OFS_IDX] = mk_maildir_idx(key[1:], i)
                 yield(md)
         except (KeyError, ValueError, TypeError) as e:
             logging.exception('Failed to read mailbox')

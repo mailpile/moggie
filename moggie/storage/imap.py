@@ -5,6 +5,7 @@ import time
 from ..email.metadata import Metadata
 from ..email.parsemime import parse_message as ep_parse_message
 from ..email.util import quick_msgparse, make_ts_and_Metadata
+from ..email.util import mk_packed_idx, unpack_idx
 from ..util.dumbcode import *
 from ..util.imap import ImapConn
 from ..util.mailpile import PleaseUnlockError
@@ -39,7 +40,12 @@ class ImapMailbox:
     def path_to_uids(cls, path):
         return (int(u, 16) for u in path.rsplit('/')[-1].split('.', 1))
 
-    def iter_email_metadata(self, skip=0):
+    def compare_idxs(self, idx1, idx2):
+        p1, h1 = unpack_idx(idx1, count=2)
+        p2, h2 = unpack_idx(idx2, count=2)
+        return (h1 and h2 and (h1 == h2))
+
+    def iter_email_metadata(self, skip=0, ids=None):
         lts = 0
         now = time.time()
         uids = self.conn.uids(self.path, skip=skip)[skip:]
@@ -53,6 +59,9 @@ class ImapMailbox:
                     now, lts, msg[:hend],
                     [Metadata.PTR(Metadata.PTR.IS_IMAP, path, size)],
                     hdrs)
+                md[Metadata.OFS_IDX] = mk_packed_idx(
+                    hdrs, uid, self.conn.selected['UIDVALIDITY'],
+                    count=2, mod=6)
                 yield md
 
 
