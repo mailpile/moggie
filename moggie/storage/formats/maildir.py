@@ -162,6 +162,11 @@ class FormatMaildir:
     def get_email_headers(self, sub, fn):
         return self.parent[os.path.join(self.basedir, sub, fn)]
 
+    def compare_idxs(self, idx1, idx2):
+        (p1, h1) = unpack_maildir_idx(idx1)
+        (p2, h2) = unpack_maildir_idx(idx2)
+        return (h1 == h2)
+
     def iter_email_metadata(self, skip=0):
         lts = 0
         now = int(time.time())

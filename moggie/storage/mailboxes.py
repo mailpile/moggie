@@ -1,3 +1,4 @@
+import copy
 import logging
 
 from ..email.parsemime import parse_message as ep_parse_message
@@ -34,9 +35,8 @@ class MailboxStorageMixin:
         return mailbox
 
     def iter_mailbox(self, key,
-            skip=0, limit=None,
+            skip=0, limit=None, ids=None,
             username=None, password=None, context=None, secret_ttl=None):
-
         parser = iter([])
         if (limit is None) or (limit > 0):
             mailbox = self.get_mailbox(key)
@@ -47,14 +47,49 @@ class MailboxStorageMixin:
                     self.unlock_mailbox(
                         mailbox, username, password, context, secret_ttl)
                 parser = mailbox.iter_email_metadata(skip=skip)
-        if limit is None:
+
+        if (limit is None) and (ids is None):
             yield from parser
-        else:
-            for msg in parser:
-                yield msg
+            return
+
+        if ids is not None:
+            ids = copy.copy(ids)
+
+        for msg in parser:
+            if ids is not None:
+                if not ids:
+                    return
+                matches = False
+                for i in ids:
+                    if mailbox.compare_idxs(i, msg.idx):
+                        matches = True
+                        ids.remove(i)
+                        break
+                if not matches:
+                    continue
+
+            yield msg
+            if limit is not None:
                 limit -= 1
                 if limit <= 0:
                     break
+
+    def iter_metadata(self, key, ids,
+            username=None, password=None, context=None, secret_ttl=None):
+        mailbox = self.get_mailbox(key)
+
+        if mailbox is None:
+            logging.debug('Failed to open mailbox: %s' % key)
+            return
+        elif username or password:
+            self.unlock_mailbox(
+                mailbox, username, password, context, secret_ttl)
+
+        for _id in ids:
+            try:
+                yield mailbox.get_metadata(_id)
+            except KeyError:
+                pass
 
     def message(self, metadata, with_ptr=False,
             username=None, password=None, context=None, secret_ttl=None):

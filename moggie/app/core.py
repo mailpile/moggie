@@ -526,10 +526,9 @@ main app worker. Hints:
             AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
 
         # FIXME: Triage local/remote here? Hmm.
-        # Note: This might return a "please login" if the mailbox
-        #       is encrypted or on a remote server.
         info = await self.storage.async_mailbox(asyncio.get_event_loop(),
                 api_request['mailbox'],
+                terms=api_request['terms'],
                 username=api_request['username'],
                 password=api_request['password'],
                 limit=api_request['limit'],

@@ -177,6 +177,8 @@ FIXME: Document html and html formats!
         self.fake_tid = int(time.time() * 1000)
         self.raw_results = None
         self.exporter = None
+        self.mailbox = None
+        self.terms = None
         super().__init__(*args, **kwargs)
 
     def configure(self, args):
@@ -186,6 +188,16 @@ FIXME: Document html and html formats!
         # option is mostly for use with the web-CLI.
         terms = self.strip_options(args)
         terms.extend(self.options['--q='])
+
+        self.mailbox = None
+        mailbox = [(i, a) for i, a in enumerate(terms) if a[:8] == 'mailbox:']
+        if len(mailbox) > 1:
+            raise Nonsense('One mailbox at a time, please')
+        elif mailbox:
+            i, a = mailbox[0]
+            self.mailbox = a[8:]
+            terms.pop(i)
+
         self.terms = self.combine_terms(terms)  # Respects --or
 
         fmt = self.options['--format='][-1]
@@ -767,14 +779,14 @@ FIXME: Document html and html formats!
         fmt = self.options['--format='][-1]
         output = self.get_output()
 
-        if self.terms.startswith('mailbox:'):
+        if self.mailbox:
             valid_outputs = ('default', 'threads', 'summary', 'metadata',
                              'files', 'emails')
             if output not in valid_outputs:
                 raise Nonsense('Need --output=X, with X one of: %s'
                     % ', '.join(valid_outputs))
-            mailbox = self.terms[8:]
-            query = RequestMailbox(context=self.context, mailbox=mailbox)
+            query = RequestMailbox(
+                context=self.context, mailbox=self.mailbox, terms=self.terms)
         else:
             query = RequestSearch(context=self.context, terms=self.terms)
 

@@ -94,7 +94,7 @@ From: nobody <deleted@example.org>\r\n\
             # changed due to other clients adding/removing headers.
             end = self.container.find(b'\nFrom ', hend-1)
             if end < 0:
-                end = len(obj)-1
+                end = len(self.container)-1
             end += 1
             if end != e:
                 logging.debug('FIXME: end changed, request a reindex?')
@@ -125,6 +125,11 @@ From: nobody <deleted@example.org>\r\n\
         self.container[b:e] = fill
         if self.parent:
             self.parent.need_compacting(tag_path(*self.path))
+
+    def compare_idxs(self, idx1, idx2):
+        (p1, h1) = unpack_idx(idx1, count=2)
+        (p2, h2) = unpack_idx(idx2, count=2)
+        return (h1 and h2 and (h1 == h2))
 
     def append(self, data):
         if isinstance(data, str):

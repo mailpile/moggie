@@ -15,6 +15,7 @@
 #
 import logging
 import os
+import re
 import time
 import traceback
 import threading
@@ -43,14 +44,15 @@ class StorageWorkerApi:
             key, details, recurse, relpath, username, password)
 
     async def async_mailbox(self, loop, key,
-            skip=0, limit=None, username=None, password=None):
+            skip=0, limit=None, username=None, password=None, terms=None):
         return await self.async_call(loop, 'mailbox',
-            key, skip, limit, username, password,
+            key, terms, skip, limit, username, password,
             hide_qs=True)  # Keep passwords out of web logs
 
-    def mailbox(self, key, skip=0, limit=None, username=None, password=None):
+    def mailbox(self, key,
+            skip=0, limit=None, username=None, password=None, terms=None):
         return self.call('mailbox',
-            key, skip, limit, username, password,
+            key, terms, skip, limit, username, password,
             hide_qs=True)  # Keep passwords out of web logs
 
     async def async_email(self, loop, metadata,
@@ -150,53 +152,94 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
         except PleaseUnlockError as pue:
             raise self.pue_to_needinfo(pue)
 
-    def api_mailbox(self, key, skip, limit, username, password, method=None):
+    def _prep_filter(self, terms):
+        if not terms:
+            return (lambda t: t, None)
+
+        terms = (terms or '').split()
+        ids = [int(i[3:]) for i in terms if i[:3] == 'id:']
+        terms = set([t.lower() for t in terms if t[:3] != 'id:'])
+
+        if not terms:
+            return (lambda t: t, ids)
+
+        from moggie.search.extractor import KeywordExtractor
+        kwe = KeywordExtractor()
+
+        def msg_terms(r):
+            rt = set()
+            # Check for substring matches within selected headers
+            for term in terms:
+                if term in r.headers.lower():
+                    rt.add(term)
+
+            # Generate the same keywords as the search index uses
+            rt |= kwe.header_keywords(r, r.parsed())[1]
+            return rt
+
+        def _filter(result):
+            filtered = []
+            for r in result:
+                if not (terms - msg_terms(r)):
+                    # All terms matched!
+                    filtered.append(r)
+            return filtered
+
+        return (_filter, ids)
+
+    def api_mailbox(self, key, terms, skip, limit, username, password,
+            method=None):
         cache_key = '%s/%s/%s' % (key, username, password)
 
+        _filter, wanted_ids = self._prep_filter(terms)
+
         self._expire_parse_cache()
-        if cache_key in self.parsed_mailboxes:
+        if cache_key in self.parsed_mailboxes and not wanted_ids:
             while (not self.parsed_mailboxes[cache_key][1]
                     and self.background_thread is not None):
                 time.sleep(0.1)
             logging.debug('%s: Returning from self.parsed_mailboxes' % key)
-            pm = self.parsed_mailboxes[cache_key][-1]
+            pm = _filter(self.parsed_mailboxes[cache_key][-1])
             beg = skip
             end = skip + (limit or (len(pm)-skip))
             return self.reply_json(pm[beg:end])
 
         try:
-            collect = []
             parser = self.backend.iter_mailbox(key,
-                skip=skip, username=username, password=password)
+                skip=skip, ids=(wanted_ids or None),
+                username=username, password=password)
 
             # Ideally, we wouldn't cache anything. But some ops are slow.
+            collect = []
             parse_cache = [time.time(), False, collect]
 
             if limit is None:
                 collect.extend(msg for msg in parser)
                 logging.debug(
                     '%s: Returning %d messages (u)' % (key, len(collect)))
-                parse_cache[1] = True
-                if len(collect) > self.PARSE_CACHE_MIN:
-                    self.parsed_mailboxes[cache_key] = parse_cache
-                return self.reply_json(collect)
+                if not wanted_ids:
+                    parse_cache[1] = True
+                    if len(collect) > self.PARSE_CACHE_MIN:
+                        self.parsed_mailboxes[cache_key] = parse_cache
+                return self.reply_json(_filter(collect))
 
             result = []
             for msg in parser:
                 collect.append(msg)
                 if limit and len(result) >= limit:
                     break
-                result.append(msg)
+                result.extend(_filter([msg]))
 
             logging.debug('%s: Returning %d messages' % (key, len(result)))
-            self.parsed_mailboxes[cache_key] = parse_cache
+            if not wanted_ids:
+                self.parsed_mailboxes[cache_key] = parse_cache
             self.reply_json(result)
 
         except PleaseUnlockError as pue:
             raise self.pue_to_needinfo(pue)
 
         # Finish in background thread
-        if limit and len(result) >= limit:
+        if limit and (len(result) >= limit) and not wanted_ids:
             def finish():
                 logging.debug('%s: Background completing scan' % key)
                 collect.extend(msg for msg in parser)
