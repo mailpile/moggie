@@ -189,15 +189,7 @@ FIXME: Document html and html formats!
         terms = self.strip_options(args)
         terms.extend(self.options['--q='])
 
-        self.mailbox = None
-        mailbox = [(i, a) for i, a in enumerate(terms) if a[:8] == 'mailbox:']
-        if len(mailbox) > 1:
-            raise Nonsense('One mailbox at a time, please')
-        elif mailbox:
-            i, a = mailbox[0]
-            self.mailbox = a[8:]
-            terms.pop(i)
-
+        self.mailbox, terms = self.remove_mailbox_terms(terms)
         self.terms = self.combine_terms(terms)  # Respects --or
 
         fmt = self.options['--format='][-1]

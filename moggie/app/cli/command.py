@@ -152,6 +152,16 @@ class CLICommand:
             self.app = AsyncRPCBridge(self.ev_loop, 'cli', self.worker, self)
             self.ev_loop.run_until_complete(self._await_connection())
 
+    def remove_mailbox_terms(self, terms):
+        mailbox = [a for a in terms if a[:8] == 'mailbox:']
+        if len(mailbox) > 1:
+            raise Nonsense('One mailbox at a time, please')
+        elif mailbox:
+            mailbox = mailbox[0][8:]
+        else:
+            mailbox = None
+        return mailbox, [t for t in terms if t[:8] != 'mailbox:']
+
     def combine_terms(self, terms):
         if self.options.get('--or', [False])[-1]:
             return ' OR '.join('(%s)' % term for term in terms)

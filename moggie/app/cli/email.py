@@ -31,7 +31,7 @@ import time
 
 from .command import Nonsense, CLICommand, AccessConfig
 from .openpgp import CommandOpenPGP
-from ...api.requests import RequestSearch, RequestEmail
+from ...api.requests import RequestMailbox, RequestSearch, RequestEmail
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
@@ -605,9 +605,13 @@ class CommandParse(CLICommand):
         return self.configure2(args)
 
     def configure2(self, args):
+        def _mailbox_and_terms(t):
+            mailbox, t = self.remove_mailbox_terms(t)
+            return mailbox, self.combine_terms(t)
         if args:
-            self.searches.append(self.combine_terms(args))
-        self.searches.extend(self.options['--input='])
+            self.searches.append(_mailbox_and_terms(args))
+        self.searches.extend(
+            _mailbox_and_terms(i) for i in self.options['--input='])
         self.options['--input='] = []
         return []
 
@@ -642,7 +646,8 @@ class CommandParse(CLICommand):
             else:
                 if len(s) > 42:
                     s = s[:40] + '..'
-                report.append('# Parsed e-mail from search: %s' % s)
+                report.append('# Parsed e-mail from %s: %s'
+                    % (parsed.get('mailbox') or 'search', s))
 
         if self.settings.with_metadata:
             md = parsed.get('metadata')
@@ -955,7 +960,7 @@ These are the %d searchable keywords for this message:
             self.emitted += 1
 
     async def gather_emails(self):
-        for search in self.searches:
+        for mailbox, search in self.searches:
             worker = self.connect()
 
             metadata = None
@@ -968,7 +973,11 @@ These are the %d searchable keywords for this message:
             if metadata:
                 result = {'emails': [Metadata.FromParsed(metadata)]}
             else:
-                request = RequestSearch(context=self.context, terms=search)
+                if mailbox:
+                    request = RequestMailbox(
+                        context=self.context, mailbox=mailbox, terms=search)
+                else:
+                    request = RequestSearch(context=self.context, terms=search)
                 result = await self.repeatable_async_api_request(
                     self.access, request)
 
@@ -985,15 +994,18 @@ These are the %d searchable keywords for this message:
                         yield {
                             'data': base64.b64decode(msg['email']['_RAW']),
                             'metadata': md,
+                            'mailbox': mailbox,
                             'search': search}
                     else:
                         yield {
                             'error': 'Not found',
                             'metadata': md,
+                            'mailbox': mailbox,
                             'search': search}
             else:
                 yield {
                     'error': 'Not found',
+                    'mailbox': mailbox,
                     'search': search}
 
     def get_emitter(self):
