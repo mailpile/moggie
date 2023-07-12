@@ -91,13 +91,13 @@ class RequestAddToIndex(RequestBase):
 
 class RequestMailbox(RequestBase):
     def __init__(self, context='',
-            mailbox='', limit=50, skip=0, terms=None,
+            mailbox=None, mailboxes=None, limit=50, skip=0, terms=None,
             username=None, password=None,
             req_id=None):
         self.update({
             'req_type': 'mailbox',
             'context': context,
-            'mailbox': mailbox,
+            'mailboxes': [mailbox] if mailbox else mailboxes,
             'terms': terms,
             'username': username,
             'password': password,

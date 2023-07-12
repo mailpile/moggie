@@ -606,8 +606,8 @@ class CommandParse(CLICommand):
 
     def configure2(self, args):
         def _mailbox_and_terms(t):
-            mailbox, t = self.remove_mailbox_terms(t)
-            return mailbox, self.combine_terms(t)
+            mailboxes, t = self.remove_mailbox_terms(t)
+            return mailboxes, self.combine_terms(t)
         if args:
             self.searches.append(_mailbox_and_terms(args))
         self.searches.extend(
@@ -960,7 +960,8 @@ These are the %d searchable keywords for this message:
             self.emitted += 1
 
     async def gather_emails(self):
-        for mailbox, search in self.searches:
+        for mailboxes, search in self.searches:
+          for mailbox in (mailboxes or [None]):
             worker = self.connect()
 
             metadata = None
@@ -975,7 +976,9 @@ These are the %d searchable keywords for this message:
             else:
                 if mailbox:
                     request = RequestMailbox(
-                        context=self.context, mailbox=mailbox, terms=search)
+                        context=self.context,
+                        mailboxes=[mailbox],
+                        terms=search)
                 else:
                     request = RequestSearch(context=self.context, terms=search)
                 result = await self.repeatable_async_api_request(

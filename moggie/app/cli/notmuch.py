@@ -177,7 +177,7 @@ FIXME: Document html and html formats!
         self.fake_tid = int(time.time() * 1000)
         self.raw_results = None
         self.exporter = None
-        self.mailbox = None
+        self.mailboxes = None
         self.terms = None
         super().__init__(*args, **kwargs)
 
@@ -189,7 +189,7 @@ FIXME: Document html and html formats!
         terms = self.strip_options(args)
         terms.extend(self.options['--q='])
 
-        self.mailbox, terms = self.remove_mailbox_terms(terms)
+        self.mailboxes, terms = self.remove_mailbox_terms(terms)
         self.terms = self.combine_terms(terms)  # Respects --or
 
         fmt = self.options['--format='][-1]
@@ -771,14 +771,16 @@ FIXME: Document html and html formats!
         fmt = self.options['--format='][-1]
         output = self.get_output()
 
-        if self.mailbox:
+        if self.mailboxes:
             valid_outputs = ('default', 'threads', 'summary', 'metadata',
                              'files', 'emails')
             if output not in valid_outputs:
                 raise Nonsense('Need --output=X, with X one of: %s'
                     % ', '.join(valid_outputs))
             query = RequestMailbox(
-                context=self.context, mailbox=self.mailbox, terms=self.terms)
+                context=self.context,
+                mailboxes=self.mailboxes,
+                terms=self.terms)
         else:
             query = RequestSearch(context=self.context, terms=self.terms)
 

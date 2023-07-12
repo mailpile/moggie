@@ -52,7 +52,7 @@ class ResponseMailbox(dict):
             'req_type': request['req_type'],
             'req_id': request['req_id'],
             'context': request['context'],
-            'mailbox': request['mailbox'],
+            'mailboxes': request['mailboxes'],
             'limit': request['limit'],
             'skip': request['skip'],
             'username': request.get('username'),

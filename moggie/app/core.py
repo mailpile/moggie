@@ -526,13 +526,15 @@ main app worker. Hints:
             AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
 
         # FIXME: Triage local/remote here? Hmm.
-        info = await self.storage.async_mailbox(asyncio.get_event_loop(),
-                api_request['mailbox'],
+        info = []
+        loop = asyncio.get_event_loop()
+        for mailbox in (api_request.get('mailboxes') or []):
+            info.extend(await self.storage.async_mailbox(loop, mailbox,
                 terms=api_request['terms'],
                 username=api_request['username'],
                 password=api_request['password'],
                 limit=api_request['limit'],
-                skip=api_request['skip'])
+                skip=api_request['skip']))
 
         watched = False
         return ResponseMailbox(api_request, info, watched)
