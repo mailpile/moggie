@@ -4,11 +4,18 @@ MAINTAINER Bjarni R. Einarsson <bre@mailpile.is>
 RUN apt-get update \
     && apt install -y git curl vim net-tools iproute2 \
         python3-cryptography \
+        python3-pycryptodome \
         python3-urwid \
-        python3-websockets \
         python3-numpy \
         python3-appdirs \
-        python3-setproctitle
+        python3-setproctitle \
+        python3-pyqrcode \
+        python3-packaging \
+        python3-aiosmtplib \
+        python3-aiodns \
+        python3-dkim \
+        python3-pgpy \
+        python3-pgpdump
 
 RUN curl 'https://lists.apache.org/api/mbox.lua?list=dev@age.apache.org&date=2022-01' \
         >/root/test.mbx
