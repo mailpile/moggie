@@ -950,12 +950,12 @@ These are the %d searchable keywords for this message:
 
     def emit_json(self, parsed):
         if not self.emitted:
-            self.print('[')
+            self.print_json_list_start(nl='')
         if parsed is None:
-            self.print(']')
+            self.print_json_list_end()
         else:
             if self.emitted:
-                self.print(',')
+                self.print_json_list_comma()
             self.print_json(parsed)
             self.emitted += 1
 
