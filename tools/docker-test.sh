@@ -19,10 +19,17 @@ if [ "$1" != "--internal" ]; then
     docker build -t moggie-test -f "$WORKDIR/tools/Dockerfile_tests" .
     if [ "$1" == '--wait' ]; then
         touch "$WORKDIR/.docker-test-wait"
+        shift
     else
         rm -f "$WORKDIR/.docker-test-wait"
     fi
-    exec docker run --rm --volume "$WORKDIR:/mnt/code" moggie-test
+    if [ "$1" == '--tui' ]; then
+        shift
+        echo "$@" > "$WORKDIR/.docker-test-tui"
+    else
+        rm -f "$WORKDIR/.docker-test-tui"
+    fi
+    exec docker run -i -t --rm --volume "$WORKDIR:/mnt/code" moggie-test
 fi
 
 ##############################################################################
@@ -57,6 +64,18 @@ ln -fs /root/.local/share/Moggie/default/config.rc moggie-config.rc
 
 python3 -m moggie start
 python3 -m moggie import /root/test.mbx
+
+# Convert test.mbx into a mailzip!
+python3 -m moggie search mailbox:/root/test.mbx --format=mailzip \
+    > /root/testmbx.zip
+
+if [ -e /mnt/code/.docker-test-tui ]; then
+    python3 -m moggie $(cat /mnt/code/.docker-test-tui)
+    rm -f /mnt/code/.docker-test-tui
+    exit 0
+else
+    echo '=== Preparing tests =================================================='
+fi
 
 lots context create Testspace --tag-namespace=Testspace
 lots grant create Tester user --context=Testspace
@@ -99,6 +118,7 @@ POSTFB=$(curl -s "$TESTER_URL/cli/count/gitbox?format=text")
 echo "Tester sees $POSTFB hits for gitbox, after forbidding."
 
 if [ -e /mnt/code/.docker-test-wait ]; then
+    rm -f /mnt/code/.docker-test-wait
     cat <<tac
 
 === Waiting! ==========================================================
