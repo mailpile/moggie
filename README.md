@@ -59,14 +59,14 @@ Install Moggie on recent Debian/Ubuntu:
 
    1. apt install git python3-{numpy,cryptography,pycryptodome,urwid}
                       python3-{appdirs,setproctitle,pyqrcode,packaging}
-                      python3-{aiosmtplib,aiodns,dkim,pgpy,pgpdump}
+                      python3-{aiosmtplib,aiodns,dkim,pgpy,pgpdump,markdown}
    2. git clone --recurse-submodules https://github.com/mailpile/moggie
 
 Install Moggie on Raspbian 11:
 
    1. apt install git python3-{numpy,cryptography,pycryptodome,urwid}
                       python3-{appdirs,setproctitle,pyqrcode,packaging}
-                      python3-{pip,aiodns,dkim,pgpy,pgpdump}
+                      python3-{pip,aiodns,dkim,pgpy,pgpdump,markdown}
    2. python3 -m pip install aiosmtplib
    3. git clone --recurse-submodules https://github.com/mailpile/moggie
 

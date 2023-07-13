@@ -2,20 +2,21 @@ FROM ubuntu:devel
 MAINTAINER Bjarni R. Einarsson <bre@mailpile.is>
 
 RUN apt-get update \
-    && apt install -y git curl vim net-tools iproute2 \
-        python3-cryptography \
-        python3-pycryptodome \
-        python3-urwid \
-        python3-numpy \
-        python3-appdirs \
-        python3-setproctitle \
-        python3-pyqrcode \
-        python3-packaging \
-        python3-aiosmtplib \
+    && apt install -y git curl vim net-tools iproute2 gnupg sed \
         python3-aiodns \
+        python3-aiosmtplib \
+        python3-appdirs \
+        python3-cryptography \
         python3-dkim \
+        python3-markdown \
+        python3-numpy \
+        python3-packaging \
         python3-pgpy \
-        python3-pgpdump
+        python3-pgpdump \
+        python3-pycryptodome \
+        python3-pyqrcode \
+        python3-setproctitle \
+        python3-urwid
 
 RUN curl 'https://lists.apache.org/api/mbox.lua?list=dev@age.apache.org&date=2022-01' \
         >/root/test.mbx

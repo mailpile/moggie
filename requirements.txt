@@ -2,6 +2,7 @@ setproctitle
 cryptography
 pycryptodomex
 pycrypto
+markdown
 numpy
 urwid
 aiosmtplib

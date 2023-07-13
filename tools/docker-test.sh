@@ -23,12 +23,21 @@ if [ "$1" != "--internal" ]; then
     else
         rm -f "$WORKDIR/.docker-test-wait"
     fi
+
+    if [ "$1" == '--nlnet' ]; then
+        touch "$WORKDIR/.docker-test-nlnet"
+        shift
+    else
+        rm -f "$WORKDIR/.docker-test-nlnet"
+    fi
+
     if [ "$1" == '--tui' ]; then
         shift
         echo "$@" > "$WORKDIR/.docker-test-tui"
     else
         rm -f "$WORKDIR/.docker-test-tui"
     fi
+
     exec docker run -i -t --rm --volume "$WORKDIR:/mnt/code" moggie-test
 fi
 
@@ -44,10 +53,11 @@ export PATH=$PATH:/mnt/code/tools
 export PYTHONPATH=/mnt/code
 cat >/root/.bashrc <<tac
 export PATH=\$PATH:/mnt/code/tools
-export PYTHONPATH=/mnt/code
+export PYTHONPATH=/mnt/code:/mnt/code/lib
 export PS1="moggie-test $ "
 tac
 set -x
+. /root/.bashrc
 
 # Make it easy to look at the logs, enable Moggie debug logs
 cd /root
@@ -61,20 +71,31 @@ ln -fs /root/.local/share/Moggie/default moggie
 ln -fs /root/.local/share/Moggie/default/logs moggie-logs
 ln -fs /root/.local/share/Moggie/default/config.rc moggie-config.rc
 
-
-python3 -m moggie start
+python3 -m moggie start 2>/dev/null >/dev/null
 python3 -m moggie import /root/test.mbx
 
-# Convert test.mbx into a mailzip!
-python3 -m moggie search mailbox:/root/test.mbx --format=mailzip \
-    > /root/testmbx.zip
+if [ -e /mnt/code/.docker-test-nlnet ]; then
+    rm -f /mnt/code/.docker-test-nlnet
+
+    # Copy our test data and keychain to root's home
+    cp -r /mnt/code/test-data/emails/ /root
+    rm -rf /root/emails/cur
+    mv /root/emails/GnuPG /root/.gnupg
+    chmod -R ugo-rwx /root/.gnupg
+
+    # Generate test-emails
+    /root/emails/make-test-maildir.sh
+
+    # Convert test messages into into a mailzip!
+    python3 -m moggie search mailbox:/root/emails --format=mailzip \
+        > /root/mailzip-and-openpgp.zip
+fi
 
 if [ -e /mnt/code/.docker-test-tui ]; then
     python3 -m moggie $(cat /mnt/code/.docker-test-tui)
+    python3 -m moggie stop
     rm -f /mnt/code/.docker-test-tui
     exit 0
-else
-    echo '=== Preparing tests =================================================='
 fi
 
 lots context create Testspace --tag-namespace=Testspace
