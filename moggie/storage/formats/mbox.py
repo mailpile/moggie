@@ -57,25 +57,25 @@ From: nobody <deleted@example.org>\r\n\
             return False
 
     def _key_to_range_hash(self, key):
-        (beg, ln), _hash = unpack_idx(int(key[1:], 16), count=2)
-        return beg, beg+ln, _hash
+        (beg,), _hash = unpack_idx(int(key[1:], 16), count=1)
+        return beg * 32, _hash
 
     def _key_to_range(self, key):
-        (beg, ln), _hash = unpack_idx(int(key[1:], 16), count=2)
-        return beg, beg+ln
+        (beg,), _hash = unpack_idx(int(key[1:], 16), count=1)
+        return beg * 32
 
-    def _range_to_key(self, beg, end, _data=b''):
+    def _range_to_key(self, beg, _ignored_end,_data=b''):
         # mod=6 gives us 6*16 = 96 bits of the hash
-        return b'@%x' % mk_packed_idx(_data, beg, end-beg, count=2, mod=6)
+        return b'@%x' % mk_packed_idx(_data, (beg // 32), count=1, mod=6)
 
     def _find_message_offsets(self, key):
-        (b, e, wanted_hash) = self._key_to_range_hash(key)
+        (b, wanted_hash) = self._key_to_range_hash(key)
         try:
             beg = b
-            if b > 4096:
+            if b >= 32:
                 # Scan for our beginning marker; accommodates minor changes
                 # to the mailbox without having to rescan the whole thing.
-                beg = self.container.find(b'\nFrom ', b-40)
+                beg = self.container.find(b'\nFrom ', b - 32)
                 if beg < 0:
                     raise KeyError('Message not found')
                 beg += 1
@@ -87,7 +87,7 @@ From: nobody <deleted@example.org>\r\n\
 
             # Verify that we have the correct message
             hend, hdrs = quick_msgparse(self.container, beg)
-            if self._range_to_key(b, e, _data=hdrs) != key:
+            if self._range_to_key(b, 0, _data=hdrs) != key:
                 raise KeyError('Message not found')
 
             # Make sure we have the correct message length; it could have
@@ -96,8 +96,6 @@ From: nobody <deleted@example.org>\r\n\
             if end < 0:
                 end = len(self.container)-1
             end += 1
-            if end != e:
-                logging.debug('FIXME: end changed, request a reindex?')
 
             return beg, end
         except KeyError:
@@ -105,7 +103,7 @@ From: nobody <deleted@example.org>\r\n\
 
         # Message not found: scan the entire mailbox?
         for beg, hend, end, hdrs in self.iter_email_offsets():
-            if self._range_to_key(b, e, _data=hdrs) == key:
+            if self._range_to_key(b, 0, _data=hdrs) == key:
                 logging.debug('FIXME: message moved, request a reindex?')
                 return beg, end
 
@@ -127,8 +125,8 @@ From: nobody <deleted@example.org>\r\n\
             self.parent.need_compacting(tag_path(*self.path))
 
     def compare_idxs(self, idx1, idx2):
-        (p1, h1) = unpack_idx(idx1, count=2)
-        (p2, h2) = unpack_idx(idx2, count=2)
+        (p1, h1) = unpack_idx(idx1, count=1)
+        (p2, h2) = unpack_idx(idx2, count=1)
         return (h1 and h2 and (h1 == h2))
 
     def append(self, data):
@@ -139,6 +137,8 @@ From: nobody <deleted@example.org>\r\n\
         return super().append(data)
 
     def __setitem__(self, key, value):
+        raise ValueError('FIXME: Unimplemented: setitem')
+
         if isinstance(value, str):
             value = bytes(value, 'utf-8')
         if value[:5] != b'From ':
@@ -176,7 +176,7 @@ From: nobody <deleted@example.org>\r\n\
                 self.parent.need_compacting(tag_path(*self.path))
 
     def keys(self, skip=0):
-        return (self._range_to_key(b, e, _data=hdrs)
+        return (self._range_to_key(b, 0, _data=hdrs)
             for b, he, e, hdrs in self.iter_email_offsets(skip=skip))
 
     def iter_email_metadata(self, skip=0, ids=None, iterator=None):
@@ -187,7 +187,7 @@ From: nobody <deleted@example.org>\r\n\
             if iterator is None:
                 iterator = self.iter_email_offsets(skip=skip)
             for beg, hend, end, hdrs in iterator:
-                key = self._range_to_key(beg, end, _data=hdrs)
+                key = self._range_to_key(beg, 0, _data=hdrs)
                 path = self.get_tagged_path(key)
                 lts, md = make_ts_and_Metadata(
                     now, lts, obj[beg:hend], 
@@ -270,7 +270,7 @@ if __name__ == "__main__":
         ofs1 = msgs1[len(msgs1)//2]
 
         # Make a copy!
-        key1 = mbox._range_to_key(ofs1[0], ofs1[2], _data=ofs1[3])
+        key1 = mbox._range_to_key(ofs1[0], ofs1[1], _data=ofs1[3])
         msg1 = copy.copy(mbox[key1])
 
         # Make a copy using an obsolete invalid key!
