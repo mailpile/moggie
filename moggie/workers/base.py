@@ -5,7 +5,6 @@ import inspect
 import logging
 import os
 import socket
-import sys
 import time
 import threading
 import traceback
@@ -25,6 +24,7 @@ from multiprocessing import Process
 from ..api.exceptions import *
 from ..config import APPNAME, AppConfig, configure_logging
 from ..util.dumbcode import *
+from ..util.fds import close_private_fds
 from ..util.http import url_parts, http1x_connect
 
 
@@ -62,8 +62,6 @@ class BaseWorker(Process):
     IDLE_T = 60
     TICK_T = 300
     SHUTDOWN_IDLE = False
-    MAX_FD = 2048          # If we ever get file descriptors above this,
-                           # we may end up with weird deadlocks/bugs.
 
     HTTP_200 = b'HTTP/1.0 200 OK\r\n'
     HTTP_400 = b'HTTP/1.0 400 Invalid Request\r\nContent-Length: 16\r\n\r\nInvalid Request\n'
@@ -130,20 +128,8 @@ class BaseWorker(Process):
         self._background_jobs = {'default': []}
         self._background_threads = {}
         self._background_job_lock = threading.Lock()
-        self._fds_open_pre_start = []
         # FIXME: Check for stale url files; we just started up, so if one
         #        exists and we cannot connect, nuke it!
-
-    def enumerate_open_fds(self):
-        open_fds = []
-        for fd in range(3, self.MAX_FD):
-            try:
-                stat = os.fstat(fd)
-                open_fds.append(fd)
-            except Exception as e:
-                pass  #logging.debug('os.fstat(%d) raised %s' % (fd, e))
-        logging.debug('Found open FDs: %s' % open_fds)
-        return open_fds
 
     def expose_object(self, obj,
             prefix='', allow_local=True, arg_filter=None, exclude=[]):
@@ -209,15 +195,6 @@ class BaseWorker(Process):
         logging.log(self.log_level,
             'Lowered log threshold to %d' % self.log_level)
 
-    def close_pre_start_fds(self):
-        # This closes any open file descriptors which weren't opened by us.
-        # We need this to prevent file descriptor leaks which will hang our
-        # clients and cause deadlocks and other fun things like that.
-        current_fds = self.enumerate_open_fds()
-        for fd in self._fds_open_pre_start:
-            if fd in current_fds:
-                os.close(fd)
-
     def run(self):
         if signal is not None:
             signal.signal(signal.SIGUSR2, self.log_more)
@@ -225,7 +202,8 @@ class BaseWorker(Process):
             type(self).__name__, stdout=self.LOG_STDOUT, level=self.log_level)
         logging.info('Started %s(%s), pid=%d'
             % (type(self).__name__, self.name, os.getpid()))
-        self.close_pre_start_fds()
+
+        close_private_fds()
         try:
             if self.NICE and hasattr(os, 'nice'):
                 os.nice(self.NICE)
@@ -406,7 +384,6 @@ class BaseWorker(Process):
             logging.debug('Launching %s(%s)'
                 % (type(self).__name__, self.name,))
 
-            self._fds_open_pre_start = self.enumerate_open_fds()
             self.start()
             for t in range(1, 25):
                 if self._load_url() and self._ping():
