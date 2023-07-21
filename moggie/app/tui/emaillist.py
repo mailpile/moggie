@@ -107,7 +107,8 @@ class EmailListWalker(urwid.ListWalker):
         def _sort_key(msg):
             return (-_thread_first(msg)['_tts'], msg['ts'], msg['idx'])
 
-        self.visible.sort(key=_sort_key)
+        if not self.parent.is_mailbox:
+            self.visible.sort(key=_sort_key)
 
         # Keep the focus in the right place!
         if focus_uuid is not None:
