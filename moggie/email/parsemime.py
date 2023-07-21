@@ -138,7 +138,12 @@ class MessagePart(dict):
                     #        an actual part to the postamble. We need to
                     #        detect this more explicitly based on --*--.
                     #        Or make sure find_parts copes!
-                    part['content-type'] = ['text/x-mime-postamble', {}]
+                    if ((end - beg) < 2) and not self._raw(part).strip():
+                        # Short white-space only postamble should just be ignored.
+                        parts[0]['_PARTS'] -= 1
+                        parts.pop(-1)
+                    else:
+                        part['content-type'] = ['text/x-mime-postamble', {}]
                 elif recurse:
                     sub = MessagePart(
                         self._raw(part), self.fix_mbox_from,
