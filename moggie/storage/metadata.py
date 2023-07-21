@@ -154,7 +154,6 @@ class MetadataStore(RecordStore):
 
         import sys
         zdict = dumb_decode(self[0].more['compress_dict'])
-        sys.stderr.write('ZDICT=%s\n' % zdict)
         compress_func, decompress_func = _make_cfuncs(zdict)
         self.encoding_kwargs = lambda: {'comp_bin': (b'm', compress_func)}
         self.decoding_kwargs = lambda: {'decomp_bin': [('m', b'm', decompress_func)]}
