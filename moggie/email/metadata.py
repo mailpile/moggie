@@ -229,7 +229,7 @@ if __name__ == "__main__":
     md1 = Metadata(0, 0, Metadata.PTR(0, tag_path(*mbx_path), 200), """\
 From: Bjarni <bre@example.org>\r
 To: bre@example.org\r
-Subject: This is Great\r\n""", 0, 0, {'tags': 'inbox,unread,sent'})
+Subject: This is Great\r\n""", 0, 0, {'tags': 'inbox,read,sent'})
 
     md2 = Metadata(0, 0, [[0, dumb_encode_asc(tag_path(*mdir_path)), 200]], """\
 To: bre@example.org

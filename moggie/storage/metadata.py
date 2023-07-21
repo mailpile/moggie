@@ -23,7 +23,7 @@ from ..email.metadata import Metadata
 METADATA_ZDICTS = [
     ('m', b'm',  b"""\
 [01234,56789,[[0,"BL2hvbWUvdmFybWFpY3VybWJ4",0123456789],[]],"\
-\nFrom: Facebook <noreply@gmail.com>\
+\nFrom: Facebook Twitter Google Microsoft Apple <noreply@gmail.com>\
 \nTo: pay bank <anna@live.net.org.co.uk>\
 \nSubject: =?UTF-8?B? =?UTF-8?Q? =?utf-8?B? =?utf-8?Q? pay here this from \
 You you and for share a change new New is on post update invoice free request \
@@ -32,9 +32,9 @@ You you and for share a change new New is on post update invoice free request \
 Apr 20 May 20 Jun 20 Jul 20 Aug 20 Sep 20 Oct 20 Nov 20 Des 20 \
 +0000 -0000 +0800 +0200 -0700 (CST) (PDT) (BST) (EST) (UTC) (IST)\
 \nMessage-Id:",\
-{"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
-"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
-"tags": ["inbox", "outbox", "sent", "spam", "trash", "unread"],\
+{"tags": ["inbox", "outbox", "sent", "spam", "trash", "read"],\
+"tags": ["inbox", "outbox", "sent", "spam", "trash", "read"],\
+"tags": ["inbox", "outbox", "sent", "spam", "trash", "read"],\
 {"attachments":{},"thread":[]}]""")]
 
 

@@ -63,10 +63,10 @@ class MboxExporter(BaseExporter):
             if tags:
                 taglist = bytes(', '.join(tags), 'utf-8')
                 _add_or_update(cls.TAGS_HEADER, taglist)
-            if 'unread' in tags:
-                _add_or_update(cls.STATUS_HEADER, b'O')
-            else:
+            if 'read' in tags:
                 _add_or_update(cls.STATUS_HEADER, b'RO')
+            else:
+                _add_or_update(cls.STATUS_HEADER, b'O')
 
         return message
 
@@ -78,7 +78,7 @@ if __name__ == '__main__':
     now = int(time.time())
     md = Metadata.ghost(msgid='<testing@moggie>')
     md[md.OFS_TIMESTAMP] = now
-    md.more['tags'] = ['inbox', 'unread']
+    md.more['tags'] = ['inbox', 'read']
 
     bio = ClosableBytesIO()
     with MboxExporter(bio) as exp:
@@ -101,8 +101,8 @@ Why does mutt not unescape?""")
 
     assert(b'From: bre@example.org' in exported)
     assert(b'Status: N' not in exported)
-    assert(b'Status: O' in exported)
-    assert(b'Tags: inbox, unread' in exported)
+    assert(b'Status: RO' in exported)
+    assert(b'Tags: inbox, read' in exported)
     assert(b'>From Iceland with Love' in exported)
     assert(b'>>From Iceland with more Love' in exported)
 

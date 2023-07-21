@@ -31,13 +31,13 @@ DEFAULT_NEW_FILTER_SCRIPT = """\
 FILTER_RULE('DEFAULT')
 
 
-# Add to inbox and unread by default; later steps may undo.
-add_tags('inbox', 'unread')
+# Add to inbox by default; later steps may undo.
+add_tags('inbox')
 
 
 # Treat new messages as unread, unless headers tell us otherwise.
 if 'status:o' in keywords:
-    remove_tags('unread')
+    add_tags('read')
 
 
 # Check if we think message is spam, unless already classified
@@ -283,8 +283,8 @@ add_keywords('notreached')
 
     assert('in:inbox' in kw)
     assert('in:inbox@testspace' in kw)
-    assert('in:unread' not in kw)
-    assert('in:unread@testspace' not in kw)
+    assert('in:read' in kw)
+    assert('in:read@testspace' in kw)
     assert('none' in kw)
     assert('flip' in kw)
     assert('fungible' in kw)

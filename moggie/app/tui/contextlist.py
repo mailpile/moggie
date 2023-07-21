@@ -160,7 +160,7 @@ class ContextList(urwid.ListBox):
                 for tag in set(all_tags):
                     tag = tag.lower()
                     args.append('--q=in:%s' % tag)
-                    args.append('--q=in:%s tag:unread' % tag)
+                    args.append('--q=in:%s -tag:read' % tag)
                 self.counts_obj.update({'args': args})
                 self.awaiting_counts[self.counts_obj['req_id']] = ctx_src_id
                 self.send_with_context(self.counts_obj, ctx)
@@ -187,7 +187,7 @@ class ContextList(urwid.ListBox):
         if ctx_src_id and message.get('data'):
             self.tag_counts[ctx_src_id] = counts = {}
             for search, count in message['data'][0].items():
-                search = search[3:].replace(' tag:unread', '*')
+                search = search[3:].replace(' -tag:read', '*')
                 counts[search] = count
             self.update_content()
 

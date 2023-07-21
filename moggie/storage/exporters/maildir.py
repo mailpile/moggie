@@ -160,7 +160,7 @@ class MaildirExporter(BaseExporter):
 
     def flags(self, tags):
         flags = set()
-        if 'unread' not in tags:
+        if 'read' in tags:
             flags.add(self.BASIC_FLAGS['seen'])
         for tag in tags:
             if tag in self.BASIC_FLAGS:
@@ -219,7 +219,7 @@ if __name__ == '__main__':
     now = int(time.time())
     md = Metadata.ghost(msgid='<testing@moggie>')
     md[md.OFS_TIMESTAMP] = now
-    md.more['tags'] = ['inbox', 'unread']
+    md.more['tags'] = ['inbox', 'read']
 
     bio = ClosableBytesIO()
     with EmlExporter(bio, password=b'testing') as exp:

@@ -11,7 +11,7 @@
 #    notmuch tag <EXPRESSION> -- id:<MSGID>
 #    notmuch search --output=tags *
 #    notmuch count --output=threads -- tag:<TAG>
-#    notmuch count --output=threads -- tag:<TAG> AND tag:unread
+#    notmuch count --output=threads -- tag:<TAG> AND -tag:read
 #    notmuch show --format=json --include-html <THREADID>
 #
 #NOTES:
@@ -69,9 +69,9 @@ class CommandSearch(CLICommand):
         moggie search bjarni                 # Exact match
         moggie search bjarn*                 # Will match bjarni or bjarna
 
-        moggie search in:inbox tag:unread    # Both in the inbox and unread
-        moggie search in:inbox -tag:unread   # In the inbox, not unread
-        moggie search in:inbox +tag:unread   # In the inbox, or unread
+        moggie search in:inbox -tag:read     # In the inbox, still unread
+        moggie search in:inbox tag:read      # In the inbox, already read
+        moggie search -tag:read +in:inbox    # Unread or in the inbox
         moggie search bjarni --format=json   # JSON for further processing...
 
         moggie search dates:2022-08 --format=mbox > August2022.mbx  # Export!
@@ -1405,7 +1405,7 @@ class CommandTag(CLICommand):
 
     This means a batch like this:
 
-        +inbox -unread -incoming -- in:incoming
+        +inbox +read -incoming -- in:incoming
         +potato -- in:incoming
 
     ... will tag all the messages as 'in:potato', even though the first

@@ -115,7 +115,7 @@ blown mail client.</p>
     Examples:
 
         moggie search from:bre@example.org
-        moggie search in:inbox NOT tag:unread
+        moggie search in:inbox AND tag:read
         moggie search dates:2021..2022-06       # 1.5 years worth of e-mail
         moggie search hello NOT subject:hello   # Hello, not in the subject
 

@@ -268,7 +268,8 @@ class SearchEngine:
 
         self.magic_term_remap = {
             'is:recent': 'date:recent',
-            'is:unread': 'in:unread'}
+            'is:unread': '-in:read',
+            'is:read':   'in:read'}
 
     def _allocate_history_slot(self):
         pos = self.history.get('pos', self.IDX_HISTORY_END) + 1
