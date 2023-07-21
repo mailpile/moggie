@@ -10,6 +10,7 @@ from mmap import mmap, ACCESS_WRITE
 
 from .records import RecordStore
 from ..email.metadata import Metadata
+from ..util.dumbcode import dumb_decode, dumb_encode_asc, dumb_encode_bin
 
 
 # This is not actually a valid Metadata entry, but it contains strings we
@@ -20,8 +21,7 @@ from ..email.metadata import Metadata
 #
 # The last entry in the table will be used to compress new data.
 #
-METADATA_ZDICTS = [
-    ('m', b'm',  b"""\
+METADATA_ZDICT = b"""\
 [01234,56789,[[0,"BL2hvbWUvdmFybWFpY3VybWJ4",0123456789],[]],"\
 \nFrom: Facebook Twitter Google Microsoft Apple <noreply@gmail.com>\
 \nTo: pay bank <anna@live.net.org.co.uk>\
@@ -35,7 +35,7 @@ Apr 20 May 20 Jun 20 Jul 20 Aug 20 Sep 20 Oct 20 Nov 20 Des 20 \
 {"tags": ["inbox", "outbox", "sent", "spam", "trash", "read"],\
 "tags": ["inbox", "outbox", "sent", "spam", "trash", "read"],\
 "tags": ["inbox", "outbox", "sent", "spam", "trash", "read"],\
-{"attachments":{},"thread":[]}]""")]
+{"attachments":{},"thread":[]}]"""
 
 
 class IntColumn:
@@ -135,31 +135,29 @@ class MetadataStore(RecordStore):
     TS_RESOLUTION = 16
 
     def __init__(self, workdir, store_id, aes_keys):
-        decompressors = []
-        encoding_kwargs = None
-        for ma, mb, zdict in METADATA_ZDICTS:
-            compress_func, decompress_func = _make_cfuncs(zdict)
-            decompressors.append((ma, mb, decompress_func))
-            # Last one wins
-            encoding_kwargs = lambda: copy.copy(
-                {'comp_bin': (mb, compress_func)})
-        decoding_kwargs = lambda: copy.copy({'decomp_bin': decompressors})
-
         super().__init__(workdir, store_id,
             sparse=True,
             compress=64,
             aes_keys=aes_keys,
             est_rec_size=400,
-            target_file_size=64*1024*1024,
-            decoding_kwargs=decoding_kwargs,
-            encoding_kwargs=encoding_kwargs)
+            target_file_size=64*1024*1024)
 
-        if 0 not in self:
-            self[0] = Metadata.ghost('<internal-ghost-zero@moggie>')
         self.rank_by_date = IntColumn(os.path.join(workdir, 'timestamps'))
         self.thread_ids = IntColumn(os.path.join(workdir, 'threads'))
         self.mtimes = IntColumn(os.path.join(workdir, 'mtimes'))
         self.thread_cache = None
+
+        if 0 not in self:
+            record_0 = Metadata.ghost('<internal-ghost-zero@moggie>')
+            record_0.more['compress_dict'] = dumb_encode_asc(METADATA_ZDICT)
+            self.set(0, record_0, encrypt=False)
+
+        import sys
+        zdict = dumb_decode(self[0].more['compress_dict'])
+        sys.stderr.write('ZDICT=%s\n' % zdict)
+        compress_func, decompress_func = _make_cfuncs(zdict)
+        self.encoding_kwargs = lambda: {'comp_bin': (b'm', compress_func)}
+        self.decoding_kwargs = lambda: {'decomp_bin': [('m', b'm', decompress_func)]}
 
     def delete_everything(self, *args):
         super().delete_everything(*args)

@@ -142,6 +142,11 @@ main app worker. Hints:
 
         log_level = self.worker.log_level
 
+        # FIXME: If our metadata or storage workers fail to start, we should
+        #        abort and notify the user that formats have changed and they
+        #        need to nuke their data. This should NEVER happen after we go
+        #        beta.
+
         missing_metadata = self.metadata is None
         if missing_metadata:
             self.metadata = MetadataWorker(
