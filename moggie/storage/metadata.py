@@ -261,13 +261,33 @@ class MetadataStore(RecordStore):
 
         return changed
 
-    def set(self, key, metadata, **kwargs):
+    def _msg_keys(self, metadata, imap_keys=False, fs_path_keys=False):
+        msgid = metadata.get_raw_header('Message-Id')
+        if msgid is not None:
+            yield msgid
+        if imap_keys or fs_path_keys:
+            for ptr in metadata.pointers:
+                if imap_keys and (ptr.ptr_type == ptr.IS_IMAP):
+                    yield ptr.ptr_path
+                elif fs_path_keys and (ptr.ptr_type == ptr.IS_FS):
+                    yield ptr.ptr_path
+
+    def _get_from_metadata(self, metadata, extra_keys, **key_kwargs):
+        keys = list(self._msg_keys(metadata, **key_kwargs)) + extra_keys
+        for key in keys:
+            om = self.get(key)
+            if om is not None:
+                return om, key, keys
+        return None, None, keys
+
+    def set(self, keys, metadata, **kwargs):
         if not isinstance(metadata, Metadata):
             raise ValueError('Need instance of Metadata')
         try:
-            idx = self.key_to_index(key)
+            keys = keys if isinstance(keys, list) else [keys]
+            idx = self.key_to_index(keys[0])
         except KeyError:
-            return self.append(metadata, keys=[key], **kwargs)
+            return self.append(metadata, keys=keys, **kwargs)
 
         rerank = True
         if 'rerank' in kwargs:
@@ -275,9 +295,11 @@ class MetadataStore(RecordStore):
             del kwargs['rerank']
         if rerank:
             self._rank(idx, metadata)
-        return super().set(idx, metadata, **kwargs)
+        new_keys = [idx] + [k for k in keys if not isinstance(k, int)]
+        return super().set(new_keys, metadata, **kwargs)
 
-    def update_or_add(self, metadata):
+    def update_or_add(self, metadata,
+            extra_keys=[], imap_keys=False, fs_path_keys=False):
         """
         This will add metadata to the index, or if metadata is already
         present, update it with new values. Old key/value pairs and old
@@ -285,31 +307,38 @@ class MetadataStore(RecordStore):
 
         Returns a tuple of (new, metadata_index).
         """
-        msgid = metadata.get_raw_header('Message-Id')
-        if msgid is None:
-            return (True, self.append(metadata, keys=[]))
-        else:
-            om = self.get(msgid)
-            if om is not None:
-                metadata.add_pointers(om.pointers)
-                for k, v in om.more.items():
-                    if k not in metadata.more:
-                        metadata.more[k] = v
-            return (om is None, self.set(msgid, metadata))
+        om, msg_key, all_keys = self._get_from_metadata(metadata, extra_keys,
+            imap_keys=imap_keys, fs_path_keys=fs_path_keys)
+        if om is None:
+            return (True, self.append(metadata, keys=all_keys))
 
-    def add_if_new(self, metadata):
-        msgid = metadata.get_raw_header('Message-Id')
-        if msgid in self:
+        metadata.add_pointers(om.pointers)
+        for k, v in om.more.items():
+            if k not in metadata.more:
+                metadata.more[k] = v
+
+        all_keys.sort(key=lambda k: 0 if (k == msg_key) else 1)
+        return (False, self.set(all_keys, metadata))
+
+    def add_if_new(self, metadata,
+            extra_keys=[], imap_keys=False, fs_path_keys=False):
+        om, msg_key, all_keys = self._get_from_metadata(metadata, extra_keys,
+            imap_keys=imap_keys, fs_path_keys=fs_path_keys)
+        if om is not None:
             return None
         else:
-            return self.set(msgid, metadata)
+            return self.set(all_keys, metadata)
 
-    def append(self, metadata, **kwargs):
+    def append(self, metadata,
+            extra_keys=[], imap_keys=False, fs_path_keys=False,
+            **kwargs):
         if not isinstance(metadata, Metadata):
             raise ValueError('Need instance of Metadata')
         if kwargs.get('keys') is None:
-            msgid = metadata.get_raw_header('Message-Id')
-            kwargs['keys'] = [msgid] if msgid else None
+            kwargs['keys'] = (
+                list(self._msg_keys(metadata,
+                    imap_keys=imap_keys, fs_path_keys=fs_path_keys))
+                + extra_keys) or None
 
         # FIXME: This almost always writes twice, because of the ranking.
         #        It would be nice if that were not the case!
@@ -346,6 +375,7 @@ class MetadataStore(RecordStore):
         return m
 
     def __delitem__(self, key):
+        # FIXME: Fetch the item, delete all the pointers!
         super().__delitem__(key)
         idx = self.key_to_index(key)
         del self.rank_by_date[idx]
@@ -400,11 +430,10 @@ class MetadataStore(RecordStore):
 
 
 if __name__ == '__main__':
-    import random, sys
+    import random, sys, os
     from ..util.dumbcode import dumb_decode
 
-    ms = MetadataStore('/home/bre/tmp/metadata-test', 'metadata-test', [b'123456789abcdef0'])
-    ms.delete_everything(True, False, True)
+    os.system('rm -rf /home/bre/tmp/metadata-test')
 
     from .files import FileStorage
     fs = FileStorage(relative_to=b'/home/bre')
@@ -417,9 +446,12 @@ if __name__ == '__main__':
         break
       for fn in fs.info(dn, details=True).get('contents', []):
         count = 0
-        for msg in fs.iter_mailbox(fn):
-          ms.update_or_add(msg)
-          count += 1
+        try:
+          for msg in fs.iter_mailbox(fn):
+            ms.update_or_add(msg)
+            count += 1
+        except OSError:
+          pass
         if count:
           tcount += count
           t1 = time.time()
@@ -460,14 +492,22 @@ From: root@example.org (Cron Daemon)
 To: bre@example.org
 Subject: Sure, sure
 """
+    now = int(time.time())
     foo_ptr = Metadata.PTR(0, b'/tmp/foo', 0)
-    n,i1 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, 0, 0, {'thing': 'stuff', 'a': 'b'}))
-    n,i2 = ms.update_or_add(Metadata(int(time.time()), 0, foo_ptr, headers, 0, 0, {'wink': 123, 'a': 'c'}))
-    ms.append(Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net'))
-    ms.append(Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net'))
-    ms[100000] = Metadata(int(time.time()), 0, foo_ptr, b'From: bre@klai.net')
-    t1M = int(time.time() + 100)
+    n,i1 = ms.update_or_add(
+        Metadata(now, 0, foo_ptr, headers, 0, 0, {'thing': 'stuff', 'a': 'b'}))
+    n,i2 = ms.update_or_add(
+        Metadata(now, 0, foo_ptr, headers, 0, 0, {'wink': 123, 'a': 'c'}),
+        fs_path_keys=True)
+    ms.append(Metadata(now, 0, foo_ptr, b'From: bre@klai.net'))
+    ms.append(Metadata(now, 0, foo_ptr, b'From: bre@klai.net'))
+    ms[100000] = Metadata(now, 0, foo_ptr, b'From: bre@klai.net')
+    t1M = now + 100
     ms[1000000] = Metadata(t1M, 0, foo_ptr, b'From: bre@klai.net')
+
+    # Ensure paths and message IDs are recorded in metadata
+    assert(foo_ptr.ptr_path in ms)
+    assert('<202109010003.181031O6020234@example.org>' in ms)
 
     assert(i1 == i2)
     assert(ms[i1].more['thing'] == 'stuff')

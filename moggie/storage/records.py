@@ -398,9 +398,11 @@ class RecordStoreReadOnly:
             with open(self.keys_fn, 'wb') as fd:
                 fd.write(self.prefix)
         self.keys_fd = open(self.keys_fn, 'rb+', buffering=0)
-        if self.keys_fd.read(len(self.prefix)) != self.prefix:
+        read_prefix = self.keys_fd.read(len(self.prefix))
+        if read_prefix != self.prefix:
             self.keys_fd.close()
-            raise ConfigMismatch('Config mismatch in %s' % self.keys_fn)
+            raise ConfigMismatch('Config mismatch in %s (%s != %s)' % (
+                self.keys_fn, read_prefix, self.prefix))
         self.keys = {}
         self.load_keys()
         self.cache = {}
@@ -421,9 +423,9 @@ class RecordStoreReadOnly:
             os.path.getmtime(os.path.join(self.workdir, fn))
             for fn in fns)
 
-    def refresh(self):
+    def refresh(self, force=False):
         modified = self.getmtime()
-        if modified != self.loaded:
+        if force or modified != self.loaded:
             for chunk in self.chunks:
                 self.chunks[chunk].close()
             self.chunks = {}
@@ -583,10 +585,9 @@ class RecordStore(RecordStoreReadOnly):
     def set_key(self, key, idx):
         hashed_key = self.hash_key(key)
         try:
-            if hashed_key not in self.keys:
-                self.keys[hashed_key] = (self.keys_fd.tell(), idx)
-            else:
+            if hashed_key in self.keys:
                 self.keys_fd.seek(self.keys[hashed_key][0], 0)
+            self.keys[hashed_key] = (self.keys_fd.tell(), idx)
             output = struct.pack('I', idx) + hashed_key
             self.keys_fd.write(output)
         finally:
@@ -595,24 +596,30 @@ class RecordStore(RecordStoreReadOnly):
     def __setitem__(self, key, value):
         self.set(key, value)
 
-    def set(self, key, value,
+    def set(self, keys, value,
             encode=True, encrypt=True, aes_key=None, cache=False):
+        keys = keys if isinstance(keys, list) else [keys]
+        for key in keys[1:]:
+            if isinstance(key, int):
+                raise ValueError('Int keys must be first')
         try:
-            full_idx = self.key_to_index(key)
+            full_idx = self.key_to_index(keys[0])
             pair = (c_idx, chunk) = self.get_chunk(full_idx, create=self.sparse)
             chunk.set(c_idx, value,
                 encode=encode, encrypt=encrypt, aes_key=aes_key)
             if encode and (cache or pair in self.cache):
                 self.cache[pair] = value
+            for key in keys[1:]:
+                self.set_key(key, full_idx)
             if full_idx >= self.next_idx:
                 self.next_idx = full_idx + 1
             return full_idx
         except KeyError:
-            if isinstance(key, int):
+            if isinstance(keys[0], int):
                 raise
-            return self.append(value,
-                keys=[key], encode=encode, encrypt=encrypt, aes_key=aes_key,
-                cache=cache)
+        return self.append(value,
+            keys=keys, encode=encode, encrypt=encrypt, aes_key=aes_key,
+            cache=cache)
 
     def append(self, value,
             keys=None, encode=True, encrypt=True, aes_key=None, cache=False):
@@ -726,36 +733,24 @@ if __name__ == "__main__":
     assert(len(rs) == 3)
     assert(rs[2] == 'ohai')
 
-    print('Starting load test')
-    import random
-    load = 10000
-    t0 = time.time()
-    for i in range(0, load):
-        rs.append(i, keys=('%d' % i), cache=(i % 100 == 0))
-    t1 = time.time()
-    for i in range(0, load):
-        rs['%d' % random.randint(0, load)] = i
-    t2 = time.time()
-    for i in range(0, load):
-        try:
-            b = rs['%d' % random.randint(0, load)]
-        except KeyError:
-            pass
-    t3 = time.time()
-    for i in range(0, load):
-        try:
-            b = rs[random.randint(0, load)]
-        except KeyError:
-            pass
-    t4 = time.time()
-    assert(rs.cache_hits > 0)
+    rs.set('hi', 1976)
+    rs.set(['ho', 'he'], 1976)
+    assert(rs['hi'] == 1976)
+    assert(rs['ho'] == 1976)
+    assert(rs['he'] == 1976)
+    rs[['hi', 'ho', 'he', 'hey']] = 6791
+    assert(rs['hi'] == 6791)
+    assert(rs['ho'] == 6791)
+    assert(rs['he'] == 6791)
+    assert(rs['hey'] == 6791)
 
     rs2 = RecordStoreReadOnly('/tmp/rs-test', 'testing',
         aes_keys=[test_key, test_key2], target_file_size=10240000)
     assert(rs2['hello'] == 'world')
     rs['synctest'] = 'out of sync'
     assert('synctest' not in rs2)
-    rs2.refresh()
+    rs.flush()
+    rs2.refresh(force=True)
     assert(rs2['synctest'] == 'out of sync')
     assert(rs2[2] == 'ohai')
     assert(len(rs2['zeros']) == 10240)
@@ -769,13 +764,59 @@ if __name__ == "__main__":
     except ConfigMismatch:
         pass
 
-    if True:
-        rs.delete_everything(True, False, True)
-        for fn in ('/tmp/rs-test/testing', '/tmp/rs-test/testing.old'):
-            if os.path.exists(fn):
-                os.remove(fn)
-        os.rmdir('/tmp/rs-test')
+    print('Tests passed OK, starting load test')
+    rs.close()
+    rs2.close()
+    rf.close()
+    del rs
+    del rs2
+    del rf
 
-    print(('OK, '
-          '%d appends/upd/key-reads/reads in %.2f/%.2f/%.2f/%.2f secs'
-        ) % (load, t1-t0, t2-t1, t3-t2, t4-t3))
+    import random
+    for aes_keys, compression, description, data, n in (
+            (None,       None, 'enc=N, c=N,   1', 'hello world', 1),
+            ([test_key], None, 'enc=Y, c=N,   1', 'hello world', 1),
+            (None,          1, 'enc=N, c=Y,   1', 'hello world', 1),
+            ([test_key],    1, 'enc=Y, c=Y,   1', 'hello world', 1),
+            ([test_key], None, 'enc=Y, c=N, 100', 'hello world', 100),
+            ([test_key],    1, 'enc=Y, c=Y, 100', 'hello world', 100),
+            ([test_key], None, 'enc=Y, c=N, 10k', 'hello world', 10000),
+            ([test_key],    1, 'enc=Y, c=Y, 10k', 'hello world', 10000)):
+        os.system('rm -rf /tmp/rs-test')
+        rs = RecordStore('/tmp/rs-test', 'testing',
+            aes_keys=aes_keys, compress=compression, target_file_size=10240000)
+        assert(len(rs) == 0)
+
+        load = 10000
+        data = ' '.join([data] * n)
+        t0 = time.time()
+        for i in range(0, load):
+            rs.append(data, keys=('%d' % i), cache=(i % 100 == 0))
+        t1 = time.time()
+        for i in range(0, load):
+            rs['%d' % random.randint(0, load)] = data
+        t2 = time.time()
+        for i in range(0, load):
+            try:
+                b = rs['%d' % random.randint(0, load)]
+            except KeyError:
+                pass
+        t3 = time.time()
+        for i in range(0, load):
+            try:
+                b = rs[random.randint(0, load)]
+            except KeyError:
+                pass
+        t4 = time.time()
+        assert(rs.cache_hits > 0)
+
+        if True:
+            rs.delete_everything(True, False, True)
+            for fn in ('/tmp/rs-test/testing', '/tmp/rs-test/testing.old'):
+                if os.path.exists(fn):
+                    os.remove(fn)
+            os.rmdir('/tmp/rs-test')
+
+        print(('%s: '
+              '%d appends/upd/key-reads/reads in %.2f/%.2f/%.2f/%.2f secs'
+            ) % (description, load, t1-t0, t2-t1, t3-t2, t4-t3))
