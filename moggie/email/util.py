@@ -131,7 +131,7 @@ def make_ts_and_Metadata(now, lts, raw_headers, *args):
     rcvd_ts = []
     for rcvd in parse_header(raw_headers).get('received', []):
         try:
-            tt = email.utils.parsedate_tz(rcvd.split(';')[-1].strip())
+            tt = email.utils.parsedate_tz(rcvd['date'])
             ts = int(time.mktime(tt[:9])) - tt[9]
             rcvd_ts.append(ts)
         except (ValueError, TypeError):
