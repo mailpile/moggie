@@ -40,12 +40,13 @@ However, Moggie has yet to receive a copy.
 """
 
     def __init__(self, tui_frame, ctx_src_id, metadata,
-            username=None, password=None, parsed=None):
+            username=None, password=None, selected=False, parsed=None):
         self.tui_frame = tui_frame
         self.ctx_src_id = ctx_src_id
         self.metadata = metadata
         self.username = username
         self.password = password
+        self.selected = selected
         self.email = parsed
         self.view = self.VIEW_EMAIL
         self.has_attachments = None
@@ -53,8 +54,8 @@ However, Moggie has yet to receive a copy.
         self.crumb = self.VIEW_CRUMBS[self.view]
 
         self.column_hks = [
-            ('col_hk', 'r:'), 'Reply', ' ',
-            ('col_hk', 'F:'), 'Forward', ' ',
+#           ('col_hk', 'r:'), 'Reply', ' ',
+#           ('col_hk', 'F:'), 'Forward', ' ',
             ('col_hk', 'V:'), 'Change View']
 
         self.rendered_width = self.COLUMN_NEEDS
@@ -64,7 +65,8 @@ However, Moggie has yet to receive a copy.
         urwid.ListBox.__init__(self, self.widgets)
         self.update_content()
 
-        self.set_focus(len(self.widgets)-1)
+        adjust = 3 if selected else 2
+        self.set_focus(len(self.header_lines) - adjust)
 
         self.search_obj = self.get_search_obj()
         self.send_email_request()
@@ -137,6 +139,10 @@ However, Moggie has yet to receive a copy.
 
         def _on_attachment(att, filename):
             return lambda e: self.on_attachment(att, filename)
+        def _on_header_select(which):
+            return lambda e: True
+        def _on_deselect():
+            return lambda e: True
 
         def line(fkey, field, value, cstate, action=None):
             fkey = fkey[:4]
@@ -156,7 +162,8 @@ However, Moggie has yet to receive a copy.
             fkey = field[:-1].lower()
             if fkey not in self.metadata:
                 if default:
-                    yield line(fkey, field, default, cstate)
+                    yield line(fkey, field, default, cstate,
+                        action=_on_header_select(fkey))
                 continue
 
             value = self.metadata[fkey]
@@ -175,7 +182,8 @@ However, Moggie has yet to receive a copy.
                     val = str(val).strip()
                 if not val and not default:
                     continue
-                yield line(fkey, field, val or default, cstate)
+                yield line(fkey, field, val or default, cstate,
+                    action=_on_header_select(fkey))
                 field = ''
 
         if self.email:
@@ -197,6 +205,12 @@ However, Moggie has yet to receive a copy.
                     yield line('att', att_label, filename, cstate,
                         action=_on_attachment(part, filename))
                     self.has_attachments.append(filename)
+
+        if self.selected:
+            yield line('sel',
+                EMOJI.get('selected', 'x'),
+                'Message selected (click to deselect)',
+                '    ', action=_on_deselect())
 
         yield(urwid.Divider())
 

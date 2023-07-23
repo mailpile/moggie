@@ -1,6 +1,7 @@
 from ...config import APPNAME, APPVER
 
 EMOJI = {
+    'selected':       '✓',           # Checkmark
     'hint':           '\U0001F4A1',  # Lightbulb
     'browsing':       '\U0001F4BB',  # Laptop
    #'browsing':       '\U0001F5B4',  # Unicode hard disk
@@ -104,11 +105,13 @@ DEFAULT_PALETTE = [
             ('email_val_date', 'dark gray',   'black',     ''),
             ('email_cs_date',  'dark gray',   'black',     ''),
             ('email_key_subj', 'dark gray',   'black',     ''),
-            ('email_val_subj', 'light green', 'black',     ''),
+            ('email_val_subj', 'light blue',  'black',     ''),
             ('email_cs_subj',  'dark gray',   'black',     ''),
             ('email_body',     'light gray',  'black',     ''),
             ('email_body_bg',  'dark gray',   'black',     ''),
             ('email_cstate',   'yellow',      'black',     ''),
+            ('email_key_sel',  'light green', 'black',     ''),
+            ('email_val_sel',  'light green', 'black',     ''),
             ('browse_name',    'white',       'black',     ''),
             ('browse_info',    'dark gray',   'black',     ''),
             ('browse_label',   'dark gray',   'black',     ''),

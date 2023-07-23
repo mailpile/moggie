@@ -17,9 +17,10 @@ from ...email.metadata import Metadata
 from ...api.requests import RequestAddToIndex, RequestCommand
 from ..suggestions import Suggestion
 
-from .suggestionbox import SuggestionBox
+from .decorations import EMOJI
 from .emaildisplay import EmailDisplay
 from .messagedialog import MessageDialog
+from .suggestionbox import SuggestionBox
 from .widgets import *
 
 
@@ -138,7 +139,7 @@ class EmailListWalker(urwid.ListWalker):
             if self.selected_all or uuid in self.selected:
                 prefix = 'check'
                 attrs = '>    <'
-                dt = dt.strftime('%Y-%m  ✓') if dt else ''
+                dt = dt.strftime('%Y-%m  ' + EMOJI.get('selected', 'X')) if dt else ''
             else:
                 attrs = '(    )'
                 prefix = 'list' if md.get('is_hit', True) else 'more'
@@ -155,9 +156,10 @@ class EmailListWalker(urwid.ListWalker):
               (10,           urwid.Text((prefix+'_date', dt), align='right'))],
               dividechars=1)
             return Selectable(widget, on_select={
-                'enter': lambda x: self.parent.show_email(self.visible[pos]),
+                'enter': lambda x: self.parent.show_email(
+                    self.visible[pos], selected=(uuid in self.selected)),
                 'x': lambda x: self.check(uuid),
-                ' ': lambda x: self.check(uuid, display=self.visible[pos])})
+                ' ': lambda x: self.check(uuid, display=True)})
         except IndexError:
             logging.exception('Failed to load message')
             pass
@@ -165,24 +167,29 @@ class EmailListWalker(urwid.ListWalker):
             logging.exception('Failed to load message')
         raise IndexError
 
-    def check(self, uuid, display=None):
+    def check(self, uuid, display=False):
+        # FIXME: The spacebar still doesn't quite work elegantly.
         had_any = (len(self.selected) > 0)
-        if uuid in self.selected and not display:
-            self.selected.remove(uuid)
+        if uuid in self.selected:
+            if not display:
+                # FIXME: If message is currently displayed, update!
+                self.selected.remove(uuid)
+            down = True
         else:
             self.selected.add(uuid)
+            down = not display
         have_any = (len(self.selected) > 0)
 
         # Warn the container that our selection state has changed.
         if had_any != have_any:
             self.parent.update_content()
 
+        # FIXME: There must be a better way to do this?
         self._modified()
-        # FIXME: There must be a better way to do this...
-        self.parent.keypress((100,), 'down')
-        if display is not None:
-            self.parent.show_email(display)
-
+        if down:
+            self.parent.keypress((100,), 'down')
+        if display:
+            self.parent.keypress((100,), 'enter')
 
 class SuggestAddToIndex(Suggestion):
     MESSAGE = 'Add these messages to the search index'
@@ -368,12 +375,13 @@ class EmailList(urwid.Pile):
         if set_focus:
             self.set_focus(len(self.widgets)-1)
 
-    def show_email(self, metadata):
+    def show_email(self, metadata, selected=False):
         self.walker.expand(metadata)
         self.tui_frame.col_show(self,
             EmailDisplay(self.tui_frame, self.ctx_src_id, metadata,
                 username=self.search_obj.get('username'),
-                password=self.search_obj.get('password')))
+                password=self.search_obj.get('password'),
+                selected=selected))
 
     def load_more(self):
         now = time.time()
@@ -424,12 +432,13 @@ class EmailList(urwid.Pile):
     def column_hks(self):
         hks = []
         if self.emails:
+            hks.extend([' ', ('col_hk', 'x:'), 'Select?'])
             hks.extend([' ', ('col_hk', 'E:'), 'Export'])
         if self.is_mailbox:
             hks.extend([' ', ('col_hk', 'A:'), 'Add to Index'])
         else:
             # FIXME: Mailboxes should have multiple views too
-            hks.extend([' ', ('col_hk', 'V:'), 'Change View'])
+            pass  # hks.extend([' ', ('col_hk', 'V:'), 'Change View'])
 
         # FIXME: Saving searches!
 

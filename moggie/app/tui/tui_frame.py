@@ -295,7 +295,6 @@ class TuiFrame(urwid.Frame):
         if not nage or (maxwidth > 70 + 8*(3+len(global_hks))):
             # FIXME: Calculate actual width and use that.
             search = [] if self.is_locked else [('top_hk', '/:'), 'Search ']
-            search = []  # FIXME
             unlock = [('top_hk', '/:'), 'Unlock '] if self.is_locked else []
             global_hints.extend([
                 ('fixed', 23+6*len(global_hks), urwid.Text(
