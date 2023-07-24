@@ -62,8 +62,12 @@ class MetadataWorker(BaseWorker):
     def add_metadata(self, metadata, update=True):
         return self.call('add_metadata', update, metadata)
 
-    async def async_augment(self, loop, metadatas, threads=False):
+    async def async_augment(self, loop, metadatas,
+            threads=False,
+            only_indexed=False,
+            only_unindexed=False):
         mds = [Metadata(*m) for m in metadatas]
+        input_idxs = set(md.idx for md in mds)
         hits = dict(
             (md.get_raw_header('Message-Id'), i)
             for i, md in enumerate(mds))
@@ -91,10 +95,20 @@ class MetadataWorker(BaseWorker):
                 omd[Metadata.OFS_IDX] = md.idx
                 return omd
 
+        def _wanted(md):
+            syn_idx = md.more.get('syn_idx')
+            if (md.idx not in input_idxs) and (syn_idx not in input_idxs):
+                return False
+            if only_unindexed and syn_idx:
+                return False
+            if only_indexed and not syn_idx:
+                return False
+            return True
+
         if not threads:
             for md in (Metadata(*m) for m in res['metadata']):
                 _augment_with(md)
-            return mds
+            return [md for md in mds if _wanted(md)]
 
         # Step 1: Augment our metadata, since that may change IDs.
         #         This will inject our messages into the threads and adjust
@@ -110,7 +124,7 @@ class MetadataWorker(BaseWorker):
                 if msgid:
                     mds_by_msgid[msgid] = md
                     threads_by_msgid[msgid] = thread
-                if 'syn_idx' in md.more:
+                if _wanted(md):
                     thread['hits'].append(md.idx)
 
         # Step 2: Iterate through our metadata, converting each message
@@ -124,7 +138,8 @@ class MetadataWorker(BaseWorker):
             if mthread is None:
                 thread = pthread
                 if thread:
-                    thread['hits'].append(md.idx)
+                    if _wanted(md):
+                        thread['hits'].append(md.idx)
                     thread['messages'].append(md)
                     thread['messages'][0].more['thread'].append(md.idx)
                     pmd = mds_by_msgid[parid]
@@ -132,7 +147,7 @@ class MetadataWorker(BaseWorker):
                     md.thread_id = pmd.thread_id
                 else:
                     thread = mthread = {
-                        'hits': [md.idx],
+                        'hits': [md.idx] if _wanted(md) else [],
                         'thread': md.thread_id,
                         'messages': [md]}
                     md.more['thread'] = [md.idx]
@@ -143,12 +158,12 @@ class MetadataWorker(BaseWorker):
             elif pthread and mthread != pthread:
                 # Parent thread and message thread do not match, merge them!
                 pthread_head = pthread['messages'][0]
-                pthread['hits'].extend(mthread['hits'])
                 pthread['messages'].extend(mthread['messages'])
                 mthread['messages'][0].parent_id = mds_by_msgid[parid].idx
                 for md in mthread['messages']:
                     md.thread_id = pthread_head.thread_id
                     pthread_head.more['thread'].append(md.idx)
+                pthread['hits'] = [md.idx for md in pthread['messages'] if _wanted(md)]
                 threads.remove(mthread)
 
         # Step 3: Sort our threads in ascending date order
@@ -161,7 +176,7 @@ class MetadataWorker(BaseWorker):
             return md.timestamp
         threads.sort(key=_get_thread_ts)
 
-        return threads
+        return [th for th in threads if th.get('hits')]
 
     async def async_metadata(self, loop, hits,
             tags=None, threads=False, only_ids=False,

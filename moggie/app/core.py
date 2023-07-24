@@ -533,18 +533,30 @@ main app worker. Hints:
 
         # FIXME: Triage local/remote here? Access controls!!
 
+        terms = api_request['terms']
+        if terms:
+            is_indexed = 'is:indexed' in terms
+            is_unindexed = 'is:unindexed' in terms
+            terms = (terms.replace('is:unindexed', '').replace('is:indexed', '')
+                ).strip() or None
+        else:
+            is_indexed = is_unindexed = False
+
         info = []
         loop = asyncio.get_event_loop()
         for mailbox in (api_request.get('mailboxes') or []):
             info.extend(await self.storage.async_mailbox(loop, mailbox,
-                        terms=api_request['terms'],
+                        terms=terms,
                         username=api_request['username'],
                         password=api_request['password'],
                         limit=api_request['limit'],
                         skip=api_request['skip']))
 
         info = await self.metadata.with_caller(conn_id).async_augment(
-            loop, info, threads=api_request.get('threads', False))
+            loop, info,
+            threads=api_request.get('threads', False),
+            only_indexed=is_indexed,
+            only_unindexed=is_unindexed)
 
         watched = False
         return ResponseMailbox(api_request, info, watched)
