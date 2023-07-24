@@ -96,7 +96,8 @@ class EmailListWalker(urwid.ListWalker):
         # to show the relative position.
         for msg in self.visible:
             tf = _thread_first(msg)
-            tf['_tts'] = max(tf.get('_tts') or 0, msg['ts'])
+            if msg.get('is_hit', True):
+                tf['_tts'] = max(tf.get('_tts') or 0, msg['ts'])
             depth = _depth(msg)
             if depth > 8:
                 prefix = '  %d> ' % depth
@@ -108,8 +109,7 @@ class EmailListWalker(urwid.ListWalker):
         def _sort_key(msg):
             return (-_thread_first(msg)['_tts'], msg['ts'], msg['idx'])
 
-        if not self.parent.is_mailbox:
-            self.visible.sort(key=_sort_key)
+        self.visible.sort(key=_sort_key)
 
         # Keep the focus in the right place!
         if focus_uuid is not None:
@@ -235,9 +235,7 @@ class EmailList(urwid.Pile):
         if self.view is None:
             if self.terms.startswith('mailbox:'):
                 self.is_mailbox = self.terms[8:]
-            # FIXME: This is lame! Mailboxes should also have nice things
-            self.view = (
-                self.VIEW_MESSAGES if self.is_mailbox else self.VIEW_THREADS)
+            self.view = self.VIEW_THREADS
 
         self.global_hks = {
             ' ': True,

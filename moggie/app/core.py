@@ -488,7 +488,8 @@ main app worker. Hints:
         roles, tag_ns, scope_s = access.grants(ctx,
             AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
 
-        # FIXME: Triage local/remote here? Hmm.
+        # FIXME: Triage local/remote here? Access controls!!
+
         # Note: This might return a "please login" if the mailbox
         #       is encrypted or on a remote server.
         loop = asyncio.get_event_loop()
@@ -530,16 +531,20 @@ main app worker. Hints:
         roles, tag_ns, scope_s = access.grants(ctx,
             AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
 
-        # FIXME: Triage local/remote here? Hmm.
+        # FIXME: Triage local/remote here? Access controls!!
+
         info = []
         loop = asyncio.get_event_loop()
         for mailbox in (api_request.get('mailboxes') or []):
             info.extend(await self.storage.async_mailbox(loop, mailbox,
-                terms=api_request['terms'],
-                username=api_request['username'],
-                password=api_request['password'],
-                limit=api_request['limit'],
-                skip=api_request['skip']))
+                        terms=api_request['terms'],
+                        username=api_request['username'],
+                        password=api_request['password'],
+                        limit=api_request['limit'],
+                        skip=api_request['skip']))
+
+        info = await self.metadata.with_caller(conn_id).async_augment(
+            loop, info, threads=api_request.get('threads', False))
 
         watched = False
         return ResponseMailbox(api_request, info, watched)

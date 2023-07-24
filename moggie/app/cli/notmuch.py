@@ -773,7 +773,7 @@ FIXME: Document html and html formats!
 
         if self.mailboxes:
             valid_outputs = ('default', 'threads', 'summary', 'metadata',
-                             'files', 'emails')
+                             'threads_metadata', 'files', 'emails')
             if output not in valid_outputs:
                 raise Nonsense('Need --output=X, with X one of: %s'
                     % ', '.join(valid_outputs))

@@ -62,6 +62,107 @@ class MetadataWorker(BaseWorker):
     def add_metadata(self, metadata, update=True):
         return self.call('add_metadata', update, metadata)
 
+    async def async_augment(self, loop, metadatas, threads=False):
+        mds = [Metadata(*m) for m in metadatas]
+        hits = dict(
+            (md.get_raw_header('Message-Id'), i)
+            for i, md in enumerate(mds))
+
+        wanted = list(hits.keys())
+        if threads:
+            wanted.extend(h for h
+                in (md.get_raw_header('In-Reply-To') for md in mds) if h)
+        res = await self.async_call(loop, 'metadata',
+            wanted, False, threads, False, self.SORT_NONE, 0, None)
+
+        def _augment_with(md):
+            msgid = md.get_raw_header('Message-Id')
+            which = hits.get(msgid) if msgid else None
+            if which is None:
+                hits[msgid] = md
+                return md
+            else:
+                omd = mds[which]
+                md.more.update(omd.more)
+                omd.thread_id = md.thread_id
+                omd.parent_id = md.parent_id
+                omd.more.update(md.more)
+                omd.more['syn_idx'] = omd.idx
+                omd[Metadata.OFS_IDX] = md.idx
+                return omd
+
+        if not threads:
+            for md in (Metadata(*m) for m in res['metadata']):
+                _augment_with(md)
+            return mds
+
+        # Step 1: Augment our metadata, since that may change IDs.
+        #         This will inject our messages into the threads and adjust
+        #         the 'hits' list to only include original messages.
+        threads = res['metadata']
+        threads_by_msgid = {}
+        mds_by_msgid = {}
+        for thread in threads:
+            thread['hits'] = []
+            for i, md in enumerate(Metadata(*m) for m in thread['messages']):
+                md = thread['messages'][i] = _augment_with(md)
+                msgid = md.get_raw_header('Message-Id')
+                if msgid:
+                    mds_by_msgid[msgid] = md
+                    threads_by_msgid[msgid] = thread
+                if 'syn_idx' in md.more:
+                    thread['hits'].append(md.idx)
+
+        # Step 2: Iterate through our metadata, converting each message
+        #         into its own one-message thread, or merging it into an
+        #         existing thread if we have one.
+        for md in sorted(mds):
+            msgid = md.get_raw_header('Message-Id')
+            parid = md.get_raw_header('In-Reply-To')
+            mthread = threads_by_msgid.get(msgid)
+            pthread = threads_by_msgid.get(parid)
+            if mthread is None:
+                thread = pthread
+                if thread:
+                    thread['hits'].append(md.idx)
+                    thread['messages'].append(md)
+                    thread['messages'][0].more['thread'].append(md.idx)
+                    pmd = mds_by_msgid[parid]
+                    md.parent_id = pmd.idx
+                    md.thread_id = pmd.thread_id
+                else:
+                    thread = mthread = {
+                        'hits': [md.idx],
+                        'thread': md.thread_id,
+                        'messages': [md]}
+                    md.more['thread'] = [md.idx]
+                    threads.append(thread)
+                if msgid:
+                    mds_by_msgid[msgid] = md
+                    threads_by_msgid[msgid] = thread
+            elif pthread and mthread != pthread:
+                # Parent thread and message thread do not match, merge them!
+                pthread_head = pthread['messages'][0]
+                pthread['hits'].extend(mthread['hits'])
+                pthread['messages'].extend(mthread['messages'])
+                mthread['messages'][0].parent_id = mds_by_msgid[parid].idx
+                for md in mthread['messages']:
+                    md.thread_id = pthread_head.thread_id
+                    pthread_head.more['thread'].append(md.idx)
+                threads.remove(mthread)
+
+        # Step 3: Sort our threads in ascending date order
+        def _get_thread_ts(thread):
+            try:
+                return min(md.timestamp
+                    for md in thread['messages'] if md.idx in thread['hits'])
+            except ValueError:
+                pass
+            return md.timestamp
+        threads.sort(key=_get_thread_ts)
+
+        return threads
+
     async def async_metadata(self, loop, hits,
             tags=None, threads=False, only_ids=False,
             sort=SORT_NONE, skip=0, limit=None, raw=False,
@@ -162,7 +263,16 @@ class MetadataWorker(BaseWorker):
             **kwargs):
         if not isinstance(hits, (list, IntSet)):
             hits = dumb_decode(hits)
-        hits = list(hits)
+        if isinstance(hits, list):
+            for i, h in enumerate(hits):
+                try:
+                    hits[i] = self._metadata.key_to_index(h)
+                except KeyError:
+                    pass
+            hits = list(set([h for h in hits if isinstance(h, int)]))
+        else:
+            hits = list(hits)
+
         if not hits:
             return self.reply_json({'total': 0, 'metadata': []})
 
