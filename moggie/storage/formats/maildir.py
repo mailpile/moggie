@@ -167,10 +167,12 @@ class FormatMaildir:
         (p2, h2) = unpack_maildir_idx(idx2)
         return (h1 and h2 and (h1 == h2))
 
-    def iter_email_metadata(self, skip=0, ids=None):
+    def iter_email_metadata(self, skip=0, ids=None, reverse=False):
         lts = 0
         now = int(time.time())
 
+        if reverse:
+            rskip, skip = skip, 0
         if ids:
             # Our IDs are entirely based on the keys, not the data. So if
             # ids are requested, we can avoid loading all the mail.
@@ -180,19 +182,26 @@ class FormatMaildir:
                 for i, (sub, fn) in enumerate(self.full_keys(skip=skip)):
                     (p, h) = unpack_maildir_idx(mk_maildir_idx(fn, i))
                     if h in h_ids:
-                        yield i, (sub, fn)
+                        yield (i + skip), (sub, fn)
         else:
             def _iterator():
-                yield from enumerate(self.full_keys(skip=skip))
+                for i, (sub, fn) in self.full_keys(skip=skip):
+                    yield (i + skip), (sub, fn)
 
-        for i, (sub, fn) in _iterator():
+        iterator = _iterator()
+        if reverse:
+            iterator = reversed(list(iterator))
+            if rskip:
+                iterator = list(iterator)[rskip:]
+
+        for i, (sub, fn) in iterator:
             try:
                 obj = self.get_email_headers(sub, fn)
                 hend, hdrs = quick_msgparse(obj, 0)
                 path = self.get_tagged_path(self.sep + fn)
                 lts, md = make_ts_and_Metadata(
                     now, lts, obj[:hend],
-                    [Metadata.PTR(Metadata.PTR.IS_FS, path, len(obj))],
+                    [Metadata.PTR(Metadata.PTR.IS_FS, path, len(obj), i)],
                     hdrs)
                 md[Metadata.OFS_IDX] = mk_maildir_idx(fn, i)
                 yield md
@@ -235,7 +244,7 @@ if __name__ == "__main__":
         path = bytes(path, 'utf-8')
         md = FormatMaildir(fs, [path], None, needs_reindexing_cb=nr_cb)
         print('=== %s (%d) ===' % (path, len(md)))
-        print('%s' % '\n'.join('%s' % m for m in md.iter_email_metadata()))
+        print('%s' % '\n'.join('%s' % m for m in md.iter_email_metadata(reverse=True)))
         for key in md.keys():
             assert(split_maildir_meta(key)[0] in md)
         for wanted in (wanted1, wanted2, unwant3, wanted4):

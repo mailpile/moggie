@@ -166,15 +166,15 @@ class MetadataWorker(BaseWorker):
                 pthread['hits'] = [md.idx for md in pthread['messages'] if _wanted(md)]
                 threads.remove(mthread)
 
-        # Step 3: Sort our threads in ascending date order
-        def _get_thread_ts(thread):
+        # Step 3: Sort our threads in the order they appeared in the mailbox
+        def _get_thread_rank(thread):
             try:
-                return min(md.timestamp
+                return min(md.pointers[0].ptr_rank
                     for md in thread['messages'] if md.idx in thread['hits'])
             except ValueError:
                 pass
             return md.timestamp
-        threads.sort(key=_get_thread_ts)
+        threads.sort(key=_get_thread_rank)
 
         return [th for th in threads if th.get('hits')]
 

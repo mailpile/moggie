@@ -78,13 +78,16 @@ def split_maildir_meta(fn):
 
 
 def mk_maildir_idx(fn, i):
+    # Note: We ignore the idx/offset; stable IDs are more important
+    i = 0
     # This uses 8 * 16 = 128 bits of the hash. Plenty!
     return mk_packed_idx(split_maildir_meta(fn)[0], i, count=1, mod=8)
 
 
 def unpack_maildir_idx(idx):
     ints, _hash = unpack_idx(idx, count=1)
-    return ints[0], _hash
+    # Note: We ignore the offset; stable IDs are more important
+    return None, _hash
 
 
 def quick_msgparse(obj, beg):

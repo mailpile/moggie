@@ -45,19 +45,25 @@ class ImapMailbox:
         p2, h2 = unpack_idx(idx2, count=2)
         return (h1 and h2 and (h1 == h2))
 
-    def iter_email_metadata(self, skip=0, ids=None):
+    def iter_email_metadata(self, skip=0, ids=None, reverse=False):
         lts = 0
         now = time.time()
-        uids = self.conn.uids(self.path, skip=skip)[skip:]
-        for beg in range(0, len(uids), 10):
+
+        uids = self.conn.uids(self.path, skip=skip)
+        if reverse:
+            uids = list(reversed(uids))
+        uids = uids[skip:]
+
+        batch = 25
+        for beg in range(0, len(uids), batch):
             for uid, size, _, msg in self.conn.fetch_metadata(
                     self.path,
-                    uids[beg:beg+10]):
+                    uids[beg:beg+batch]):
                 hend, hdrs = quick_msgparse(msg, 0)
                 path = self.make_path(uid)
                 lts, md = make_ts_and_Metadata(
                     now, lts, msg[:hend],
-                    [Metadata.PTR(Metadata.PTR.IS_IMAP, path, size)],
+                    [Metadata.PTR(Metadata.PTR.IS_IMAP, path, size, uid)],
                     hdrs)
                 md[Metadata.OFS_IDX] = mk_packed_idx(
                     hdrs, uid, self.conn.selected['UIDVALIDITY'],

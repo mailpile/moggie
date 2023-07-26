@@ -54,7 +54,7 @@ class Metadata(list):
     def ghost(self, msgid, more=None):
         msgid = msgid if isinstance(msgid, bytes) else bytes(msgid, 'latin-1')
         return Metadata(0, 0,
-            Metadata.PTR(0, b'/dev/null', 0),
+            Metadata.PTR(0, b'/dev/null', 0, 0),
             b'Message-Id: %s\n' % msgid,
             parent_id=0,
             thread_id=0,
@@ -66,20 +66,22 @@ class Metadata(list):
 
         OFS_PTR_TYPE = 0
         OFS_PTR_PATH = 1
-        OFS_MESSAGE_LENGTH = 2
-        _FIELDS = 3
+        OFS_PTR_SIZE = 2
+        OFS_PTR_RANK = 3  # Position within mailbox (when discovered)
+        _FIELDS = 4
 
-        def __init__(self, ptr_type, ptr_path, mlen):
+        def __init__(self, ptr_type, ptr_path, mlen, rank=0):
             if isinstance(ptr_path, bytes):
                 ptr_path = dumb_encode_asc(ptr_path)
-            list.__init__(self, [int(ptr_type), ptr_path, int(mlen)])
+            list.__init__(self, [int(ptr_type), ptr_path, int(mlen), rank])
 
         is_local_file = property(
             lambda s: s.ptr_type in (s.IS_FS,))
 
         ptr_type = property(lambda s: s[s.OFS_PTR_TYPE])
         ptr_path = property(lambda s: s[s.OFS_PTR_PATH])
-        message_length = property(lambda s: s[s.OFS_MESSAGE_LENGTH])
+        ptr_size = property(lambda s: s[s.OFS_PTR_SIZE])
+        ptr_rank = property(lambda s: s[s.OFS_PTR_RANK])
         container = property(lambda s: s.get_container())
 
         def get_container(self):

@@ -100,7 +100,7 @@ class FormatMailzip(FormatBytes):
         (p2, h2) = unpack_maildir_idx(idx2)
         return (h1 and h2 and (h1 == h2))
 
-    def iter_email_metadata(self, skip=0, ids=None):
+    def iter_email_metadata(self, skip=0, ids=None, reverse=False):
         now = int(time.time())
         lts = 0
 
@@ -118,9 +118,13 @@ class FormatMailzip(FormatBytes):
             def _iterator():
                 yield from enumerate(self.keys())
 
+        iterator = _iterator()
+        if reverse:
+            iterator = reversed(list(iterator))
+
         obj = ''
         try:
-            for i, key in _iterator():
+            for i, key in iterator:
                 if skip > 0:
                     skip -= 1
                     continue
@@ -129,7 +133,7 @@ class FormatMailzip(FormatBytes):
                 hend, hdrs = quick_msgparse(obj, 0)
                 lts, md = make_ts_and_Metadata(
                     now, lts, obj[:hend],
-                    Metadata.PTR(Metadata.PTR.IS_FS, path, len(obj)),
+                    Metadata.PTR(Metadata.PTR.IS_FS, path, len(obj), i),
                     hdrs)
                 md[Metadata.OFS_IDX] = mk_maildir_idx(key[1:], i)
                 yield(md)
@@ -151,6 +155,6 @@ if __name__ == "__main__":
         md = FormatMailzip(fs, [path], None)
         print('=== %s (%d) ===' % (path, len(md)))
         print('%s' % '\n'.join(md.keys()))
-        print('%s' % '\n'.join('%s' % m for m in md.iter_email_metadata()))
+        print('%s' % '\n'.join('%s' % m for m in md.iter_email_metadata(reverse=True)))
         print('=== %s (%d) ===' % (path, len(md)))
 

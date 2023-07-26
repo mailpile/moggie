@@ -44,15 +44,17 @@ class StorageWorkerApi:
             key, details, recurse, relpath, username, password)
 
     async def async_mailbox(self, loop, key,
-            skip=0, limit=None, username=None, password=None, terms=None):
+            skip=0, limit=None, reverse=False,
+            username=None, password=None, terms=None):
         return await self.async_call(loop, 'mailbox',
-            key, terms, skip, limit, username, password,
+            key, terms, skip, limit, reverse, username, password,
             hide_qs=True)  # Keep passwords out of web logs
 
     def mailbox(self, key,
-            skip=0, limit=None, username=None, password=None, terms=None):
+            skip=0, limit=None, reverse=False,
+            username=None, password=None, terms=None):
         return self.call('mailbox',
-            key, terms, skip, limit, username, password,
+            key, terms, skip, limit, reverse, username, password,
             hide_qs=True)  # Keep passwords out of web logs
 
     async def async_email(self, loop, metadata,
@@ -187,9 +189,10 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
 
         return (_filter, ids)
 
-    def api_mailbox(self, key, terms, skip, limit, username, password,
+    def api_mailbox(self,
+            key, terms, skip, limit, reverse, username, password,
             method=None):
-        cache_key = '%s/%s/%s' % (key, username, password)
+        cache_key = '%s/%s/%s/%s' % (key, reverse, username, password)
 
         _filter, wanted_ids = self._prep_filter(terms)
 
@@ -206,7 +209,7 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
 
         try:
             parser = self.backend.iter_mailbox(key,
-                skip=skip, ids=(wanted_ids or None),
+                skip=skip, ids=(wanted_ids or None), reverse=reverse,
                 username=username, password=password)
 
             # Ideally, we wouldn't cache anything. But some ops are slow.

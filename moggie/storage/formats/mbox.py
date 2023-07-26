@@ -10,6 +10,7 @@ import copy
 import logging
 import email.utils
 import time
+import traceback
 import os
 import re
 
@@ -102,7 +103,7 @@ From: nobody <deleted@example.org>\r\n\
             pass
 
         # Message not found: scan the entire mailbox?
-        for beg, hend, end, hdrs in self.iter_email_offsets():
+        for beg, hend, end, hdrs, rank in self.iter_email_offsets():
             if self._range_to_key(b, 0, _data=hdrs) == key:
                 logging.debug('FIXME: message moved, request a reindex?')
                 return beg, end
@@ -151,11 +152,13 @@ From: nobody <deleted@example.org>\r\n\
         obj = self.container
         beg = 0
         end = 0
+        rank = 0
         delmark = self.DELETED_MARKER
         needs_compacting = 0
         try:
             while end < len(obj):
                 hend, hdrs = quick_msgparse(obj, beg)
+                rank += 1
 
                 end = obj.find(b'\nFrom ', hend-1)
                 if end < 0:
@@ -166,7 +169,7 @@ From: nobody <deleted@example.org>\r\n\
                 elif skip > 0:
                     skip -= 1
                 else:
-                    yield beg, hend, end+1, hdrs
+                    yield beg, hend, end+1, hdrs, rank
 
                 beg = end+1
         except (ValueError, TypeError):
@@ -177,21 +180,27 @@ From: nobody <deleted@example.org>\r\n\
 
     def keys(self, skip=0):
         return (self._range_to_key(b, 0, _data=hdrs)
-            for b, he, e, hdrs in self.iter_email_offsets(skip=skip))
+            for r, b, he, e, hdrs in self.iter_email_offsets(skip=skip))
 
-    def iter_email_metadata(self, skip=0, ids=None, iterator=None):
+    def iter_email_metadata(self,
+            skip=0, ids=None, iterator=None, reverse=False):
         obj = self.container
         now = int(time.time())
         lts = 0
         try:
             if iterator is None:
-                iterator = self.iter_email_offsets(skip=skip)
-            for beg, hend, end, hdrs in iterator:
+                iterator = self.iter_email_offsets(
+                    skip=(0 if reverse else skip))
+            if reverse:
+                iterator = reversed(list(iterator))
+                if skip:
+                    iterator = list(iterator)[skip:]
+            for beg, hend, end, hdrs, rank in iterator:
                 key = self._range_to_key(beg, 0, _data=hdrs)
                 path = self.get_tagged_path(key)
                 lts, md = make_ts_and_Metadata(
                     now, lts, obj[beg:hend], 
-                    Metadata.PTR(Metadata.PTR.IS_FS, path, end-beg),
+                    Metadata.PTR(Metadata.PTR.IS_FS, path, end-beg, rank),
                     hdrs)
                 md[Metadata.OFS_IDX] = int(key[1:], 16)
                 yield(md)
@@ -217,7 +226,7 @@ From: nobody <deleted@example.org>\r\n\
         # FIXME: Could we be more smart somehow so not all the messages
         #        get moved around? Seems like a lot of complexity for
         #        only limited gain. Do the simple & correct thing for now.
-        for beg, hend, end, hdrs in self.iter_email_offsets():
+        for beg, hend, end, hdrs, rank in self.iter_email_offsets():
             hl = hend-beg
             if beg == nbeg:
                 nend = end    # Message not moving, short circuit
@@ -255,7 +264,7 @@ if __name__ == "__main__":
     os.system(b'cp /home/bre/Mail/mailpile/2013-08.mbx '+tmbox)
     mbox = FormatMbox(None, [tmbox], open('/tmp/test.mbx', 'r+b'))
 
-    for md in mbox.iter_email_metadata():
+    for md in mbox.iter_email_metadata(reverse=True):
         print('%s' % md)
         break
 

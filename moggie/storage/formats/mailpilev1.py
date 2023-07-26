@@ -215,7 +215,7 @@ class FormatMailpilev1:
             info['mp_key'] = key
             tags[info['slug']] = info
             if info.get('parent'):
-                info['parent'] = ti[info['parent']]['slug']    
+                info['parent'] = ti[info['parent']]['slug']
         return tags
 
     def message_tags(self):
@@ -240,7 +240,13 @@ class FormatMailpilev1:
                     except (KeyError, ValueError):
                         pass
 
-    def iter_email_metadata(self, skip=0, ids=None):
+    def iter_email_metadata(self, skip=0, ids=None, reverse=False):
+        if reverse:
+            result = reversed(list(self.iter_email_metadata(skip=0, ids=ids)))
+            if skip:
+                result = list(result)[skip:]
+            return result
+
         known_emails = {}
         def _to_emails(field):
             return [
@@ -249,7 +255,7 @@ class FormatMailpilev1:
 
         for chunk in get_mailpile_metadata(
                 self.path[0], self.passphrase, _iter=True):
-            print('Got %d bytes of metadata' % len(chunk))
+#           print('Got %d bytes of metadata' % len(chunk))
             chunk = chunk.splitlines()
             for line in chunk:
                 if line[:1] == b'#':
