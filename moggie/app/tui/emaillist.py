@@ -97,7 +97,10 @@ class EmailListWalker(urwid.ListWalker):
         for msg in self.visible:
             tf = _thread_first(msg)
             if msg.get('is_hit', True):
-                tf['_tts'] = max(tf.get('_tts') or 0, msg['ts'])
+                if self.parent.is_mailbox:
+                    tf['_rank'] = -max(tf.get('_rank') or 10000000, msg['ptrs'][0][-1])
+                else:
+                    tf['_rank'] = max(tf.get('_rank') or 0, msg['ts'])
             depth = _depth(msg)
             if depth > 8:
                 prefix = '  %d> ' % depth
@@ -107,7 +110,7 @@ class EmailListWalker(urwid.ListWalker):
             msg['_prefix'] = prefix
 
         def _sort_key(msg):
-            return (-_thread_first(msg)['_tts'], msg['ts'], msg['idx'])
+            return (-_thread_first(msg)['_rank'], msg['ts'], msg['idx'])
 
         self.visible.sort(key=_sort_key)
 
@@ -134,7 +137,7 @@ class EmailListWalker(urwid.ListWalker):
                 md = Metadata(*md).parsed()
 
             uuid = md['uuid']
-            dt = md.get('ts') or md.get('_tts')
+            dt = md.get('ts') or md.get('_rank')
             dt = datetime.datetime.fromtimestamp(dt) if dt else 0
             if self.selected_all or uuid in self.selected:
                 prefix = 'check'
