@@ -130,7 +130,13 @@ increase the logging verbosity. There is also a `config.rc`.
 Bjarni R. Einarsson (<https://bre.klaki.net/>) is currently the sole
 developer of Moggie.
 
-It is built on the work of the Mailpile community, in particular:
+Moggie development is funded in part through the
+[NGI0 Entrust Fund](https://nlnet.nl/entrust),
+a fund established by [NLnet](https://nlnet.nl/)
+with financial support from the European Commission's
+[Next Generation Internet](https://ngi.eu/) programme. Thank you!
+
+Moggie is built on the work of the Mailpile community, in particular:
 
 - Bjarni R. Einarsson (<http://bre.klaki.net/>)
 - Brennan Novak (<https://brennannovak.com/>)
@@ -142,4 +148,3 @@ It is built on the work of the Mailpile community, in particular:
 This program is free software: you can redistribute it and/or modify it
 under the terms of the GNU Affero General Public License as published by
 the Free Software Foundation. See the file `COPYING.md` for details.
-
