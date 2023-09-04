@@ -62,6 +62,9 @@ class MetadataWorker(BaseWorker):
     def add_metadata(self, metadata, update=True):
         return self.call('add_metadata', update, metadata)
 
+    async def async_add_metadata(self, loop, metadata, update=True):
+        return await self.async_call(loop, 'add_metadata', update, metadata)
+
     async def async_augment(self, loop, metadatas,
             threads=False,
             only_indexed=False,

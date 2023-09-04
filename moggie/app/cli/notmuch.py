@@ -1468,11 +1468,12 @@ class CommandTag(CLICommand):
                 tagops = tagops.strip().split()
                 self._validate_and_normalize_tagops(tagops)
                 if terms.startswith('META={'):
-                    yield (tagops, from_json(terms[5:]))
+                    yield (tagops, from_json(terms[5:]), None)
                 else:
-                    yield (tagops, terms.split(' # ')[0].strip())
+                    yield (tagops, terms.split(' # ')[0].strip(), None)
 
     def configure(self, args):
+        self.mailboxes = None
         self.tagops = []
         argtext = 'tag %s' % ' '.join(args)
         if '--' in args:
@@ -1510,10 +1511,11 @@ class CommandTag(CLICommand):
             if not tags or not terms:
                 raise Nonsense('Nothing to do?')
 
+            mailboxes, terms = self.remove_mailbox_terms(terms)
             terms = self.combine_terms(terms)  # Respects --or
             if terms.startswith('META={'):
                 terms = from_json(terms[5:])
-            self.tagops = [(tags, terms)]
+            self.tagops = [(tags, terms, mailboxes)]
 
         elif (self.options['--redo='][-1]
                  and not self.options['--undo='][-1]

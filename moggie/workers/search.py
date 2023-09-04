@@ -157,10 +157,8 @@ class SearchWorker(BaseWorker):
             mask_deleted=True, mask_tags=False, more_terms=None):
         tag_op_sets = list(tag_op_sets)
         for i, (tag_ops, m) in enumerate(tag_op_sets):
-            if isinstance(m, (IntSet, list)):
-                tag_op_sets[i] = (
-                    tag_ops,
-                    dumb_encode_asc(IntSet(m), compress=256))
+            if isinstance(m, list):
+                tag_op_sets[i] = (tag_ops, IntSet(m))
         return await self.async_call(loop, 'tag',
             tag_op_sets, record_history, tag_namespace,
             tag_redo_id, tag_undo_id,
@@ -172,10 +170,12 @@ class SearchWorker(BaseWorker):
             mask_deleted=True, mask_tags=False, more_terms=None):
         tag_op_sets = list(tag_op_sets)
         for i, (tag_ops, m) in enumerate(tag_op_sets):
-            if isinstance(m, (IntSet, list)):
-                tag_op_sets[i] = (
-                    tag_ops,
-                    dumb_encode_asc(IntSet(m), compress=256))
+            if isinstance(m, list):
+                tag_op_sets[i] = (tag_ops, IntSet(m))
+#            if isinstance(m, (IntSet, list)):
+#                tag_op_sets[i] = (
+#                    tag_ops,
+#                    dumb_encode_asc(IntSet(m), compress=256))
 #            if isinstance(m, dict):
 #                tag_op_sets[i] = (tag_ops, m)
 #            elif isinstance(m, str):

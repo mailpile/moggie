@@ -154,7 +154,7 @@ class FormatMaildir:
         return self.keys()
 
     def __len__(self):
-        return sum(1 for s_f_i in self.full_keys())
+        return sum(1 for s_f in self.full_keys())
 
     def unlock(self, username, password, ask_key=None, set_key=None):
         return self
@@ -185,7 +185,7 @@ class FormatMaildir:
                         yield (i + skip), (sub, fn)
         else:
             def _iterator():
-                for i, (sub, fn) in self.full_keys(skip=skip):
+                for i, (sub, fn) in enumerate(self.full_keys(skip=skip)):
                     yield (i + skip), (sub, fn)
 
         iterator = _iterator()

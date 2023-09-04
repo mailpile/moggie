@@ -13,3 +13,6 @@
 [submodule "submodules/websockets"]
 	path = submodules/websockets
 	url = https://github.com/python-websockets/websockets
+[submodule "submodules/pymap"]
+	path = submodules/pymap
+	url = https://github.com/icgood/pymap

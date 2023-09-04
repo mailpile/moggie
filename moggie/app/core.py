@@ -535,10 +535,11 @@ main app worker. Hints:
 
         terms = api_request['terms']
         if terms:
-            is_indexed = 'is:indexed' in terms
-            is_unindexed = 'is:unindexed' in terms
-            terms = (terms.replace('is:unindexed', '').replace('is:indexed', '')
-                ).strip() or None
+            term_list = terms.strip().split()
+            is_indexed = 'is:indexed' in term_list
+            is_unindexed = 'is:unindexed' in term_list
+            terms = ' '.join(term for term in term_list
+                if term not in ('is:indexed', 'is:unindexed')) or None
         else:
             is_indexed = is_unindexed = False
 
@@ -634,20 +635,47 @@ main app worker. Hints:
         # Will raise ValueError or NameError if access denied
         roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
 
-        if self.search:
-            loop = asyncio.get_event_loop()
-            results = await self.search.with_caller(conn_id).async_tag(loop,
-                api_request.get('tag_ops', []),
-                tag_namespace=tag_ns,
-                more_terms=scope_s,
-                tag_undo_id=api_request.get('tag_undo_id'),
-                tag_redo_id=api_request.get('tag_redo_id'),
-                record_history=api_request.get('undoable', 'Tagging'),
-                mask_deleted=api_request.get('mask_deleted', True))
-
-            return ResponseTag(api_request, results)
-        else:
+        if not self.search:
             return ResponsePleaseUnlock(api_request)
+
+        loop = asyncio.get_event_loop()
+
+        tag_op_sets = api_request.get('tag_ops', [])
+        for i, tagops_hits_mailboxes in enumerate(tag_op_sets):
+            if len(tagops_hits_mailboxes) > 2:
+                tagops, hits, mailboxes = tagops_hits_mailboxes
+                if mailboxes:
+                    if not isinstance(hits, str):
+                        raise ValueError('Incompatible arguments')
+
+                    r1 = await self.api_req_mailbox(conn_id, access,
+                        RequestMailbox(
+                            context=ctx,
+                            mailboxes=mailboxes,
+                            username=api_request.get('username', None),
+                            password=api_request.get('password', None),
+                            limit=None,
+                            terms=hits))
+
+                    md = self.metadata
+                    r2 = await md.with_caller(conn_id).async_add_metadata(
+                        loop, r1['emails'], update=True)
+                    hits = r2['added'] + r2['updated']
+                    logging.info('Added %d messages to index' % len(hits))
+
+                tag_op_sets[i] = (tagops, hits)
+
+        logging.info('Tagopsets: %s' % (tag_op_sets,))
+        results = await self.search.with_caller(conn_id).async_tag(loop,
+            tag_op_sets,
+            tag_namespace=tag_ns,
+            more_terms=scope_s,
+            tag_undo_id=api_request.get('tag_undo_id'),
+            tag_redo_id=api_request.get('tag_redo_id'),
+            record_history=api_request.get('undoable', 'Tagging'),
+            mask_deleted=api_request.get('mask_deleted', True))
+
+        return ResponseTag(api_request, results)
 
     async def api_req_email(self, conn_id, access, api_request):
         ctx = api_request.get('context') or self.config.CONTEXT_ZERO
