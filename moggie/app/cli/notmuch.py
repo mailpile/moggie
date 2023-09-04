@@ -1391,6 +1391,21 @@ class CommandTag(CLICommand):
     Note that tag metadata changes are not recorded in the log and cannot
     be undone.
 
+    ### Tagging within a mailbox
+
+    If the search includes one or more `mailbox:/` terms, then moggie's
+    limited ability to search directly within mailboxes (local or remote) will
+    be used instead of the default global search index. Matching messages will
+    be tagged as usual, with the additional side effect of adding previously
+    unseen messages to the global metadata index.
+
+    This can be used to selectively import only certain messages from a
+    larger mailbox into moggie's index. Assigning the special `incoming` tag
+    will treat the message as newly discovered and standard filters (including
+    spam filters) will be applied:
+
+         moggie tag +incoming -- mailbox:/path/to/mail.mbx is:unindexed
+
     ### Batch operations
 
     Moggie allows users (or apps) to apply multiple search-and-tag operations
