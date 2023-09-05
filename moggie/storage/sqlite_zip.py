@@ -127,7 +127,7 @@ class ZipEncryptedSQLite3:
                 zf.setencryption(zipfile.WZ_AES, nbits=256)
 
                 tt = datetime.datetime.now().timetuple()
-                fi = zipfile.ZipInfo(filename=fn, date_time=tt)
+                fi = zf.zipinfo_cls(filename=fn, date_time=tt)
                 fi.external_attr = 0o000640 << 16
                 fi.compress_type = zipfile.ZIP_DEFLATED
 

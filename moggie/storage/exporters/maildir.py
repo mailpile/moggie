@@ -31,6 +31,12 @@ class ZipWriter:
 
     def __init__(self, fd, d_acl=0o040750, f_acl=0o000640, password=None):
         self.zf = self._create(fd, password)
+
+        # This kludge keeps us compatible with both pyzipper and zipfile
+        self.zipinfo_cls = zipfile.ZipInfo
+        if hasattr(self.zf, 'zipinfo_cls'):
+            self.zipinfo_cls = self.zf.zipinfo_cls
+
         self.d_acl = d_acl
         self.f_acl = f_acl
         if password:
@@ -53,14 +59,14 @@ class ZipWriter:
 
     def mkdir(self, dn, ts):
         dn = dn if (dn[-1:] == '/') else (dn + '/')
-        dirent = zipfile.ZipInfo(filename=dn, date_time=self._tt(ts))
+        dirent = self.zipinfo_cls(filename=dn, date_time=self._tt(ts))
         dirent.compress_type = zipfile.ZIP_STORED
         dirent.external_attr = self.d_acl << 16  # Unix permissions
         dirent.external_attr |= 0x10             # MS-DOS directory flag
         self.zf.writestr(dirent, b'')
 
     def add_file(self, fn, ts, data, encrypt=True):
-        fi = zipfile.ZipInfo(filename=fn, date_time=self._tt(ts))
+        fi = self.zipinfo_cls(filename=fn, date_time=self._tt(ts))
         fi.external_attr = self.f_acl << 16
         fi.compress_type = zipfile.ZIP_DEFLATED
         if encrypt:
