@@ -73,7 +73,8 @@ class CommandContext(CLICommand):
         ('--remove-tag=',        [], 'X="tag" (excluded tag)'),
         ('--scope-search=',      [], 'X="search terms"'),
         ('--require=',           [], 'X="search terms"'),
-        ('--forbid=',            [], 'X="search terms"')]]
+        ('--forbid=',            [], 'X="search terms"'),
+        ('--context=',           [], None)]]
 
     def configure(self, args):
         args = self.strip_options(args)
@@ -83,6 +84,8 @@ class CommandContext(CLICommand):
             raise Nonsense('Too many arguments')
         if not self.cmd:
             self.cmd = 'list'
+        if not self.name and self.options['--context=']:
+            self.name = self.options['--context='][-1]
         if self.cmd not in ('list', 'update', 'create', 'remove'):
             raise Nonsense('Unknown command: %s' % self.cmd)
         return []
@@ -134,7 +137,7 @@ class CommandContext(CLICommand):
             ns = ctx.get('tag_namespace', '')
             ss = ctx.get('scope_search', '')
             rt = set(ctx.get('tags', []))
-            et = set(ctx.get('extra_tags', []))
+            et = set(ctx.get('ui_tags', []))
 
             ids = sorted(ctx.get('identities', []))
             il = len(ids)
@@ -193,7 +196,7 @@ class CommandContext(CLICommand):
             updates.append({
                 'op': 'list_del',
                 'case_sensitive': False,
-                'variable': 'extra_tags',
+                'variable': 'ui_tags',
                 'list_val': tag})
             updates.append({
                 'op': 'list_del',
@@ -205,7 +208,7 @@ class CommandContext(CLICommand):
             opts['--show-tag='].extend(AppConfig.STANDARD_CONTAINER_TAGS)
         for var, tags in (
                 ('tags',       opts['--tag=']),
-                ('extra_tags', opts['--show-tag='])):
+                ('ui_tags',    opts['--show-tag='])):
             for tag in tags:
                 updates.append({
                     'op': 'list_add_unique',
@@ -659,165 +662,391 @@ class CommandGrant(CLICommand):
 class CommandImport(CLICommand):
     """# moggie import [options] </path/to/mailbox1> [</path/to/mbx2> [...]]
 
-    Scan the named mailboxes for e-mail, adding any found messages to the
-    search engine. Re-importing a mailbox will check for updates/changes to
-    the contents.
+    Perform one-off imports of mail, or configure the named mailboxes (or
+    directories) for automated importing of e-mail in the future.
+
+    Imported mailboxes will be scanned for e-mail, adding information about
+    e-mails contained within to the search engine so they can be found later
+    by using `moggie search`.
 
     ### Options
 
-    %(OPTIONS)s
+    %(general)s
 
-    Importing messages without linking them to any particular account is
-    possible, but not recommended since Moggie will be unable to ascertain
-    whether the message was "to me" or not.
+    ### Importing options
 
-    Note that using `--watch` will create a new local mail account if there
-    is none associated with the active context already.
+    %(import)s
+
+    Importing messages without linking them to any particular e-mail/account
+    is possible, but not recommended since moggie will be unable to ascertain
+    whether a given message was "to me" (as opposed to a mailing list or
+    BCC). For IMAP mailboxes, if an account is not already configured for a
+    given e-mail address, it will be created.
+
+    Without a watch-policy, this operation`will be treated as a one-off.
+    If a watch or sync (for IMAP paths) policy is requested, the moggie
+    configuration will be updated and `moggie new` can be used to recheck
+    for mail later on.
+
+    ### Batch operations
+
+    To configure multiple paths, using potentialy different-but-related
+    settings for each, use `--batch` and provide a list of import options
+    and paths (one path per line) on standard input.
+
+    For example, to configure a remote IMAP server in a plausible way,
+    you might use a batch policy like this:
+
+      --watch-policy=watch --account=u@example.org imap://user@host
+      --tag=inbox imap://user@host/INBOX
+      --tag=trash imap://user@host/Trash
+      --tag=junk map://user@host/Spam
+
+    Note the watch-policy and account settings will be inherited by the
+    named mailboxes. Since the policy for the entire IMAP tree is set to
+    `watch` other mailboxes may be discovered as well, but they will not
+    have any tags applied. See below for more details on policy inheritance
+    rules.
+
+    If batch input starts with the character `[` it will be treated a JSON
+    list of objects, instead of raw text. The above example could have been
+    expressed as JSON like so:
+
+    [
+      {
+        'path': 'imap://user@host',
+        'watch_policy': 'watch',
+        'account': 'u@example.org'
+      },{
+        'path': 'imap://user@host/INBOX',
+        'tags': ['inbox'],
+      },{
+        'path': 'imap://user@host/Trash',
+        'tags': ['trash'],
+      },{
+        'path': 'imap://user@host/Spam',
+        'tags': ['junk'],
+      }
+    ]
+
+    ### Policy inheritance rules
+
+    Before performing any imports, moggie will construct an import policy
+    for each path (and for watched directories, add any subdirectories to
+    the plan). The policy is based on the arguments given, but the policy
+    of any parent directory will be inherited by any children, unless
+    expressly overridden. The special value `-` can be assigned as an
+    account, tag, watch- or copy-policy to prevent such inheritance without
+    specifying an alternate value.
+
+    Note that even for one-off imports, the moggie configuration will be
+    consulted and defaults may be inherited. To prevent that, be sure to
+    specify `-` for any settings you do not want overridden.
+
+    Tag inheritance is additive; that is to say if a parent has the tag
+    `special`, and a mailbox specifies `inbox`, any discovered e-mail will
+    in fact get both tags, unless the mailbox prevents inheritnce by
+    including `-` in its list of tags.
+
+    ### Special tags
+
+    Moggie's importer will treat certain tags as special and enable special
+    processing for mailboxes/messages that have them applied.
+
+    The tags `inbox` and `incoming` will cause the import logic to treat any
+    found messages as "new", applying user filters such as spam detection or
+    mailbox sorting. After processing the `incoming` tag will always be
+    removed, but whether `inbox` remains will depend on the filters.
+
+    The `inbox` tag on a watched or sync'ed mailbox is also a signal to
+    moggie that this is a mailbox to be checked relatively more frequently
+    for incoming mail.
+
+    Messages tagged as `junk` or `trash` will be excluded from search
+    results by default.
+
+    Mailboxes with `sent` or `drafts` tags will be treated as destinations
+    to write moggie-generated messages to (if the watch policy is `sync`).
     """
     NAME = 'import'
+    AUTO_START = True
+    WEB_EXPOSE = True
+    WEBSOCKET = False  # FIXME: Make this true, report progress?
     ROLES = (
         AccessConfig.GRANT_FS +
         AccessConfig.GRANT_COMPOSE +
         AccessConfig.GRANT_TAG_RW)
-    SEARCH = ('in:incoming',)
     OPTIONS = [[
-        ('--context=',  ['default'], 'X=<ctx>, import messages into a specific context'),
-        ('--account=',  [None], 'X=<id>, the e-mail or account ID the mail belongs to'),
-        ('--username=', [None], 'X=<U>, username required to access the mail (if any)'),
-        ('--password=', [None], 'X=<P>, password requried to access the mail (if any)'),
-        ('--ifnewer=',      [], 'X=<ts>, ignore files/folders unchanged since timestamp'),
-        ('--ignore=',   ['.', '..', 'cur', 'new', 'tmp', '.notmuch'],
-                                ''),  # FIXME: Explain?
-        ('--recurse',       [], 'Search the named paths recursively for mailboxes'),
-        ('--watch',    [False], 'Watch for new mail/mailboxes in the future'),
-        ('--copy',     [False], 'Copy mailbox contents to Moggie archives'),
-        ('--move',     [False], 'Move mailbox contents to Moggie archives'),
-        ('--cfg-only', [False], 'Update configuration only, reads no mail'),
-        ('--label=',        [], 'X=label, show mailbox in the UI'),
-        ('--compact',       [], 'Compact the search engine after importing'),
-#FIXME:
-        ('--old',           [], 'Treat messages as "old": do not add to inbox etc.'),
-        ('--dryrun',        [], 'Test only, adds nothing')]]
+        (None, None, 'general'),
+        ('--context=', ['default'], 'X=<ctx>, import into a specific context'),
+        ('--config-only',  [False], 'Update configuration only, reads no mail'),
+        ('--import-only',  [False], 'One-off import, do not save configuration'),
+        ('--only-inboxes',      [], ''),  # Only check mailboxes tagged with inbox
+        ('--full-scan',         [], ''),  # Ignore modification times, scan everything
+        ('--auto',              [], 'Guess which tags apply, based on mailbox names'),
+        ('--remove=',           [], 'X=<path> Paths to remove from configuration'),
+        ('--batch',             [], 'Read import options and paths from stdin'),
+        ('--input=',            [], 'Read import options and paths from file'),
+        ('--stdin=',            [], ''),  # Internal: lots stdin hack
+    ], [
+        (None, None, 'import'),
+        ('--username=',    [None], 'X=<U>, username required to access the mail (if any)'),
+        ('--password=',    [None], 'X=<P>, password requried to access the mail (if any)'),
+        ('--label=',       [None], 'X=label, show mailbox in the UI'),
+        ('--account=',     [None], 'X=(<id>|-), the e-mail or account ID the mail belongs to'),
+        ('--tag=',             [], 'X=(<tag>|-), tag to apply to all messages'),
+        ('--watch-policy=',[None], 'X=(auto|watch|sync|-), set a watch policy'),
+        ('--copy-policy=', [None], 'X=(copy|move|-), set the copy policy'),
+    ]]
+
+    def validate_policy(self, policy):
+        for k in ('label', 'account', 'tags',
+                  'watch_policy', 'copy_policy', 'tags'):
+            if k not in policy:
+                policy[k] = None
+        if 'watch-policy' in policy:
+            policy['watch_policy'] = policy['watch-policy']
+            del policy['watch-policy']
+        if 'copy-policy' in policy:
+            policy['copy_policy'] = policy['copy-policy']
+            del policy['copy-policy']
+        if policy['watch_policy'] not in ('watch', 'sync', '-', None):
+            raise ValueError(
+                'Invalid watch policy: %s' % policy['watch_policy'])
+        if policy['copy_policy'] not in ('copy', 'move', '-', None):
+            raise ValueError(
+                'Invalid copy policy: %s' % policy['copy_policy'])
+        for tag in policy['tags'] or []:
+            # FIXME: Check tag is a valid tag, what are our rules?
+            if not isinstance(tag, str):
+                raise ValueError('Invalid tag: %s' % tag)
+        for k in policy:
+            if k not in ('label', 'account', 'tags',
+                         'watch_policy', 'copy_policy', 'tags'):
+                raise ValueError('Invalid policy element: %s' % k)
+        return policy
+
+    def autoconf(self, path, policy):
+        if not self.options['--auto']:
+            return policy
+        try:
+            changed = True
+            org_policy, policy = policy, copy.deepcopy(policy)
+
+            path = path if isinstance(path, str) else str(path, 'utf-8')
+            path = path.lower()
+            basename = os.path.basename(path)
+            is_imap = path.startswith('imap:')
+            if is_imap:
+                is_unix_spool = is_directory = False
+                parts = path.split('/')
+                parts.pop(0)
+                if not parts[0]:
+                    parts.pop(0)
+                if (len(parts) == 1) or (parts[-1] == ''):
+                    is_directory = True
+            else:
+                is_directory = os.path.exists(path) and os.path.isdir(path)
+                is_unix_spool = (
+                    path.startswith('/var/mail/') or
+                    path.startswith('/var/spool/mail/'))
+
+            # FIXME: Does i18n need to happen here? Do people routinely
+            #        rename their systsem mailboxes?
+            if is_unix_spool or 'inbox' in basename:
+                policy['tags'].append('inbox')
+            elif 'outbox' in basename:
+                policy['tags'].append('outbox')
+            elif 'sent' in basename:
+                policy['tags'].append('sent')
+            elif 'drafts' in basename:
+                policy['tags'].append('drafts')
+            elif 'junk' in basename or 'spam' in basename:
+                policy['tags'].append('junk')
+            else:
+                changed = False
+
+            if not policy['watch_policy']:
+                changed = policy['watch_policy'] = 'watch'
+
+            if not policy['copy_policy']:
+                if is_unix_spool:
+                    changed = policy['copy_policy'] = 'move'
+        except UnicodeDecodeError:
+            pass
+        except:
+            logging.exception('oops')
+            raise
+        finally:
+            return policy if changed else org_policy
+
+    def make_policy(self, options):
+        return self.validate_policy({
+            'label': options['--label='][-1],
+            'account': options['--account='][-1],
+            'watch_policy': options['--watch-policy='][-1],
+            'copy_policy': options['--copy-policy='][-1],
+            'tags': copy.copy(options['--tag='])})
+
+    def json_configure(self, raw_json):
+        try:
+            if isinstance(raw_json, list):
+                policies = raw_json
+            else:
+                import json
+                policies = json.loads(raw_json.strip())
+            for pol in policies:
+                path = pol.pop('path')
+                policy = self.validate_policy(pol)
+                self.policies[path] = self.autoconf(path, policy)
+                self.paths.append(path)
+        except:
+            logging.exception('Invalid JSON policy: %s' % raw_json)
+            raise
+
+    def batch_configure(self, lines):
+        import shlex
+        first = True
+        for line in lines:
+            if first and (isinstance(line, list) or line[:1] == '['):
+                return self.json_configure('\n'.join(lines))
+
+            line = line.strip()
+            first = False
+            if not line or line[:1] == '#':
+                continue
+
+            args = shlex.split(line, comments=True)
+            options = copy.deepcopy(self.options)
+            paths = self.strip_options(args, options)
+            policy = self.make_policy(options)
+            self.paths.extend(paths)
+            for path in paths:
+                self.policies[path] = self.autoconf(path, policy)
 
     def configure(self, args):
         self.newest = 0
         self.paths = []
-        args = self.strip_options(args)
-        recurse = bool(self.options['--recurse'])
+        self.policies = {}
 
-        newer = 0
-        if self.options['--ifnewer=']:
-            newer = max(int(i) for i in self.options['--ifnewer='])
-        def _is_new(path):
-            if not newer:
-                return True
-            for suffix in ('', os.path.sep + 'cur', os.path.sep + 'new'):
-                try:
-                    ts = int(os.path.getmtime(path+suffix))
-                    self.newest = max(self.newest, ts)
-                    if ts > newer:
-                        return True
-                except (OSError, FileNotFoundError):
-                    pass
-            return False
+        self.paths = self.strip_options(args)
+        self.default_policy = self.make_policy(self.options)
+        self.policies = dict((p, self.autoconf(p, self.default_policy))
+            for p in self.paths)
 
-        def _recurse(path):
-            yield os.path.abspath(path)
-            if os.path.isdir(path):
-                for p in os.listdir(path):
-                    if p not in self.options['--ignore=']:
-                        yield from _recurse(os.path.join(path, p))
+        for path in self.options['--remove=']:
+            self.policies[path] = self.validate_policy({})
 
-        for arg in args:
-            if arg in self.SEARCH:
-                self.paths.append(arg)
+        if self.options['--batch'] and not self.options['--input=']:
+            self.options['--input='].append('-')
+        for fn in set(self.options['--input=']):
+            if fn == '-':
+                for stdin in self.options['--stdin=']:
+                    self.batch_configure(stdin.splitlines())
+                if self.stdin:
+                    self.batch_configure(self.stdin)
             else:
-                if not os.path.exists(arg):
-                    raise Nonsense('File or path not found: %s' % arg)
-                if not os.path.sep in arg:
-                    arg = os.path.join('.', arg)
-                if recurse:
-                    for path in _recurse(arg):
-                        if _is_new(path):
-                            self.paths.append(path)
-                else:
-                    fullpath = os.path.abspath(arg)
-                    if _is_new(fullpath):
-                        self.paths.append(fullpath)
+                with open(fn, 'r') as fd:
+                    self.batch_configure(fd)
+
+        if not (self.default_policy['watch_policy']
+                or self.default_policy['copy_policy']
+                or self.default_policy['account']
+                or self.default_policy['label']
+                or self.default_policy['tags']
+                or self.options['--auto']
+                or self.options['--input=']):
+            # If no policy is given, default to importing once with no
+            # persistent configuration change.
+            self.options['--import-only'] = [True]
+            self.default_policy = None
+
+        for path in self.paths:
+            if path.startswith('imap:'):
+                pass
+            elif not os.path.exists(path):
+                raise Nonsense('File or path not found: %s' % path)
 
         self.paths.sort()
         return []
 
-    async def run(self):
-        from ...config import AppConfig
-
-        ctx_id = self.get_context()
-        acct_id = mailbox_label = mailbox_tags = mailbox_policy = None
-        recurse = bool(self.options['--recurse'])
-
-# FIXME: This belongs in configure()
-
-        # FIXME: 'Local mail' should not be hardcoded
-        acct_id = self.options['--username='][-1] or 'Local mail'
-        if self.options['--account=']:
-            acct_id = self.options['--account='][-1]
-
-        if acct_id and self.options['--context='][-1] == 'default':
-            pass  # FIXME: Set the context based on the account?
-
-        config_only = self.options['--cfg-only'][-1]
-        mailbox_tags = None
-        mailbox_policy = []
-        if self.options['--label=']:
-            mailbox_label = self.options['--label='][-1]
-            if mailbox_label in ('N', 'n', False):
-                mailbox_label = ''
-        if self.options['--move'][-1]:
-            mailbox_policy.append('move')
-        elif self.options['--copy'][-1]:
-            mailbox_policy.append('copy')
-        elif self.options['--watch'][-1]:
-            mailbox_policy.append('read')
-        mailbox_policy = '+'.join(mailbox_policy)
-
-## EOFIXME
-
-        requests = []
-        for path in self.paths:
-            policy, label, force = None, None, False
-            if path in self.SEARCH:
-                request_obj = RequestSearch(context=ctx_id, terms=path)
-                force = True
-            else:
-                request_obj = RequestMailbox(
+    async def browse_paths(self, ctx_id, paths):
+        yielded = set()
+        done = set()
+        plan = copy.copy(paths)
+        while plan:
+            path = plan.pop(0)
+            while path.endswith('/') and len(path) > 1:
+                path = path[:-1]
+            if path in done:
+                continue
+            done.add(path)
+            details = await self.repeatable_async_api_request(
+                self.access,
+                RequestBrowse(
+                    path=path,
                     context=ctx_id,
                     username=self.options['--username='][-1],
-                    password=self.options['--password='][-1],
-                    mailbox=path)
+                    password=self.options['--password='][-1]))
+            for info in details['info']:
+                if info['path'] not in yielded:
+                    yield info['path'], info
+                if info.get('is_dir'):
+                    plan.append(info['path'])
 
-                policy = mailbox_policy
-                label = mailbox_label
-                if (recurse and label) or label in (True, 'Y', 'y'):
-                    label = os.path.basename(path)
+    async def run_path_policies(self):
+        ctx_id = self.get_context()
 
-            requests.append((path, RequestAddToIndex(
+        # FIXME: Allow --auto with just an e-mail address? In which case
+        #        we try to auto-discover the IMAP server?
+
+        # If the user has requested --auto, then we need to first browse
+        # any requested IMAP paths to generate our configurations.
+        # We do not recurse filesystem paths; users that want that can run
+        # find or something themselves.
+        if self.options['--auto']:
+            paths = [p for p in self.paths if p.startswith('imap:')]
+            async for path, details in self.browse_paths(ctx_id, paths):
+                if path not in self.policies:
+                    policy = self.autoconf(path, self.default_policy)
+                    # FIXME: Only add mailboxes here...
+                    self.policies[path] = policy
+                    self.paths.append(path)
+
+        requests = []
+        for path, policy in self.policies.items():
+            requests.append(RequestPathPolicy(
                 context=ctx_id,
-                search=request_obj,
-                account=acct_id,
-                mailbox_policy=policy,
-                mailbox_label=label,
-                mailbox_tags=mailbox_tags,
-                config_only=config_only,
-                force=force)))
+                config_only=self.options['--config-only'][-1],
+                import_only=self.options['--import-only'][-1],
+                path=path,
+                **policy))
 
-        if not requests:
-            return True
+        self.print('%s' % await self.worker.async_api_request(self.access,
+            RequestPathPolicies(
+                context=ctx_id,
+                config_only=self.options['--config-only'][-1],
+                import_only=self.options['--import-only'][-1],
+                import_full=bool(self.options['--full-scan']),
+                only_inboxes=bool(self.options['--only-inboxes']),
+                policies=requests)))
 
-        if self.options['--dryrun']:
-            for r in requests:
-                print('import %s' % (r[0],))
-            return True
+    async def run_import_only(self):
+        ctx_id = self.get_context()
+        self.print('%s' % await self.worker.async_api_request(self.access,
+            RequestPathImport(
+                context=ctx_id,
+                import_full=bool(self.options['--full-scan']),
+                only_inboxes=bool(self.options['--only-inboxes']),
+                paths=self.paths)))
 
+    async def run(self):
+        if self.default_policy is None:
+            return await self.run_import_only()
+        else:
+            return await self.run_path_policies()
+
+    async def UNUSED_run(self):
         def _next():
             path, request_obj = requests.pop(0)
             sys.stdout.write('[import] Processing %s\n' % path)
@@ -858,6 +1087,45 @@ class CommandImport(CLICommand):
                 logging.exception('Woops')
                 raise
         return True
+
+
+class CommandNew(CommandImport):
+    """# moggie new [options] [</paths/to/mailboxes/...> ...]
+
+    Check for new mail and add to the search index.
+
+    If no path is specified, check all configured paths that have a
+    watch-policy of "watch" or "sync". If the path is not configured, this
+    will have the same effect as a one-off `moggie import`.
+
+    ### Options
+
+    %(OPTIONS)s
+    """
+    NAME = 'new'
+    AUTO_START = True
+    WEB_EXPOSE = True
+    WEBSOCKET = False  # FIXME: Make this true, report progress?
+    ROLES = (
+        AccessConfig.GRANT_FS +
+        AccessConfig.GRANT_COMPOSE +
+        AccessConfig.GRANT_TAG_RW)
+    OPTIONS = [[
+        (None, None, 'general'),
+        ('--context=', ['default'], 'X=<ctx>, import into a specific context'),
+        ('--full-scan',        [], 'Ignore modification times, scan everything'),
+        ('--only-inboxes',     [], 'Only check mailboxes tagged with inbox'),
+#       ('--compact',          [], 'Compact the search engine after importing'),
+    ]]
+
+    def configure(self, args):
+        self.paths = []
+        self.paths = self.strip_options(args)
+        self.default_policy = None
+        return []
+
+    async def run(self):
+        return await self.run_import_only()
 
 
 class CommandBrowse(CLICommand):
@@ -949,7 +1217,7 @@ class CommandBrowse(CLICommand):
                 magic.append('dir')
             for attr in ('size', 'mtime'):
                 if attr not in child:
-                    child[attr] = ''
+                    child[attr] = '' if tabs else None
             child['src'] = child.get('src', 'fs')
             child['magic'] = ','.join(sorted(magic))
             if not tabs:
@@ -1018,6 +1286,7 @@ class CommandBrowse(CLICommand):
             '/.' in result['path'],
             result['path'].lower(),
             result.get('mtime', 0))
+
 
 ## FIXME - Are these still what we want/need? ##
 
@@ -1099,11 +1368,17 @@ def CommandConfig(wd, args):
         section = args[1]
         options = args[2:]
         if not options:
-            options = cfg[section].keys()
+            if '.' in section:
+                section, opt = section.rsplit('.', 1)
+                options = [opt]
+            else:
+                options = cfg[section].keys()
         print('[%s]' % (section,))
         for opt in options:
             try:
                 print('%s = %s' % (opt, cfg[section][opt]))
+            except ValueError:
+                print('%s = (encrypted)' % (opt,))
             except KeyError:
                 print('# %s = (unset)' % (opt,))
 

@@ -71,18 +71,26 @@ class ImportWorker(BaseWorker):
 
         assert(self.app and self.search)
 
-    def _ns_scope(self, tag_namespace, tags, _all=True):
-        if not tag_namespace:
-            return tags
-        nt = ['@%s' % tag_namespace] if (_all and tag_namespace) else []
-        if tags:
-            if tag_namespace:
-                nt.extend(
-                    t if ('@' in t) else ('%s@%s' % (t, tag_namespace))
-                    for t in tags)
+    def _fix_tags_and_scope(self, tag_namespace, tags, _all=True):
+        def _fix(tag):
+            tag = tag.lower()
+            if tag[:3] == 'in:':
+                return tag
+            elif tag[:4] == 'tag:':
+                return 'in:%s' % tag[4:]
             else:
-                nt.extend(tags)
-        return nt
+                return 'in:%s' % tag
+
+        tags = set(_fix(t) for t in tags)
+        if not tag_namespace:
+            return sorted(list(tags))
+
+        nt = ['@%s' % tag_namespace] if (_all and tag_namespace) else []
+        nt.extend(
+            t if ('@' in t or t in special) else ('%s@%s' % (t, tag_namespace))
+            for t in tags)
+
+        return sorted(list(set(nt)))
 
     def on_tick(self):
         if not self.idle_running and self.progress is None:
@@ -147,7 +155,12 @@ class ImportWorker(BaseWorker):
         self.notify(msg, data=progress, caller=progress['caller'])
 
     def _index_full_messages(self, email_idxs, tag_namespace, progress):
-        incoming = self._ns_scope(tag_namespace, ['in:incoming'], _all=False)
+        self._index_full_messages2(email_idxs, tag_namespace, progress, True)
+        self._index_full_messages2(email_idxs, tag_namespace, progress, False)
+
+    def _index_full_messages2(self, email_idxs, tag_namespace, progress, old):
+        in_queue = 'in:incoming-old' if old else 'in:incoming'
+        incoming = self._fix_tags_and_scope(tag_namespace, [in_queue], _all=False)
         incoming = incoming[0]
         if email_idxs:
             email_idxs = list(self.search.intersect(incoming, email_idxs))
@@ -155,7 +168,7 @@ class ImportWorker(BaseWorker):
             all_incoming = self.search.search(incoming)['hits']
             email_idxs = list(dumb_decode(all_incoming))
         if not email_idxs:
-            logging.debug('No messages need processing, aborting.')
+            logging.debug('No messages to process (%s).' % incoming)
             return
 
         progress['emails_new'] = len(email_idxs)
@@ -179,9 +192,10 @@ class ImportWorker(BaseWorker):
                 # FIXME: Check status: want more data? e.g. full attachments?
 
                 # 3. Run the filtering logic to mutate keywords/tags
-                if 0 == (self.imported % 1000):
-                    self.filters.load()
-                self.filters.filter(tag_namespace, kws, md, email)
+                if not old:
+                    if 0 == (self.imported % 1000):
+                        self.filters.load()
+                    self.filters.filter(tag_namespace, kws, md, email)
                 for kw in kws:
                     if kw in keywords:
                         keywords[kw].append(md.idx)
@@ -261,7 +275,13 @@ class ImportWorker(BaseWorker):
                 self._index_full_messages(email_idxs, tag_namespace, progress)
             return _full_index
 
-        tags = self._ns_scope(tag_namespace, ['in:incoming'] + initial_tags)
+        work_queue = 'in:incoming-old'
+        for magic in ('incoming', 'in:incoming', 'inbox', 'in:inbox'):
+            if magic in initial_tags:
+                work_queue = 'in:incoming'
+                break
+
+        tags = self._fix_tags_and_scope(tag_namespace, [work_queue] + initial_tags)
         done = False
         email_c = 0
         self.filters.load()

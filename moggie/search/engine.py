@@ -303,12 +303,14 @@ class SearchEngine:
                 if not tag_namespace:
                     for kw, comment, iset in plb.items(decode=False):
                         kw = str(kw, 'utf-8')
-                        if (kw[:3] == 'in:') and (kw[3] != '@'):
+                        if ((len(kw) > 3)
+                                and (kw[:3] == 'in:') and (kw[3] != '@')):
                             yield (kw, (comment, dumb_decode(iset) or no_hits))
                 else:
                     for kw, comment, iset in plb.items(decode=False):
                         kw = str(kw, 'utf-8')
-                        if ((kw[:3] == 'in:') and (kw[3] != '@')
+                        if ((len(kw) > 3)
+                               and (kw[:3] == 'in:') and (kw[3] != '@')
                                and kw.endswith(tag_namespace)):
                             kw = kw.split('@')[0]
                             yield (kw, (comment, dumb_decode(iset) or no_hits))

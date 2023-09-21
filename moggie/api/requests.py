@@ -71,21 +71,54 @@ class RequestTag(RequestBase):
         }, req_id=req_id)
 
 
-class RequestAddToIndex(RequestBase):
+class RequestPathImport(RequestBase):
     def __init__(self,
-            context='', search='',
-            account='', mailbox_label='', mailbox_tags='', mailbox_policy='',
-            config_only=False, force=False, req_id=None):
+            context='', paths=[],
+            only_inboxes=False, import_full=False,
+            req_id=None):
         self.update({
-            'req_type': 'add_to_index',
+            'req_type': 'path_import',
             'context': context,
-            'search': search,
+            'paths': paths,
+            'only_inboxes': only_inboxes,
+            'import_full': import_full
+        }, req_id=req_id)
+
+
+class RequestPathPolicy(RequestBase):
+    def __init__(self,
+            context='', path='',
+            label='', account='', watch_policy='', copy_policy='', tags='',
+            config_only=False, import_only=False, import_full=False,
+            req_id=None):
+        self.update({
+            'req_type': 'path_policy',
+            'context': context,
+            'path': path,
             'account': account,
-            'mailbox_label': mailbox_label,
-            'mailbox_tags': mailbox_tags,
-            'mailbox_policy': mailbox_policy,
+            'watch_policy': watch_policy,
+            'copy_policy': copy_policy,
+            'tags': tags,
             'config_only': config_only,
-            'force': force
+            'import_only': import_only,
+            'import_full': import_full
+        }, req_id=req_id)
+
+
+class RequestPathPolicies(RequestBase):
+    def __init__(self,
+            context='', policies=[],
+            config_only=False, import_only=False, import_full=False,
+            only_inboxes=False,
+            req_id=None):
+        self.update({
+            'req_type': 'path_policies',
+            'config_only': config_only,
+            'import_only': import_only,
+            'import_full': import_full,
+            'only_inboxes': only_inboxes,
+            'context': context,
+            'policies': policies
         }, req_id=req_id)
 
 
@@ -252,7 +285,9 @@ def to_api_request(_input):
          'contexts': RequestContexts,
          'config_set': RequestConfigSet,
          'config_get': RequestConfigGet,
-         'add_to_index': RequestAddToIndex,
+         'path_import': RequestPathImport,
+         'path_policy': RequestPathPolicy,
+         'path_policies': RequestPathPolicies,
          'openpgp': RequestOpenPGP,
          'unlock': RequestUnlock,
          'change_passphrase': RequestChangePassphrase,

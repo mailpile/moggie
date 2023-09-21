@@ -375,21 +375,23 @@ class CLICommand:
         from ...workers.search import SearchWorker
         return SearchWorker.Connect(self.worker.worker_dir)
 
-    def strip_options(self, args):
+    def strip_options(self, args, options=None):
         # This should be compatible-ish with how notmuch does things.
         leftovers = []
+        auto_context = (options is None)
+        options = self.options if (options is None) else options
         def _setopt(name, val):
-            if name not in self.options:
-                self.options[name] = []
-            self.options[name].append(val)
+            if name not in options:
+                options[name] = []
+            options[name].append(val)
         while args:
             arg = args.pop(0)
             if arg == '--':
                 leftovers.extend(args)
                 break
-            elif arg in self.options:
+            elif arg in options:
                 _setopt(arg, True)
-            elif arg+'=' in self.options:
+            elif arg+'=' in options:
                 if args and args[0][:2] != '--':
                     _setopt(arg+'=', args.pop(0))
                 else:
@@ -402,12 +404,12 @@ class CLICommand:
                         arg, opt = arg.split(':', 1)
                     except ValueError:
                         pass
-                if arg+'=' not in self.options:
+                if arg+'=' not in options:
                     raise Nonsense('Unrecognized argument: %s' % arg)
                 _setopt(arg+'=', opt)
             else:
                 leftovers.append(arg)
-        if '--context=' in self.options:
+        if auto_context and ('--context=' in self.options):
             self.context = self.get_context()
         return leftovers
 

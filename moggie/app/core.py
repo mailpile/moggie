@@ -17,12 +17,16 @@ from ..api.requests import *
 from ..api.responses import *
 from ..api.exceptions import *
 from ..util.asyncio import async_run_in_thread
-from ..util.dumbcode import dumb_decode, to_json, from_json
+from ..util.dumbcode import dumb_decode, dumb_encode_bin, to_json, from_json
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorkers
 from ..workers.search import SearchWorker
 from .cli import CLI_COMMANDS
+
+
+def _b(p):
+    return bytes(p, 'utf-8') if isinstance(p, str) else p
 
 
 class AppCore:
@@ -289,15 +293,16 @@ main app worker. Hints:
     def _is_locked(self):
         return (self.config.has_crypto_enabled and not self.config.aes_key)
 
-    def _config_new_section(self, create):
+    def _config_new_section(self, create, config=None):
+        config = config or self.config
         while True:
             section = '%s%x' % ({
-                    'access': self.config.ACCESS_PREFIX,
-                    'account': self.config.ACCOUNT_PREFIX,
-                    'context': self.config.CONTEXT_PREFIX
+                    'access': config.ACCESS_PREFIX,
+                    'account': config.ACCOUNT_PREFIX,
+                    'context': config.CONTEXT_PREFIX
                 }[create], self.counter % 0x10000)
             self.counter += 1
-            if section not in self.config:
+            if section not in config:
                 break
         return section
 
@@ -524,6 +529,15 @@ main app worker. Hints:
 
             result = [info] + children
 
+        # Augment results with any configured path policies
+        context = self.config.contexts[ctx]
+        pmap = dict((_b(i['path']), i) for i in result)
+        paths = list(pmap.keys())
+        for p, pol in context.get_path_policies(paths, inherit=False).items():
+            pmap[p]['policy'] = pol
+        for p, pol in context.get_path_policies(paths).items():
+            pmap[p]['policy_full'] = pol
+
         return ResponseBrowse(api_request, result)
 
     async def api_req_mailbox(self, conn_id, access, api_request):
@@ -746,63 +760,160 @@ main app worker. Hints:
                 self.start_workers()
         return None
 
-    async def api_req_add_to_index(self, conn_id, access, api_request):
+    async def api_req_paths(self, conn_id, access, api_request):
         if not (self.metadata and self.search):
             return ResponsePleaseUnlock(api_request)
 
-        with self.config:
-            ctx = api_request.get('context') or self.config.CONTEXT_ZERO
-            context = self.config.get_context(ctx)
+        import_only = api_request.get('import_only', False)
+        config_only = api_request.get('config_only', False)
+        if config_only and import_only:
+            raise ValueError('Config-only, or import-only - not both!')
 
-            acct_id = api_request.get('account', '')
-            account = None
-            mailbox_label = api_request.get('mailbox_label', '')
-            mailbox_tags = api_request.get('mailbox_tags', '')
-            mailbox_policy = api_request.get('mailbox_policy', '')
+        requests = api_request.get('policies', [api_request])
+        for req in requests:
+            if req['context'] != api_request['context']:
+                raise PermissionError('Contexts must all match.')
+            if req.get('import_only', False) != import_only:
+                raise PermissionError('Import-only rules must all match.')
+            if req.get('config_only', False) != config_only:
+                raise PermissionError('Config-only rules must all match.')
 
-            # Will raise ValueError or NameError if access denied
-            roles, tag_ns, scope_s = access.grants(ctx,
-                AccessConfig.GRANT_FS +
-                AccessConfig.GRANT_COMPOSE +
-                AccessConfig.GRANT_TAG_RW )
+        if import_only:
+            # This lets us use all the existing config and logic, without
+            # risking anything being persisted.
+            config = self.config.get_ephemeral_snapshot()
+        else:
+            config = self.config
 
-            if not acct_id and context.accounts:
-                acct_id = context.accounts[0]
-            if acct_id:
-                account = self.config.get_account(acct_id)
-                if account:
-                    acct_id = account.config_key
+        ctx = api_request.get('context') or config.CONTEXT_ZERO
+        context = config.get_context(ctx)
 
-            mailbox = api_request['search'].get('mailbox')
-            if acct_id and mailbox and (mailbox_policy or mailbox_label):
-                if account:
-                    if acct_id not in context.accounts:
-                        raise ValueError('Account and context do not match')
-                else:
-                    logging.info('Auto-creating account: %s' % acct_id)
-                    section = self._config_new_section('account')
-                    self.config[section].update({'name': acct_id})
-                    account = self.config.get_account(section)
-                    if '@' in acct_id:
-                        account.addresses.append(acct_id)
-                    context.accounts.append(section)
-                logging.info('Adding to account %s: %s' % (acct_id, mailbox))
-                account.add_mailbox(
-                    mailbox_label or '',
-                    mailbox_tags or '',
-                    mailbox_policy,
-                    mailbox)
+        # Will raise ValueError or NameError if access denied
+        roles, tag_ns, scope_s = access.grants(ctx,
+            AccessConfig.GRANT_FS +
+            AccessConfig.GRANT_COMPOSE +
+            AccessConfig.GRANT_TAG_RW )
 
-        def import_search():
+        with config:
+            for req in requests:
+                if not req['path']:
+                    logging.exception('Path is required: %s' % req)
+                    raise ValueError('Path is required')
+                context.set_path(req['path'],
+                    label=req.get('label'),
+                    account=req.get('account'),
+                    watch_policy=req.get('watch_policy'),
+                    copy_policy=req.get('copy_policy'),
+                    tags=req.get('tags'),
+                    _remove=(not import_only))
+
+            for req in requests:
+                path = _b(req['path'])
+                if path.startswith(b'imap:'):
+                    policy = context.get_path_policies(path, slim=False)[path]
+                    acct_id = policy['account']
+                    if acct_id and not config.get_account(acct_id):
+                        logging.info('Auto-creating account: %s' % acct_id)
+                        section = self._config_new_section('account', config)
+                        config[section].update({'name': acct_id})
+                        account = config.get_account(section)
+                        if '@' in acct_id:
+                            account.addresses.append(acct_id)
+                        context.accounts.append(section)
+
+        if not config_only:
+            paths = [req['path'] for req in requests]
+            return await self.api_req_import(conn_id, access, api_request,
+                config=config, ctx=ctx, paths=paths)
+
+        return ResponsePing(api_request)  # FIXME
+
+    async def api_req_import(self, conn_id, access, api_request,
+            config=None, ctx=None, paths=None):
+        if not (self.metadata and self.search):
+            return ResponsePleaseUnlock(api_request)
+
+        only_inboxes = api_request.get('only_inboxes')
+        import_full = api_request.get('import_full')
+        paths = paths or api_request.get('paths') or []
+        config = config or self.config
+
+        ctx = ctx or api_request.get('context') or config.CONTEXT_ZERO
+        context = config.get_context(ctx)  # Might be temporary
+        loop = asyncio.get_event_loop()
+
+        if not paths and type(api_request) == RequestPathImport:
+            pols = context.get_path_policies()
+            if only_inboxes:
+                _tags = lambda p: pols[p].get('tags', [])
+                paths = [p for p in pols if 'inbox' in _tags(p)]
+                logging.debug('Import: configured Inboxes: %s' % paths)
+            else:
+                paths = list(pols.keys())
+                logging.debug('Import: configured paths: %s' % paths)
+        else:
+            logging.debug('Import: requested paths: %s' % paths)
+
+        to_import = {}
+        recursed = set()
+        while paths:
+            path = _b(paths.pop(0))
+            try:
+                policy = context.get_path_policies(path, slim=False)[path]
+
+                rec = 1 if policy['watch_policy'] in ('watch', 'sync') else 0
+                result = await self.storage.async_info(loop,
+                    dumb_encode_bin(path),
+                    details=True, recurse=rec, relpath=False,
+                    username=api_request.get('username'),
+                    password=api_request.get('password'))
+                if not result:
+                    logging.debug('Failed to get info for %s' % path)
+                    continue
+
+                contents = result.get('contents') or []
+                if 'contents' in result:
+                    del result['contents']
+
+                for r in [result] + contents:
+                    rpath = _b(r['path'])
+                    if (r is not result) and r.get('is_dir'):
+                        if rpath not in paths:
+                            paths.append(rpath)
+                    if r.get('magic'):
+                        ppol = context.get_path_policies(rpath).get(rpath, {})
+                        if only_inboxes and 'inbox' not in ppol['tags']:
+                            logging.debug('Not an Inbox: %s/%s' % (r, ppol))
+                            continue
+                        elif (not import_full
+                                and 'mtime' in r
+                                and ppol.get('updated')):
+                            if int(ppol['updated'], 16) >= r['mtime']:
+                                logging.debug('Unchanged: %s/%s' % (r, ppol))
+                                continue
+                        logging.debug('Should import: %s/%s' % (r, ppol))
+                        to_import[rpath] = ppol
+            except:
+                logging.exception('Failed to check path %s' % path)
+
+        def _import_path(context, req, path, policy):
+            policy_tags = (policy.get('tags') or '').split(',')
             return self.importer.with_caller(conn_id).import_search(
-                api_request['search'],
-                api_request.get('initial_tags', []),
-                tag_namespace=context.tag_namespace,
-                force=api_request.get('force', False),
-                full=api_request.get('full', False))
+                RequestMailbox(
+                    context=ctx,
+                    mailbox=path,
+                    limit=None,
+                    username=req.get('username'),
+                    password=req.get('password')),
+                policy_tags,
+                tag_namespace=context.tag_namespace)
 
-        if not api_request.get('config_only'):
-            result = await async_run_in_thread(import_search)
+        results = []
+        for path, ppol in sorted(list(to_import.items())):
+            update_time = int(time.time())
+            result[path] = await async_run_in_thread(
+                _import_path, context, api_request, path, ppol)
+            context.set_path_updated(path, '%x' % update_time)
 
         return ResponsePing(api_request)  # FIXME
 
@@ -867,8 +978,10 @@ main app worker. Hints:
             result = await self.api_req_browse(conn_id, access, api_req)
         elif type(api_req) == RequestContexts:
             result = await self.api_req_contexts(conn_id, access, api_req)
-        elif type(api_req) == RequestAddToIndex:
-            result = await self.api_req_add_to_index(conn_id, access, api_req)
+        elif type(api_req) in (RequestPathPolicy, RequestPathPolicies):
+            result = await self.api_req_paths(conn_id, access, api_req)
+        elif type(api_req) == RequestPathImport:
+            result = await self.api_req_import(conn_id, access, api_req)
         elif type(api_req) == RequestConfigGet:
             result = await self.api_req_config_get(conn_id, access, api_req)
         elif type(api_req) == RequestConfigSet:

@@ -58,6 +58,7 @@ CLI_COMMANDS = LazyLoader({
     'context': (_lazy_admin, 'CommandContext'),
     'grant':   (_lazy_admin, 'CommandGrant'),
     'import':  (_lazy_admin, 'CommandImport'),
+    'new':     (_lazy_admin, 'CommandNew'),
     'browse':  (_lazy_admin, 'CommandBrowse'),
     'encrypt': (_lazy_admin, 'CommandEnableEncryption'),
     'config':  (_lazy_admin, 'CommandConfig'),

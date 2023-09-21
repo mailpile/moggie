@@ -181,7 +181,7 @@ blown mail client.</p>
 ## Suppressed results: Spam and Trash
 
     By default, the search engine will omit results which are tagged as
-    `spam` or `trash`, unless they are explicitly mentioned as one of the
+    `junk` or `trash`, unless they are explicitly mentioned as one of the
     search terms.
     """}
 

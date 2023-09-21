@@ -1402,7 +1402,7 @@ class CommandTag(CLICommand):
     This can be used to selectively import only certain messages from a
     larger mailbox into moggie's index. Assigning the special `incoming` tag
     will treat the message as newly discovered and standard filters (including
-    spam filters) will be applied:
+    junk/spam filters) will be applied:
 
          moggie tag +incoming -- mailbox:/path/to/mail.mbx is:unindexed
 
@@ -1475,12 +1475,13 @@ class CommandTag(CLICommand):
             tagops.insert(0, '-*')
 
     def _batch_configure(self, ifd):
+        import shlex
         for line in ifd:
             line = line.strip()
             if line and not line.startswith('#'):
-                tagops, terms = line.split('--')
+                tagops, terms = line.split('--', 1)
                 terms = terms.strip()
-                tagops = tagops.strip().split()
+                tagops = shlex.split(tagops)
                 self._validate_and_normalize_tagops(tagops)
                 if terms.startswith('META={'):
                     yield (tagops, from_json(terms[5:]), None)
