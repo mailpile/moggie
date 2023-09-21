@@ -22,7 +22,7 @@ class ListItemProxy(list):
         self._item = item
         self.delim = delim
         self.access_denied = False
-        self.changed = False
+        self.no_write_back = None
         try:
             data = ac.get(section, item, permerror=True).strip()
             if data:
@@ -36,6 +36,14 @@ class ListItemProxy(list):
     config = property(lambda s: s._config)
     config_key = property(lambda s: s._key)
 
+    def __enter__(self):
+        self.no_write_back = 0
+
+    def __exit__(self, *args, **kwargs):
+        changed, self.no_write_back = self.no_write_back, None
+        if changed:
+            self._write_back()
+
     def _decode(self, val):
         return val.strip()
 
@@ -44,6 +52,9 @@ class ListItemProxy(list):
         return '<ListItemProxy(%s/%s)=%s>' % (self._key, self._item, data)
 
     def _write_back(self):
+        if self.no_write_back is not None:
+            self.no_write_back += 1
+            return
         list_str = (self.delim+' ').join(str(i) for i in self)
         if len(list_str) > 60:
             list_str = list_str.replace(self.delim, self.delim+'\n')
@@ -102,9 +113,13 @@ class ListItemProxy(list):
         super().clear()
         self._write_back()
 
+    def sort(self, *args, **kwargs):
+        super().sort(*args, **kwargs)
+        self._write_back()
+
 
 class EncodingListItemProxy(ListItemProxy):
-    CLEAR_OK = re.compile(r'^[a-zA-Z0-9 @\\/\.,:;_\-]*$')
+    CLEAR_OK = re.compile(r'^[a-zA-Z0-9 @\\/\.,:;_|\-=]*$')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -116,13 +131,17 @@ class EncodingListItemProxy(ListItemProxy):
         return val.strip()
 
     def _validate(self, val):
+        def rdelim(t):
+            return t.replace(self.delim, self.esc_delim)
         if isinstance(val, bytes):
             try:
                 val = str(val, 'utf-8')
             except:
-                return '=' + dumb_encode_asc(val)
-        if not self.CLEAR_OK.match(val):
-            val = '=' + dumb_encode_asc(val).replace(self.delim, self.esc_delim)
+                return rdelim('=' + dumb_encode_asc(val))
+        if ((val[:1] == '=')
+                or (self.delim in val)
+                or not self.CLEAR_OK.match(val)):
+            val = rdelim('=' + dumb_encode_asc(val))
         return val
 
 

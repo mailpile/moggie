@@ -2,6 +2,7 @@ from . import *
 
 if __name__ == '__main__':
     import sys
+    from ..util.dumbcode import to_json
     if os.path.exists('/tmp/config.rc'):
         os.remove('/tmp/config.rc')
 
@@ -83,5 +84,70 @@ if __name__ == '__main__':
     assert('bre@example.org' in ac.get_account('Bjarni').addresses)
     assert('bre@example.org' in ac.get_account('Account 1').addresses)
 
+    # Test that the policies get inherited correctly!
+    #  - paths, labels and updated times should NOT be inherited.
+    #  - everything else should get inherited
+    #  - tag lists get combind unless blocked by '-'
+    #  - Inheritance can be blocked by setting an attribute to '-'
+    #  - '-' gets converted to None and stripped from tag lists
+    cz = ac.get_ephemeral_snapshot().context_zero()
+    assert(
+        cz.set_path('/home/bjarni', label='Bjarni', tags='bjarni', account='bre@example.org')
+        is True)
+    cz.set_path('/home/bjarni/99_Mail', tags='foo', watch_policy='watch', account='-')
+    cz.set_path('/home/bjarni/00_Mail', tags=['-', 'inbox', 'outbox'])
+    cz.set_path('imap://u@example.org', watch_policy='watch')
+    # This indirectly tests partial updates in .set_path()
+    cz.set_path_updated('/home/bjarni/foo', 12345)
+    cz.set_path_updated('/home/bjarni', 54321)
+    policies = cz.get_path_policies(
+        'imap://u@example.org',
+        'imap://u@example.org/INBOX',
+        '/tmp',
+        '/home/bjarni',
+        '/home/bjarni/blargh',
+        '/home/bjarni/foo',
+        '/home/bjarni/00_Mail',
+        '/home/bjarni/99_Mail',
+        '/home/bjarni/99_Mail/sub', slim=False)
+    assert(policies[b'/tmp']['label'] is None)
+    assert(policies[b'/tmp']['account'] is None)
+    assert(policies[b'/tmp']['watch_policy'] is None)
+    assert(policies[b'/home/bjarni']['label'] == 'Bjarni')
+    assert(policies[b'/home/bjarni']['updated'] == '54321')
+    assert(policies[b'/home/bjarni/blargh']['label'] is None)
+    assert(policies[b'/home/bjarni/blargh']['updated'] is None)
+    assert(policies[b'/home/bjarni/blargh']['account'] == 'bre@example.org')
+    assert(policies[b'/home/bjarni/blargh']['watch_policy'] is None)
+    assert(policies[b'/home/bjarni/foo']['label'] is None)
+    assert(policies[b'/home/bjarni/foo']['updated'] == '12345')
+    assert(policies[b'/home/bjarni/foo']['account'] == 'bre@example.org')
+    assert(policies[b'/home/bjarni/00_Mail']['tags'] == 'inbox,outbox')
+    assert(policies[b'/home/bjarni/99_Mail']['tags'] == 'bjarni,foo')
+    assert(policies[b'/home/bjarni/99_Mail']['label'] is None)
+    assert(policies[b'/home/bjarni/99_Mail']['updated'] is None)
+    assert(policies[b'/home/bjarni/99_Mail']['account'] is None)
+    assert(policies[b'/home/bjarni/99_Mail']['watch_policy'] == 'watch')
+    assert(policies[b'/home/bjarni/99_Mail/sub']['tags'] == 'bjarni,foo')
+    assert(policies[b'/home/bjarni/99_Mail/sub']['watch_policy'] == 'watch')
+    assert(policies[b'/home/bjarni/99_Mail/sub']['account'] is None)
+    assert(policies[b'imap://u@example.org/INBOX']['watch_policy'] == 'watch')
+
+    # Test deletion, make sure inherit=False gives us raw policy values
+    assert(cz.set_path('/home/bjarni/99_Mail', _remove=True) is False)
+    policies = cz.get_path_policies(
+        '/home/bjarni/foo',
+        '/home/bjarni/99_Mail',
+        '/home/bjarni/00_Mail', inherit=False, slim=True)
+    assert('account' not in policies[b'/home/bjarni/foo'])  # slim!
+    assert(policies[b'/home/bjarni/foo']['updated'] == '12345')
+    assert(policies[b'/home/bjarni/00_Mail']['tags'] == '-,inbox,outbox')
+    assert('tags' not in policies[b'/home/bjarni/99_Mail'])  # Deleted
+
+    # No paths specified = fetch all policies
+    assert(len(cz.get_path_policies()) == 5)
+
+    ac.save()
+    del ac
     os.remove('/tmp/config.rc')
     print('Tests passed OK')

@@ -271,7 +271,8 @@ class AccessConfig(ConfigSectionProxy):
                     if rc not in role:
                         return False
 
-            scope_search = ' '.join('+in:%s' % t.lower() for t in ctx.tags)[1:]
+            scope_search = ' '.join(
+                '+in:%s' % t.lower() for t in ctx.tags)[1:]
             if ctx.scope_search:
                 scope_search += ' ' + ctx.scope_search
                 if scope_search.startswith(' -'):
@@ -286,98 +287,105 @@ class AccountConfig(ConfigSectionProxy):
     OUTGOING_TAGS = ['outbox', 'sent']
     _KEYS = {
         'name': str,
-        #addresses = list of e-mails
-        'mailbox_proto': str,      # none, imap, imaps, jmap, pop3, pop3s, files
-        'mailbox_config': str,     # move or read or copy or sync?
-        # Optional...
-        'sendmail_proto': str,     # none, smtp, jmap, imap, imaps, proc
-        'sendmail_server': str,    # none, smtp, jmap, imap, imaps, proc
-        'sendmail_username': str,  # unset=no auth, special: ==mailbox_username
-        'sendmail_password': str,  # unset=no pass, special: ==mailbox_password
-        'mailbox_server': str,
-        'mailbox_username': str,   # unset=no auth
-        'mailbox_password': str,   # unset=no pass
-        #mailboxes = list of label:tag:policy:path
-        #watch_paths = list of paths to watch for new mailboxes
-        'watch_policy': str,       # What to do when we find something...
+        #addresses: [...],        # List of e-mails
+        'sendmail': str,          # smtp[s]://username@server:port
+                                  # |/path/to/binary
+        'sendmail_password': str, # unset=no pass, special: ==password
+        'mailbox_server': str,    # imap[s]://username@server:port
+        'mailbox_password': str,  # unset=no pass, special: ==password
         'description': str}
-    _EXTRA_KEYS = ['addresses', 'mailboxes', 'watch_paths']
+    _EXTRA_KEYS = ['addresses']
 
     def __init__(self, *args, **kwarg):
         super().__init__(*args, **kwarg)
         c, k = self.config, self.config_key
         self._addresses = EncodingListItemProxy(c, k, 'addresses')
-        self._mailboxes = EncodingListItemProxy(c, k, 'mailboxes')
-        self._watch_paths = EncodingListItemProxy(c, k, 'watch_paths')
 
     addresses = property(lambda self: self._addresses)
-    mailboxes = property(lambda self: self._mailboxes)
-    watch_paths = property(lambda self: self._watch_paths)
 
     def get_tags(self):
         tags = []
-        if self.mailbox_proto and self.mailbox_config:
+        if self.mailbox_server:
             tags += self.ACCOUNT_TAGS
-        if self.sendmail_proto:
+        if self.sendmail:
             tags += self.OUTGOING_TAGS
         return tags
 
-    def add_mailbox(self, label, tags, policy, path):
-        if ':' in label or ':' in tags or ':' in policy:
-            raise ValueError('Mailbox settings must not contain `:`')
-        entry = ':'.join([label, tags, policy, path])
 
-        for idx, mailbox in enumerate(self.mailboxes):
-            l, t, p, mp = mailbox.split(':', 3)
-            if mp == path:
-                self.mailboxes[idx] = entry
-                return
+class IdentityConfig(ConfigSectionProxy):
+    _KEYS = {
+        'name': str,
+        'address': str}
 
-        self.mailboxes.append(entry)
+    def as_address_info(self):
+        return AddressInfo(address=self.address, fn=self.name)
 
 
 class ContextConfig(ConfigSectionProxy):
+    """
+    Configuration for a user-defined work Context (something like Work or
+    Personal), grouping together related accounts, identities, settings and
+    secrets.
+
+    Contexts may define a tag_namespace which allows them to have their own
+    private "system tags" (Inbox etc.) without clashing with other contexts.
+    This is moggie's most important search-engine compartmentalization /
+    security mechanism.
+
+    Varying levels of access to a one or more context can be granted using
+    `moggie grant` (creating AccessConfig config sections).
+    """
     _KEYS = {
         'name': str,
         'description': str,
-        'remote_context_url': str,
-        'default_identity': str,
+        #accounts: [...],         # List of AccountConfig keys
+        #flags: [...],            # List of enabled feature flags? -- FIXME
+        #identities: [...],       # List of IdentityConfig keys
+        #paths: [...],            # List of paths/policies (import rules)
+        #secrets: {...},          # Dict of known secrets
+        #tags: [...],             # List of tags this context has access to
+        #ui_tags: [...],          # List of tags shown in the user interface
         # Optional...
-        'scope_search': str,
-        'tag_namespace': str,
+        'default_identity': str,  # Default identity when composing mail
+        'scope_search': str,      # Access: Additional search scoping terms
+        'tag_namespace': str,     # Access: Tag namespace for this context
+        'remote_context_url': str,
         'openpgp_sop_client': str,
         'openpgp_key_sources': str}
     _EXTRA_KEYS = [
-        'identities', 'tags', 'extra_tags', 'flags', 'accounts', 'secrets']
+        'identities', 'tags', 'ui_tags', 'flags', 'accounts', 'secrets',
+        'path_policies']
 
     def __init__(self, *args, **kwarg):
         super().__init__(*args, **kwarg)
-        self._ids_list = ListItemProxy(self.config, self.config_key, 'identities')
-        self._tags_list = EncodingListItemProxy(self.config, self.config_key, 'tags')
-        self._etags_list = EncodingListItemProxy(self.config, self.config_key, 'extra_tags')
-        self._flags_list = ListItemProxy(self.config, self.config_key, 'flags')
         self._accts_list = ListItemProxy(self.config, self.config_key, 'accounts')
+        self._flags_list = ListItemProxy(self.config, self.config_key, 'flags')
+        self._ids_list = ListItemProxy(self.config, self.config_key, 'identities')
+        self._paths_list = EncodingListItemProxy(self.config, self.config_key, 'paths', delim='|')
         self._secrets = DictItemProxy(self.config, self.config_key, 'secrets')
+        self._tags_list = EncodingListItemProxy(self.config, self.config_key, 'tags')
+        self._utags_list = EncodingListItemProxy(self.config, self.config_key, 'ui_tags')
 
-    tags = property(lambda self: self._tags_list)
-    extra_tags = property(lambda self: self._etags_list)
-    flags = property(lambda self: self._flags_list)
-    identities = property(lambda self: self._ids_list)
     accounts = property(lambda self: self._accts_list)
+    identities = property(lambda self: self._ids_list)
+    flags = property(lambda self: self._flags_list)
+    paths = property(lambda self: self._paths_list)
     secrets = property(lambda self: self._secrets)
+    tags = property(lambda self: self._tags_list)
+    ui_tags = property(lambda self: self._utags_list)
 
     def _accounts(self):
         return [
             (a, AccountConfig(self.config, a))
             for a in self.accounts if a]
 
-    def _extra_tags(self, accounts=None):
-        etags = []
+    def _ui_tags(self, accounts=None):
+        utags = []
         accounts = self._accounts() if (accounts is None) else accounts
         for akey, acct in accounts:
-            etags.extend(acct.get_tags())
-        etags.extend(self._etags_list)
-        return set(etags)
+            utags.extend(acct.get_tags())
+        utags.extend(self._utags_list)
+        return set(utags)
 
     def _volatile(self, what):
         vol_id = '%s/%s' % (self.config_key, what)
@@ -442,7 +450,7 @@ class ContextConfig(ConfigSectionProxy):
 
         accounts = self._accounts()
         tags = set(t.lower() for t in self.tags if t)
-        etags = self._extra_tags(accounts=accounts)
+        utags = self._ui_tags(accounts=accounts)
 
         keys, sopc = self.get_openpgp_settings()
         return {
@@ -455,17 +463,170 @@ class ContextConfig(ConfigSectionProxy):
                  (i, IdentityConfig(self.config, i).as_dict())
                  for i in self.identities if i),
             'tags': list(tags),
-            'extra_tags': list(etags),
+            'ui_tags': list(utags),
             'key': self.config_key}
 
+    def set_path(self, path,
+            label=None,
+            account=None,
+            tags=None,
+            watch_policy=None,
+            copy_policy=None,
+            updated=None,
+            _partial=False,
+            _remove=False):
+        if updated and not isinstance(updated, (bytes, str)):
+            updated = str(updated)
+        if isinstance(tags, list):
+            tags = ','.join(sorted(tags))
+        for arg in (label, account, tags, watch_policy, copy_policy, updated):
+            arg = bytes(arg, 'utf-8') if isinstance(arg, str) else arg
+            if arg and b':' in arg:
+                raise ValueError('Path policies must not contain `:`')
 
-class IdentityConfig(ConfigSectionProxy):
-    _KEYS = {
-        'name': str,
-        'address': str}
+        path = bytes(path, 'utf-8') if isinstance(path, str) else path
+        path = path.rstrip(b'/')
+        if not path:
+            path = b'/'
 
-    def as_address_info(self):
-        return AddressInfo(address=self.address, fn=self.name)
+        def _encode_attr(a):
+            return bytes(a, 'utf-8') if isinstance(a, str) else (a or b'')
+
+        def _encode_entry():
+            return b':'.join(_encode_attr(e) for e in [
+                path, label, account, tags,
+                watch_policy, copy_policy, updated])
+
+        def _null_entry(ee):
+            return ee.endswith(b'::::::')
+
+        with self.paths:
+            for idx, path_policy in enumerate(self.paths):
+                if isinstance(path_policy, str):
+                    path_policy = bytes(path_policy, 'utf-8')
+                try:
+                    p, l, a, t, wp, cp, u = path_policy.rsplit(b':', 6)
+                except ValueError:
+                    logging.error('Invalid path policy: %s' % path_policy)
+                    continue
+                if p == path:
+                    if _partial:
+                        label = label or l
+                        account = account or a
+                        tags = tags or t
+                        watch_policy = watch_policy or wp
+                        copy_policy = copy_policy or cp
+                    ee = _encode_entry()
+                    if _remove and _null_entry(ee):
+                        self.paths.pop(idx)
+                        return False
+                    else:
+                        self.paths[idx] = ee
+                        return True
+
+            def skey(path_policy):
+                if isinstance(path_policy, str):
+                    path_policy = bytes(path_policy, 'utf-8')
+                return path_policy.rsplit(b':', 6)
+
+            ee = _encode_entry()
+            if _remove and _null_entry(ee):
+                return False
+
+            logging.debug('New path(%s) policy entry: %s' % (path, ee))
+            self.paths.append(ee)
+            # Note: get_path_policies() inheritance depends on us being
+            #       sorted so parent directories come first.
+            self.paths.sort(key=skey)
+            return True
+
+    def set_path_updated(self, path, updated):
+        self.set_path(path, updated=updated, _partial=True)
+
+    def get_path_policies(self, *paths, inherit=True, slim=True):
+        """
+        Generate policies for one or more paths.
+
+        This will generate policies which are a combination of policies
+        inherited from parent directories, and anything explicitly
+        configured for each path itself.
+        """
+        if (len(paths) == 1) and isinstance(paths[0], list):
+            paths = paths[0]
+        paths = [
+            (bytes(path, 'utf-8') if isinstance(path, str) else path)
+            for path in paths]
+        if not paths:
+            paths = [False]
+
+        def _tags(itags, ftags):
+            tags = ftags.split(b',')
+            if not inherit:
+                return b','.join(sorted(tags))
+            elif b'-' in tags or not itags:
+                return b','.join(sorted([t for t in tags if t != b'-']))
+            else:
+                tags += itags.split(b',')
+                return b','.join(sorted([t for t in set(tags) if t != b'-']))
+
+        # Note: The number of elements and order must match what is used
+        #       in add_path() above, except attrs omits the path itself.
+        attrs = ['label', 'account', 'tags', 'watch_policy', 'copy_policy',
+                 'updated']
+        blank_policy = [None, None, None, None, None, None, None]
+        inherited = dict((path, copy.copy(blank_policy)) for path in paths)
+        found = {}
+        for path_policy in self.paths:
+            if isinstance(path_policy, str):
+                path_policy = bytes(path_policy, 'utf-8')
+            policy = path_policy.rsplit(b':', 6)
+            ppath = policy[0]
+            done = []
+            for path in paths:
+                if (ppath == path) or (path is False):
+                    found[ppath] = policy
+                    if ppath not in inherited:
+                        inherited[ppath] = copy.copy(blank_policy)
+                    if path:
+                        done.append(path)
+                elif inherit and path.startswith(policy[0] + b'/'):
+                    for i, p in enumerate(policy):
+                        if i < 2 or i > 5:  # Ignore path, label, updated
+                            pass
+                        elif p == b'-':
+                            inherited[path][i] = None
+                        elif p and (i == 3):
+                            inherited[path][i] = _tags(inherited[path][i], p)
+                        elif p:
+                            inherited[path][i] = p
+            for path in done:
+                paths.remove(path)
+            if not paths:
+                break
+
+        if False in inherited:
+            del inherited[False]
+        combined = copy.deepcopy(inherited)
+        for path, policy in found.items():
+            for i, p in enumerate(policy):
+                if inherit and (p == b'-'):
+                    combined[path][i] = None
+                elif p and (i == 3):
+                    combined[path][i] = _tags(combined[path][i], p)
+                elif p:
+                    combined[path][i] = p
+
+        if slim:
+            def _slim(pairs):
+                for k, v in pairs:
+                    if v is not None:
+                        yield (k, v)
+        else:
+            _slim = lambda pairs: pairs
+
+        return dict((p, dict(_slim(zip(attrs,
+                ((str(e, 'utf-8') if e else e) for e in combined[p][1:])))))
+            for p in combined)
 
 
 class AppConfig(ConfigParser):
@@ -515,7 +676,7 @@ class AppConfig(ConfigParser):
 #       Also note that if you do edit it by hand, comments will be lost and
 #       sections may get reordered when the app next saves its settings.
 #
-# To check whether the app is running: python3 -m moggie status
+# To check whether the app is running: python3 -m moggie status   # FIXME
 #
 #############################################################################
 
@@ -605,6 +766,13 @@ class AppConfig(ConfigParser):
             for p in self if p.startswith(self.CONTEXT_PREFIX)))
 
     passcrow = property(lambda self: PasscrowConfig(self, self.PASSCROW))
+
+    def get_ephemeral_snapshot(self):
+        with self.lock:
+            self.save()
+            tmp_cfg = EphemeralAppConfig(self.profile_dir)
+            tmp_cfg.aes_key = self.aes_key
+        return tmp_cfg
 
     def get_preferences(self, context=None, which=None):
         source = []
@@ -940,3 +1108,12 @@ class AppConfig(ConfigParser):
                 self.context_zero().accounts.append(local_acct_id)
         except:
             pass
+
+
+class EphemeralAppConfig(AppConfig):
+    def save(self):
+        if self.suppress_saves:
+            self.suppress_saves[-1] += 1
+
+    def rotate(self):
+        return
