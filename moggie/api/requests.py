@@ -74,14 +74,15 @@ class RequestTag(RequestBase):
 class RequestPathImport(RequestBase):
     def __init__(self,
             context='', paths=[],
-            only_inboxes=False, import_full=False,
+            only_inboxes=False, import_full=False, compact=False,
             req_id=None):
         self.update({
             'req_type': 'path_import',
             'context': context,
             'paths': paths,
             'only_inboxes': only_inboxes,
-            'import_full': import_full
+            'import_full': import_full,
+            'compact': compact
         }, req_id=req_id)
 
 
@@ -109,7 +110,7 @@ class RequestPathPolicies(RequestBase):
     def __init__(self,
             context='', policies=[],
             config_only=False, import_only=False, import_full=False,
-            only_inboxes=False,
+            only_inboxes=False, compact=False,
             req_id=None):
         self.update({
             'req_type': 'path_policies',
@@ -117,6 +118,7 @@ class RequestPathPolicies(RequestBase):
             'import_only': import_only,
             'import_full': import_full,
             'only_inboxes': only_inboxes,
+            'compact': compact,
             'context': context,
             'policies': policies
         }, req_id=req_id)

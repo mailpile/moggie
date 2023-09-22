@@ -351,7 +351,11 @@ class MetadataStore(RecordStore):
     def get(self, key, **kwargs):
         try:
             idx = self.key_to_index(key)
-            m = Metadata(*(super().get(idx, **kwargs)))
+            try:
+                m = Metadata(*(super().get(idx, **kwargs)))
+            except (UnicodeDecodeError, ValueError):
+                logging.exception('Corrupt data at idx=%s ?' % idx)
+                raise TypeError('Corrupt data?')
             if m is not None:
                 m[m.OFS_IDX] = idx
                 try:

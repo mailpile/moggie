@@ -69,7 +69,7 @@ class PostingListBucket:
     A PostingListBucket is an unsorted sequence of binary packed
     (keyword, comment, IntSet) tuples.
     """
-    DEFAULT_COMPRESS = 16*1024
+    DEFAULT_COMPRESS = None  #16*1024
 
     def __init__(self, blob, deleted=None, compress=None):
         self.blob = blob
@@ -209,7 +209,7 @@ class SearchEngine:
         self.records = RecordStore(os.path.join(workdir, name), name,
             salt=None, # FIXME: This must be set, OR ELSE
             aes_keys=encryption_keys or None,
-            compress=64*1024,
+            compress=256,
             sparse=True,
             est_rec_size=128,
             target_file_size=64*1024*1024)

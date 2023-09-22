@@ -788,6 +788,7 @@ class CommandImport(CLICommand):
         ('--batch',             [], 'Read import options and paths from stdin'),
         ('--input=',            [], 'Read import options and paths from file'),
         ('--stdin=',            [], ''),  # Internal: lots stdin hack
+        ('--compact',           [], 'Compact the search engine after importing'),
     ], [
         (None, None, 'import'),
         ('--username=',    [None], 'X=<U>, username required to access the mail (if any)'),
@@ -1029,6 +1030,7 @@ class CommandImport(CLICommand):
                 import_only=self.options['--import-only'][-1],
                 import_full=bool(self.options['--full-scan']),
                 only_inboxes=bool(self.options['--only-inboxes']),
+                compact=bool(self.options['--compact']),
                 policies=requests)))
 
     async def run_import_only(self):
@@ -1038,6 +1040,7 @@ class CommandImport(CLICommand):
                 context=ctx_id,
                 import_full=bool(self.options['--full-scan']),
                 only_inboxes=bool(self.options['--only-inboxes']),
+                compact=bool(self.options['--compact']),
                 paths=self.paths)))
 
     async def run(self):
@@ -1115,7 +1118,7 @@ class CommandNew(CommandImport):
         ('--context=', ['default'], 'X=<ctx>, import into a specific context'),
         ('--full-scan',        [], 'Ignore modification times, scan everything'),
         ('--only-inboxes',     [], 'Only check mailboxes tagged with inbox'),
-#       ('--compact',          [], 'Compact the search engine after importing'),
+        ('--compact',          [], 'Compact the search engine after importing'),
     ]]
 
     def configure(self, args):

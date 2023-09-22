@@ -833,6 +833,7 @@ main app worker. Hints:
         if not (self.metadata and self.search):
             return ResponsePleaseUnlock(api_request)
 
+        compact = api_request.get('compact')
         only_inboxes = api_request.get('only_inboxes')
         import_full = api_request.get('import_full')
         paths = paths or api_request.get('paths') or []
@@ -896,7 +897,7 @@ main app worker. Hints:
             except:
                 logging.exception('Failed to check path %s' % path)
 
-        def _import_path(context, req, path, policy):
+        def _import_path(context, req, path, policy, compact_now):
             policy_tags = (policy.get('tags') or '').split(',')
             return self.importer.with_caller(conn_id).import_search(
                 RequestMailbox(
@@ -906,13 +907,17 @@ main app worker. Hints:
                     username=req.get('username'),
                     password=req.get('password')),
                 policy_tags,
-                tag_namespace=context.tag_namespace)
+                tag_namespace=context.tag_namespace,
+                compact=compact_now,
+                full=True)
 
         results = []
-        for path, ppol in sorted(list(to_import.items())):
+        plan = sorted(list(to_import.items()))
+        for i, (path, ppol) in enumerate(plan):
             update_time = int(time.time())
             result[path] = await async_run_in_thread(
-                _import_path, context, api_request, path, ppol)
+                _import_path, context, api_request, path, ppol,
+                compact and (i+1 == len(plan)))
             context.set_path_updated(path, '%x' % update_time)
 
         return ResponsePing(api_request)  # FIXME

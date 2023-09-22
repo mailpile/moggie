@@ -113,18 +113,20 @@ class ImportWorker(BaseWorker):
 
     def import_search(self,
             request_obj, initial_tags,
-            tag_namespace=None, force=False, full=False):
+            tag_namespace=None, force=False, full=False, compact=False):
         return self.call('import_search',
-            request_obj, initial_tags, tag_namespace, bool(force), full)
+            request_obj, initial_tags, tag_namespace,
+            bool(force), full, compact)
 
     def api_import_search(self,
-            request, initial_tags, tag_namespace, force, full, **kwargs):
+            request, initial_tags, tag_namespace, force, full, compact,
+            **kwargs):
         request_obj = to_api_request(request)
         caller = self._caller
         def background_import_search():
             rv = self._import_search(
                 request_obj, initial_tags, tag_namespace, force, full,
-                caller=caller)
+                compact, caller=caller)
         self.add_background_job(background_import_search)
         self.reply_json({'running': True})
 
@@ -261,7 +263,7 @@ class ImportWorker(BaseWorker):
             'pending': 0}
 
     def _import_search(self,
-            request_obj, initial_tags, tag_namespace, force, full,
+            request_obj, initial_tags, tag_namespace, force, full, compact,
             caller=None):
 
         if self.progress:
@@ -273,13 +275,18 @@ class ImportWorker(BaseWorker):
         def _full_indexer(email_idxs):
             def _full_index():
                 self._index_full_messages(email_idxs, tag_namespace, progress)
+                if compact:
+                    logging.info('Compacting metadata')
+                    self.metadata.compact(full=True)
+                    logging.info('Compacting search index')
+                    self.search.compact(full=True)
             return _full_index
 
         work_queue = 'in:incoming-old'
         for magic in ('incoming', 'in:incoming', 'inbox', 'in:inbox'):
             if magic in initial_tags:
                 work_queue = 'in:incoming'
-                break
+                initial_tags.remove(magic)
 
         tags = self._fix_tags_and_scope(tag_namespace, [work_queue] + initial_tags)
         done = False
@@ -309,9 +316,9 @@ class ImportWorker(BaseWorker):
             if new_msgs:
                 added = self.search.add_results([[new_msgs, tags]])
 
-                # 3. When search engine reports success, schedule full indexing
-                #    and filtering of that batch of messages. We could do all
-                #    at once, but this way we can report progress.
+                # 3. When search engine reports success, schedule full
+                #    indexing and filtering of that batch of messages. We
+                # could do all at once, but this way we can report progress.
                 if full:
                     progress['pending'] += 1
                     self.add_background_job(
