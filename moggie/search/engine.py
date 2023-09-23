@@ -1,3 +1,9 @@
+# I need to define the tag "vocabulary" more rigorously:
+#   - Basic format: in:something@namespace
+#   - Are tags always lowercase? Why? Why not?
+#   - What characters are allowed in tags? Which are special?
+#   - How should differentiate between system tags and user tags?
+#
 # Other thoughts:
 #   - what do we need to start providing search suggestions?
 #   - what do we need to start providing autosuggested canned replies??
@@ -13,16 +19,6 @@
 #       - How quickly can we scan all the mutation keywords?
 #           ... we could perform cleanups, merge tagged:2022-08-01-* into
 #           ... lets us implement changed:* magic
-#
-# I don't think we need search history, since entire result sets are compact
-# enough for us to pass them around when needed.
-#
-# However, we do want tag-op history, since those are pretty complex. A tagging
-# operation will be an ordered set of mutations; to undo the mutations need to
-# be reversed in reverse order. A tagging operation should also be annotated
-# with a human-readable description of what was done, and that should be
-# provided by the user-interface, since the engine cannot really know what UX
-# action the tagging operation represents.
 #
 # Another concern:
 #   - Tagging a message into a tag_namespace should also add the tag to the
@@ -157,11 +153,12 @@ class PostingListBucket:
             bcomment = bytes(bcomment, 'utf-8')
 
         iset_blob = dumb_encode_bin(iset, compress=self.compress)
-        chunks.append(
-            struct.pack('<HHI', len(bkeyword), len(bcomment), len(iset_blob)))
-        chunks.append(bkeyword)
-        chunks.append(bcomment)
-        chunks.append(iset_blob)
+        if bcomment or iset:
+            chunks.append(struct.pack(
+                '<HHI', len(bkeyword), len(bcomment), len(iset_blob)))
+            chunks.append(bkeyword)
+            chunks.append(bcomment)
+            chunks.append(iset_blob)
         self.blob = b''.join(chunks)
 
     def get(self, keyword, with_comment=False):
@@ -476,7 +473,7 @@ class SearchEngine:
             kw_hash_int %= self.config['l2_buckets']
             return kw_hash_int + self.l2_begin
 
-    def _prep_results(self, results, prefer_l1, tag_ns):
+    def _prep_results(self, results, prefer_l1, tag_ns, create):
         keywords = {}
         hits = []
         extra_kws = ['in:'] if tag_ns else []
@@ -509,7 +506,7 @@ class SearchEngine:
                     hits.append(r_id)
 
         kw_idx_list = [
-            (self.keyword_index(kw, prefer_l1=prefer_l1, create=True), kw)
+            (self.keyword_index(kw, prefer_l1=prefer_l1, create=create), kw)
             for kw in keywords]
 
         return kw_idx_list, keywords, hits
@@ -706,7 +703,7 @@ class SearchEngine:
     def del_results(self, results, tag_namespace=''):
         t0 = time.time()
         (kw_idx_list, keywords, hits
-            ) = self._prep_results(results, False, tag_namespace)
+            ) = self._prep_results(results, False, tag_namespace, False)
         t1 = time.time()
         bc = 0
         for idx, kw in sorted(kw_idx_list):
@@ -717,6 +714,9 @@ class SearchEngine:
                 plb.add(kw, [])
                 self.records[idx] = plb.blob
                 bc += len(plb.blob)
+                if (not plb.blob) and (idx < self.l2_begin):
+                    self.records.cache = {}
+                    self.records.del_key(kw)
         t2 = time.time()
         self.update_terms(keywords)
         self.profile_updates('-%d' % len(kw_idx_list), bc, t0, t1, t2, time.time())
@@ -725,7 +725,7 @@ class SearchEngine:
     def add_results(self, results, prefer_l1=None, tag_namespace=''):
         t0 = time.time()
         (kw_idx_list, keywords, hits
-            ) = self._prep_results(results, prefer_l1, tag_namespace)
+            ) = self._prep_results(results, prefer_l1, tag_namespace, True)
         t1 = time.time()
         bc = 0
         for idx, kw in sorted(kw_idx_list):
@@ -1011,6 +1011,7 @@ if __name__ == '__main__':
     # Test reducing a set to empty and then adding back to it
     se.del_results([(4, ['in:testempty'])])
     _assert(4 not in se.search('in:testempty'))
+    _assert('in:testempty' not in dict(se.iter_tags()))
     se.add_results([(4, ['in:testempty'])])
     _assert(4 in se.search('in:testempty'))
 
