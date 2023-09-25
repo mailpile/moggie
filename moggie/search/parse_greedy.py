@@ -46,7 +46,9 @@ def greedy_parse_terms(terms, magic_map={}):
     #        quotes would be quite grown-up of us.
 
     def _flat(search):
-        if len(search) == 2:
+        if search == IntSet.All:
+            return search
+        elif len(search) == 2:
             return search[1]
         else:
             return tuple(search)

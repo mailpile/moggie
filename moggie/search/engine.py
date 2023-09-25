@@ -4,6 +4,14 @@
 #   - What characters are allowed in tags? Which are special?
 #   - How should differentiate between system tags and user tags?
 #
+# Versioning!
+#   - Versioning keywords (v:X and vdate:...) are added every affected
+#     message, on every engine mutation.
+#   - TODO: Tune how many versions we keep around - delete old versions?
+#   - Use: efficiently track when a message was modified/tagged/read/etc.
+#   - Use: replication
+#   - Use: "if unchanged" for scheduling future ops?
+#
 # Other thoughts:
 #   - what do we need to start providing search suggestions?
 #   - what do we need to start providing autosuggested canned replies??
@@ -36,6 +44,8 @@ import re
 import threading
 import time
 
+from .dates import ts_to_keywords
+from .versions import version_to_keywords
 from ..util.dumbcode import *
 from ..util.intset import IntSet
 from ..util.mailpile import msg_id_hash, tag_quote, tag_unquote
@@ -235,7 +245,7 @@ class SearchEngine:
             self.email_spaces = [
                 bytes(), set(), ('to', bytes()), ('from', bytes())]
 
-        self.history = self.records.get(self.IDX_HISTORY_STATUS) or {}
+        self.history = self.records.get(self.IDX_HISTORY_STATUS) or {'ver': 1}
         self.l1_begin = self.IDX_MAX_RESERVED + 1
         self.l2_begin = self.l1_begin + self.config['l1_keywords']
         self.maxint = maxint
@@ -255,13 +265,18 @@ class SearchEngine:
             ('*', self.magic_candidates)]
 
         from .dates import date_term_magic
+        from .versions import version_term_magic
+        vmagic = lambda t: version_term_magic(t, self.history.get('ver', 0))
         self.magic_term_map = {
             'message-id': self.msgid_hash_magic,
             'msgid': self.msgid_hash_magic,
             'in': self.tag_quote_magic,
             'tag': self.tag_quote_magic,
             'date': date_term_magic,
-            'dates': date_term_magic}
+            'dates': date_term_magic,
+            'version': vmagic,
+            'vdate': lambda t: date_term_magic(t, kw_date='vdate'),
+            'vdates': lambda t: date_term_magic(t, kw_date='vdate')}
 
         self.magic_term_remap = {
             'is:recent': 'date:recent',
@@ -269,12 +284,14 @@ class SearchEngine:
             'is:read':   'in:read'}
 
     def _allocate_history_slot(self):
-        pos = self.history.get('pos', self.IDX_HISTORY_END) + 1
-        if pos > self.IDX_HISTORY_END:
-            pos = self.IDX_HISTORY_START
-        self.history['pos'] = pos
-        self.records[self.IDX_HISTORY_STATUS] = self.history
-        return pos
+        with self.lock:
+            pos = self.history.get('pos', self.IDX_HISTORY_END) + 1
+            if pos > self.IDX_HISTORY_END:
+                pos = self.IDX_HISTORY_START
+            self.history['pos'] = pos
+            self.history['ver'] = self.history.get('ver', 0) + 1
+            self.records[self.IDX_HISTORY_STATUS] = self.history
+            return pos, self.history['ver']
 
     def delete_everything(self, *args):
         with self.lock:
@@ -473,17 +490,17 @@ class SearchEngine:
             kw_hash_int %= self.config['l2_buckets']
             return kw_hash_int + self.l2_begin
 
-    def _prep_results(self, results, prefer_l1, tag_ns, create):
+    def _prep_results(self, results, prefer_l1, tag_ns, touch, create):
         keywords = {}
         hits = []
         extra_kws = ['in:'] if tag_ns else []
+        if touch:
+            extra_kws.extend(self.touch())
         for (r_ids, kw_list) in results:
             if isinstance(r_ids, int):
                 r_ids = [r_ids]
             if isinstance(kw_list, str):
                 kw_list = [kw_list]
-            if not isinstance(r_ids, list):
-                raise ValueError('Results must be (lists of) integers')
             for r_id in r_ids:
                 if not isinstance(r_id, int):
                     raise ValueError('Results must be integers')
@@ -597,6 +614,26 @@ class SearchEngine:
 
         return mutations
 
+    def touch(self, ids=None, version=None, ts=None):
+        """
+        Increment the global "version number" for the search index and
+        return a set of keywords representing this change.
+
+        If an iterable of IDs is provided, record in the index that these
+        messages were modified at this time.
+        """
+        if version is None:
+            with self.lock:
+                version = self.history['ver'] = self.history.get('ver', 0) + 1
+                self.records[self.IDX_HISTORY_STATUS] = self.history
+        kws = []
+        kws.extend(version_to_keywords(version))
+        kws.extend(ts_to_keywords((ts or time.time()), kw_date='vdate'))
+        logging.debug('Version is now %s at %s' % (version, kws[-1]))
+        if ids is not None:
+            self.add_results([(ids, kws)], touch=False)
+        return kws
+
     def mutate(self, mlist, record_history=None, tag_namespace=''):
         def _op(o):
             o = {'+': IntSet.Or,
@@ -619,7 +656,7 @@ class SearchEngine:
                 kw = self._ns(kw, tag_namespace)
                 yield (op, kw, self.keyword_index(kw, create=(op==IntSet.Or)))
 
-        slot = None
+        slot = version = None
         cset_all = IntSet()
         changes = []
         mutations = 0
@@ -672,15 +709,20 @@ class SearchEngine:
 
             if record_history:
                 # Allocate slot while still locked, then release.
-                slot = self._allocate_history_slot()
+                slot, version = self._allocate_history_slot()
 
         if record_history:
             changes = {
                 'id': '%.3x-%x' % (slot, random.randint(0, 0xffffffffff)),
+                'ts': int(time.time()),
                 'comment': record_history,
+                'version': version,
                 'changes': changes}
             self.records[slot] = changes
             logging.debug('recording(%d): %s' % (slot, changes))
+            self.touch(cset_all, version=version)
+        else:
+            self.touch(cset_all)
 
         return {
             'mutations': mutations,
@@ -700,12 +742,16 @@ class SearchEngine:
             % (which, bc, p1, p2, p3,
                self.profileB, self.profile1, self.profile2, self.profile3))
 
-    def del_results(self, results, tag_namespace=''):
+    def del_results(self, results, tag_namespace='', touch=True):
+        """
+        Remove a list (or iterable) of results (ids, keywords) from the index.
+        """
         t0 = time.time()
-        (kw_idx_list, keywords, hits
-            ) = self._prep_results(results, False, tag_namespace, False)
+        (kw_idx_list, keywords, hits) = self._prep_results(
+            results, False, tag_namespace, False, False)
         t1 = time.time()
         bc = 0
+        modified = IntSet()
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
                 plb = PostingListBucket(self.records.get(idx) or b'')
@@ -717,15 +763,21 @@ class SearchEngine:
                 if (not plb.blob) and (idx < self.l2_begin):
                     self.records.cache = {}
                     self.records.del_key(kw)
+            modified |= keywords[kw]
+        self.touch(modified)
         t2 = time.time()
         self.update_terms(keywords)
         self.profile_updates('-%d' % len(kw_idx_list), bc, t0, t1, t2, time.time())
         return {'keywords': len(keywords), 'hits': hits}
 
-    def add_results(self, results, prefer_l1=None, tag_namespace=''):
+    def add_results(self, results,
+            prefer_l1=None, tag_namespace='', touch=True):
+        """
+        Add a list (or iterable) of results (ids, keywords) to the index.
+        """
         t0 = time.time()
-        (kw_idx_list, keywords, hits
-            ) = self._prep_results(results, prefer_l1, tag_namespace, True)
+        (kw_idx_list, keywords, hits) = self._prep_results(
+            results, prefer_l1, tag_namespace, touch, True)
         t1 = time.time()
         bc = 0
         for idx, kw in sorted(kw_idx_list):
