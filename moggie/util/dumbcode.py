@@ -37,8 +37,12 @@ from ..crypto.aes_utils import aes_ctr_encrypt, aes_ctr_decrypt, make_aes_key
 DUMB_DECODERS = {}
 
 
+def zlib_compress(data):
+    return zlib.compress(data, level=1)
+
+
 def dumb_encode_bin(v,
-        compress=False, comp_bin=(b'z', zlib.compress), comp_asc=None,
+        compress=False, comp_bin=(b'z', zlib_compress), comp_asc=None,
         aes_key_iv=None):
 
     if aes_key_iv:

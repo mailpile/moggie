@@ -898,17 +898,24 @@ class WorkerPool:
                         pass
                     w_tuple[2] = None
 
+    def forked(self):
+        with self.lock:
+            for i, (name, cap, worker, cak, ts) in enumerate(self.workers):
+                if worker:
+                    self.workers[i][2] = None
+
     def add_worker(self, caps, cls, args, kwargs):
         with self.lock:
             kwargs = copy.copy(kwargs)
             if 'name' in kwargs:
-                name = kwargs['name'] = '%s_%d' % (kwargs['name'], self.count)
+                name = '%s_%d_%d' % (kwargs['name'], os.getpid(), self.count)
+                kwargs['name'] = name
             else:
                 name = None
 
             worker = cls(*args, **kwargs)
             if name is None:
-                name = '%s_%d' % (worker.name, self.count)
+                name = '%s_%d_%d' % (worker.name, os.getpid(), self.count)
 
             self.workers.append([name, caps, worker, (cls, args, kwargs), 0])
             self.count += 1

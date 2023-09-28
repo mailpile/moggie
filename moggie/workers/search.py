@@ -105,8 +105,8 @@ class SearchWorker(BaseWorker):
             logging.warning('Failed to load thread message IDs for %s' % thread_id)
         return thread_id if tid is None else 'id:%s' % (tid)
 
-    def add_results(self, results, callback_chain=None, wait=True):
-        return self.call('add_results', results, callback_chain, wait)
+    def add_results(self, results, callback_chain=None, touch=True, wait=True):
+        return self.call('add_results', results, touch, callback_chain, wait)
 
     def del_results(self, results, callback_chain=None, wait=True):
         return self.call('del_results', results, callback_chain, wait)
@@ -258,15 +258,15 @@ class SearchWorker(BaseWorker):
         self.add_background_job(background_compact)
         self.reply_json({'running': True})
 
-    def api_add_results(self, results, callback_chain, wait, **kwargs):
+    def api_add_results(self, results, touch, callback_chain, wait, **kwargs):
         if wait and not callback_chain:
             with self.change_lock:
-                self.reply_json(self._engine.add_results(results))
+                self.reply_json(self._engine.add_results(results, touch=touch))
         else:
             self.reply_json({'running': True})
             def background_add_results():
                 with self.change_lock:
-                    rv = self._engine.add_results(results)
+                    rv = self._engine.add_results(results, touch=touch)
                 self.results_to_callback_chain(callback_chain, rv)
             self.add_background_job(background_add_results)
 

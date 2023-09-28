@@ -188,13 +188,13 @@ class SearchEngine:
     cross that bridge when we come to it.
     """
     DEFAULTS = {
-        'partial_list_len': 500000,  # Will expand to up ~5MB of storage
+        'partial_list_len': 1000000,
         'partial_min_hits': 3,
         'partial_shortest': 6,
         'partial_longest': 32,
-        'partial_matches': 15,
+        'partial_matches': 25,
         'l1_keywords': 512000,
-        'l2_buckets': 4 * 1024 * 1024}
+        'l2_buckets': 40 * 1024 * 1024}
 
     IDX_CONFIG = 0
     IDX_PART_SPACE = 1
@@ -216,10 +216,10 @@ class SearchEngine:
         self.records = RecordStore(os.path.join(workdir, name), name,
             salt=None, # FIXME: This must be set, OR ELSE
             aes_keys=encryption_keys or None,
-            compress=256,
+            compress=128,
             sparse=True,
             est_rec_size=128,
-            target_file_size=64*1024*1024)
+            target_file_size=128*1024*1024)
 
         self.config = copy.copy(self.DEFAULTS)
         if defaults:
@@ -523,8 +523,10 @@ class SearchEngine:
                     hits.append(r_id)
 
         kw_idx_list = [
-            (self.keyword_index(kw, prefer_l1=prefer_l1, create=create), kw)
-            for kw in keywords]
+            (self.keyword_index(k, prefer_l1=prefer_l1, create=create), k)
+            for k in keywords]
+        for k in keywords:
+            keywords[k] = IntSet(keywords[k])
 
         return kw_idx_list, keywords, hits
 
@@ -729,7 +731,7 @@ class SearchEngine:
             'changed': cset_all,
             ('history' if record_history else 'changes'): changes}
 
-    def profile_updates(self, which, bc, t0, t1, t2, t3):
+    def profile_updates(self, which, oc, bc, t0, t1, t2, t3):
         p1 = int((t1 - t0) * 1000)
         p2 = int((t2 - t1) * 1000)
         p3 = int((t3 - t2) * 1000)
@@ -738,8 +740,8 @@ class SearchEngine:
         self.profile2 += p2
         self.profile3 += p3
         logging.debug(
-            'Profiling(%s): prep/write/update .. now(%d=%d/%d/%d) total(%d=%d/%d/%d)'
-            % (which, bc, p1, p2, p3,
+            'Profiling(%s): prep/write/update .. now(%d/%d=%d/%d/%d) total(%d=%d/%d/%d)'
+            % (which, (bc-oc), bc, p1, p2, p3,
                self.profileB, self.profile1, self.profile2, self.profile3))
 
     def del_results(self, results, tag_namespace='', touch=True):
@@ -759,15 +761,17 @@ class SearchEngine:
                 plb.deleted |= keywords[kw]
                 plb.add(kw, [])
                 self.records[idx] = plb.blob
-                bc += len(plb.blob)
                 if (not plb.blob) and (idx < self.l2_begin):
                     self.records.cache = {}
                     self.records.del_key(kw)
+                else:
+                    bc += len(plb.blob)
             modified |= keywords[kw]
         self.touch(modified)
         t2 = time.time()
         self.update_terms(keywords)
-        self.profile_updates('-%d' % len(kw_idx_list), bc, t0, t1, t2, time.time())
+        self.profile_updates(
+            '-%d' % len(kw_idx_list), 0, bc, t0, t1, t2, time.time())
         return {'keywords': len(keywords), 'hits': hits}
 
     def add_results(self, results,
@@ -779,18 +783,22 @@ class SearchEngine:
         (kw_idx_list, keywords, hits) = self._prep_results(
             results, prefer_l1, tag_namespace, touch, True)
         t1 = time.time()
+        oc = 0
         bc = 0
         for idx, kw in sorted(kw_idx_list):
             with self.lock:
-                # These are instances of PostingList
                 plb = PostingListBucket(self.records.get(idx) or b'')
+                oc += len(plb.blob)
+
                 plb.deleted = self.deleted
                 plb.add(kw, keywords[kw])
                 self.records[idx] = plb.blob
-                bc += len(plb.blob)
+            bc += len(plb.blob)
+
         t2 = time.time()
         self.part_spaces[1] |= set(keywords.keys())
-        self.profile_updates('+%d' % len(kw_idx_list), bc, t0, t1, t2, time.time())
+        self.profile_updates(
+            '+%d' % len(kw_idx_list), oc, bc, t0, t1, t2, time.time())
         return {'keywords': len(keywords), 'hits': hits}
 
     def __getitem__(self, keyword):

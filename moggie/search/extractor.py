@@ -99,11 +99,13 @@ class KeywordExtractor:
         wordlist = [w for w in WORD_REGEXP.findall(ltxt) if _keep(w)]
         words = set(w for w in wordlist if self.min_word_length <= len(w))
 
-        for i in range(0, len(wordlist) - 1):
-            if (len(wordlist[i]) <= 3) or (len(wordlist[i+1]) <= 3):
-                combined = '%s %s' % (wordlist[i], wordlist[i+1])
-                if len(combined) <= self.max_word_length:
-                    words.add(combined)
+# FIXME: Disable combinations for now
+#
+#       for i in range(0, len(wordlist) - 1):
+#           if (len(wordlist[i]) <= 3) or (len(wordlist[i+1]) <= 3):
+#               combined = '%s %s' % (wordlist[i], wordlist[i+1])
+#               if len(combined) <= self.max_word_length:
+#                   words.add(combined)
 
         return (url_domains | words) - self.stoplist
 

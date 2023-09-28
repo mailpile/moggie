@@ -144,7 +144,10 @@ class MetadataWorker(BaseWorker):
                     if _wanted(md):
                         thread['hits'].append(md.idx)
                     thread['messages'].append(md)
-                    thread['messages'][0].more['thread'].append(md.idx)
+                    try:
+                        thread['messages'][0].more['thread'].append(md.idx)
+                    except KeyError:
+                        thread['messages'][0].more['thread'] = [md.idx]
                     pmd = mds_by_msgid[parid]
                     md.parent_id = pmd.idx
                     md.thread_id = pmd.thread_id
