@@ -1,4 +1,5 @@
 import numpy
+import struct
 
 from base64 import urlsafe_b64encode as us_b64encode
 from base64 import urlsafe_b64decode as us_b64decode
@@ -9,6 +10,8 @@ from .dumbcode import register_dumb_decoder
 class IntSet:
     ENC_BIN = b'i'
     ENC_ASC = 'I'
+
+    BIN_VERSION = b'\x01'
 
     # We could change these to match the CPU we are running on, but
     # doing so would make our data files non-portable. File portability
@@ -147,11 +150,23 @@ class IntSet:
         return self.ENC_ASC + str(us_b64encode(self.tobytes()), 'latin-1')
 
     def frombytes(self, binary):
+        stripped = struct.unpack('<I', binary[1:5])[0]
+        binary = (b'\x00' * stripped) + binary[5:]
+        if len(binary) % 64:
+            binary += b'\x00' * (64 - (len(binary) % 64))
         self.npa = numpy.copy(numpy.frombuffer(binary, dtype=self.dtype))
         return self
 
-    def tobytes(self):
-        return self.npa.tobytes()
+    def tobytes(self, strip=True):
+        binary = self.npa.tobytes()
+        if strip:
+            binary = binary.rstrip(b'\x00')
+            full_size = len(binary)
+            binary = binary.lstrip(b'\x00')
+            stripped = full_size - len(binary)
+        else:
+            stripped = 0
+        return self.BIN_VERSION + struct.pack('<I', stripped) + binary
 
     def __len__(self):
         # Estimate how large a naive binary encoding will be:
@@ -328,7 +343,7 @@ if __name__ == "__main__":
     is1 -= [9]
     assert(9 not in is1)
     assert(11 not in list(is1))
-    assert(len(is1.tobytes()) == (is1.DEF_INIT * is1.bits // 8))
+    assert(len(is1.tobytes(strip=False)) == (5 + is1.DEF_INIT * is1.bits // 8))
     is1 ^= [9, 44, 45, 46]
     assert(9 in is1)
     assert(46 in is1)
@@ -394,7 +409,7 @@ if __name__ == "__main__":
         b3 = IntSet(few)
     t1 = time.time()
     assert(len(b1.npa) == b1.DEF_GROW + 10 * len(many) // b1.bits)
-    assert(len(b1.tobytes()) == b1.bits * (b1.DEF_GROW + 10*len(many) // b1.bits) // 8)
+    assert(len(b1.tobytes(strip=False)) == 5 + b1.bits * (b1.DEF_GROW + 10*len(many) // b1.bits) // 8)
     print(' * ints_to_bitmask x %d = %.2fs' % (3 * count, t1-t0))
     t1 = time.time()
 
