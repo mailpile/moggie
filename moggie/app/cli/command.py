@@ -10,11 +10,11 @@ from ...config import AccessConfig
 from ...util.dumbcode import to_json, from_json
 
 
-class NotRunning(Exception):
+class NotRunning(RuntimeError):
     pass
 
 
-class Nonsense(Exception):
+class Nonsense(RuntimeError):
     pass
 
 
@@ -147,10 +147,16 @@ class CLICommand:
             self.configure(args)
             self.worker = appworker
 
+        self.app = None
         self.ev_loop = asyncio.get_event_loop()
         if connect and self.WEBSOCKET:
             self.app = AsyncRPCBridge(self.ev_loop, 'cli', self.worker, self)
-            self.ev_loop.run_until_complete(self._await_connection())
+            if not self.ev_loop.is_running():
+                self.ev_loop.run_until_complete(self._await_connection())
+
+    async def async_ready(self):
+        if self.WEBSOCKET and self.app is not None:
+            await self._await_connection()
 
     def remove_mailbox_terms(self, terms):
         return (

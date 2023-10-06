@@ -5,62 +5,60 @@ import time
 
 
 COMMANDS = {}
-DEFAULT_LOG_LEVEL = 2
 
 
 class Nonsense(Exception):
     pass
 
 
-def CommandStart(wd, args):
+def CommandStart(moggie, args):
     wait = '--wait' in args
     if wait:
         args.remove('--wait')
 
+    # FIXME: Get from the moggie object
     from ..workers.app import AppWorker
-    worker = AppWorker.FromArgs(wd, args)
+    worker = AppWorker.FromArgs(moggie.work_dir, args)
 
     if worker.connect():
         if wait or ('--wait' in args):
             worker.join()
         else:
             sys.stderr.write('Running %s in the background.\n' % worker.KIND)
-        os._exit(0)
+        return worker
     else:
-        sys.exit(1)
+        return False
 
 
-def CommandStop(wd, args, exit=True):
+def CommandStop(moggie, args, exit=True):
     from ..workers.app import AppWorker
-    worker = AppWorker.FromArgs(wd, args[0:])
+    worker = AppWorker.FromArgs(moggie.work_dir, args[0:])
 
     if worker.connect(autostart=False):
         result = worker.quit()
         if result and result.get('quitting'):
             sys.stderr.write('Shutting down %s.\n' % worker.KIND)
-            if exit:
-                sys.exit(0)
-            else:
-                return
+            return True
     sys.stderr.write('Not running? (%s)\n' % worker.KIND)
-    sys.exit(1)
+    return False
 
 
-def CommandRestart(wd, args):
+def CommandRestart(moggie, args):
     try:
-        CommandStop(wd, args, exit=False)
+        if not CommandStop(moggie, args, exit=False):
+            return False
         time.sleep(1)
     except:
         pass
-    CommandStart(wd, args)
+    return CommandStart(moggie, args)
 
 
-def CommandTUI(wd, tui_args, draft=[]):
+def CommandTUI(moggie, tui_args, draft=[]):
     from . import tui
-    return tui.Main(wd, tui_args, draft)
+    return tui.Main(moggie, tui_args, draft)
 
 
-def CommandMuttalike(wd, args):
+def CommandMuttalike(moggie, args):
     """
     This command will be a shim which implements many of the same
     command line options as mutt, in a moggie way.
@@ -85,7 +83,7 @@ def CommandMuttalike(wd, args):
 
     def _process(arg, args):
         if arg == '-h':
-            return COMMANDS.get('help').Command(wd, args)
+            return COMMANDS.get('help').Command(moggie.work_dir, args)
         elif arg in ('-E', '-f', '-p', '-R', '-y', '-Z'):
             _eat(tui_args, arg, args)
         elif arg in ('-d', '-D', '-F', '-m', '-n'):
@@ -127,66 +125,39 @@ def CommandMuttalike(wd, args):
             ][loglevel]
         logfile = configure_logging(
             stdout=False,
-            profile_dir=wd,
+            profile_dir=moggie.work_dir,
             level=loglevel)
         if loglevel <= logging.INFO:
             sys.stderr.write('Logging to %s (startup in 2s)\n' % (logfile,))
             time.sleep(2)
 
     if sys.stdin.isatty() and sys.stdout.isatty():
-        return CommandTUI(wd, tui_args, draft)
+        return CommandTUI(moggie, tui_args, draft)
 
     elif draft:
         draft.more['message'] = [sys.stdin.read()]
         draft_as_args = draft.email_args()
         # FIXME: mutt will send the message automatically!
         #        To be compatible, we should add --send-at=NOW
-        return COMMANDS.get('email').Command(wd, draft_as_args)
+        return COMMANDS.get('email').Command(moggie.work_dir, draft_as_args)
 
-    return COMMANDS.get('help').Command(wd, [])
+    return COMMANDS.get('help').Command(moggie.work_dir, [])
 
 
 def Main(args):
-    from ..config.paths import DEFAULT_WORKDIR
-    from ..config import configure_logging, AppConfig
-    wd = DEFAULT_WORKDIR()
+    from moggie import MoggieCLI
+    moggie = MoggieCLI()
+    moggie.enable_default_logging()
 
-    command = 'default'
-    if len(args) > 0 and args[0][:1] != '-' and '@' not in args[0]:
-        command = args.pop(0)
+    try:
+        command = 'default'
+        if len(args) > 0 and args[0][:1] != '-' and '@' not in args[0]:
+            command = args.pop(0)
 
-    # Merge our local commands with the CLI_COMMANDS registry.
-    # Trust me, I know what I'm doing!
-    global COMMANDS
-    from .cli import CLI_COMMANDS
-    CLI_COMMANDS.update({
-        'default': CommandMuttalike,
-        'restart': CommandRestart,
-        'start': CommandStart,
-        'stop': CommandStop,
-        'tui': CommandTUI})
-    COMMANDS = CLI_COMMANDS
+        if moggie.run(command, *args) != [False]:
+            os._exit(0)
 
-    global DEFAULT_LOG_LEVEL
-    DEFAULT_LOG_LEVEL = int(AppConfig(wd).get(
-        AppConfig.GENERAL, 'log_level', fallback=logging.DEBUG))
-    configure_logging(profile_dir=wd, level=DEFAULT_LOG_LEVEL)
+    except Nonsense as e:
+        sys.stderr.write('Error: %s\n' % e)
 
-    def _run(command):
-        if hasattr(command, 'Command'):
-            result = command.Command(wd, args)
-        else:
-            result = command(wd, args)
-        if result is False:
-            sys.exit(1)
-
-    command = COMMANDS.get(command)
-    if command is not None:
-        try:
-            _run(command)
-            sys.exit(0)
-        except Nonsense as e:
-            sys.stderr.write('Error: %s\n' % e)
-        sys.exit(1)
-    else:
-        _run(COMMANDS.get('help'))
+    sys.exit(1)

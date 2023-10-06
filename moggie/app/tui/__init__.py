@@ -125,7 +125,7 @@ class TuiConnManager:
         logging.debug('FIXME: Tear down the connection and make a new one?')
 
 
-def Main(workdir, tui_args, send_draft):
+def Main(moggie, tui_args, send_draft):
     for arg in ('-E', '-p', '-R', '-Z'):
         if arg in tui_args:
             raise Nonsense('FIXME: Unimplemented: moggie %s' % (arg,))
@@ -139,7 +139,7 @@ def Main(workdir, tui_args, send_draft):
     app_worker = conn_manager = None
     try:
         for tries in range(0, 5):
-            app_worker = AppWorker(workdir).connect()
+            app_worker = AppWorker(moggie.work_dir).connect()
             if app_worker:
                 break
             logging.error('Launch/connect failed, this should not happen')
@@ -155,7 +155,7 @@ def Main(workdir, tui_args, send_draft):
         screen = urwid.raw_display.Screen()
         aev_loop = asyncio.get_event_loop()
         conn_manager = TuiConnManager(aev_loop, app_worker)
-        tui_frame = TuiFrame(screen, conn_manager)
+        tui = TuiFrame(screen, conn_manager)
 
         initial_state = {'app_is_locked': app_is_locked}
 
@@ -184,14 +184,14 @@ def Main(workdir, tui_args, send_draft):
         elif '-y' in tui_args:
             initial_state['show_browser'] = True
 
-        tui_frame.set_initial_state(initial_state)
-        urwid.MainLoop(urwid.AttrMap(tui_frame, 'body'),
+        tui.set_initial_state(initial_state)
+        urwid.MainLoop(urwid.AttrMap(tui, 'body'),
             palette(app_worker.app.config),
             pop_ups=True,
             screen=screen,
             handle_mouse=False,
             event_loop=urwid.AsyncioEventLoop(loop=aev_loop),
-            unhandled_input=tui_frame.unhandled_input
+            unhandled_input=tui.unhandled_input
             ).run()
 
     except KeyboardInterrupt:
