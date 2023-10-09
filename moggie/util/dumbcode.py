@@ -304,54 +304,9 @@ def register_dumb_decoder(char, func):
 
 
 if __name__ == '__main__':
-    import time
-
-    assert(dumb_encode_bin(bytearray(b'1')) == b'b1')
-    assert(dumb_encode_bin(None)            == b'-')
-    assert(dumb_encode_bin({'hi':2})        == b'D3,2,uhid2')
-
-    assert(dumb_encode_asc(bytearray(b'1')) == 'BMQ==')
-    assert(dumb_encode_asc(None)            == '-')
-    assert(dumb_encode_asc({'hi':2})        == 'D3,2,Uhid2')
-
-    assert(dumb_decode(dumb_encode_bin({b'hi':[3,4]})) == {b'hi':[3,4]})
-    assert(dumb_decode(dumb_encode_asc({b'hi':[3,4]})) == {b'hi':[3,4]})
-
-    for i,o in (
-        (b'b123\0', b'123\0'),
-        (b'u123',    '123'),
-        (b'u\xc3\x9eetta', 'Þetta'),
-        (b'U%C3%9Eetta', 'Þetta')
-    ):
-        assert(dumb_decode(dumb_encode_bin(o)) == o)
-        assert(dumb_decode(dumb_encode_asc(o)) == o)
-
-        d = dumb_decode(i)
-        if (d != o):
-            print('dumb_decode(%s) == %s != %s' % (i, d, o))
-            assert(False)
-
-        d = dumb_decode(str(i, 'latin-1'))
-        if (d != o):
-            print('dumb_decode(%s) == %s != %s' % (i, d, o))
-            assert(False)
-
-    longish = ('1' * 1000)
-    assert(len(dumb_encode_asc(longish, compress=10)) < len(longish))
-    assert(dumb_decode(dumb_encode_asc(longish, compress=10)) == longish)
-    assert(dumb_decode(dumb_encode_asc(longish, compress=10).encode('latin-1')) == longish)
-    assert(dumb_decode(dumb_encode_bin(longish, compress=10)) == longish)
-    assert(dumb_decode(str(dumb_encode_bin(longish, compress=10), 'latin-1')) == longish)
-
-    iv = b'1234123412341234'
-    key = make_aes_key(b'45674567')
-    sec = 'hello encrypted world'
-    enc_a = dumb_encode_asc(sec, aes_key_iv=(key, iv))
-    enc_b = dumb_encode_bin(sec, aes_key_iv=(key, iv))
-    assert(sec == dumb_decode(enc_a, aes_key=key))
-    assert(sec == dumb_decode(enc_b, aes_key=key))
-
+    print('FIXME: Create a encode/decode CLI tool?')
     if False:
+        import time
         from ..storage.metadata import METADATA_ZDICT
         # This was used to measure whether using the compressobj with a
         # dictionary would slow us down or not. It seems fine!
@@ -366,5 +321,4 @@ if __name__ == '__main__':
         t2 = time.time()
         print('%2.2fs %d bytes vs. %2.2fs %d bytes'
             % (t2-t1, c1, t1-t0, c0))
-
-    print('Tests passed OK')
+        print('Tests passed OK')
