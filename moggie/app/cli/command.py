@@ -9,13 +9,7 @@ from ...api.exceptions import APIException, NeedInfoException
 from ...config import AccessConfig
 from ...util.dumbcode import to_json, from_json
 
-
-class NotRunning(RuntimeError):
-    pass
-
-
-class Nonsense(RuntimeError):
-    pass
+from .exceptions import *
 
 
 class CLICommand:
@@ -74,7 +68,7 @@ class CLICommand:
             reply('', eof=True)
 
     @classmethod
-    async def MsgRunnable(cls, app, access, args):
+    async def MsgRunnable(cls, moggie, args):
         reply_buffers = [[]]
         def reply(msg, eof=False):
             if msg or eof:
@@ -85,8 +79,10 @@ class CLICommand:
                 else:
                     reply_buffers[-1].append(msg)
         try:
-            cmd_obj = cls(app.profile_dir, copy.copy(args),
-                access=access, appworker=app, connect=False)
+            cmd_obj = cls(moggie.work_dir, copy.copy(args),
+                access=moggie._access,
+                appworker=moggie._app_worker,
+                connect=False)
             cmd_obj.set_msg_defaults(copy.copy(args))
             cmd_obj.reply_buffers = reply_buffers
             cmd_obj.write_reply = reply
@@ -114,7 +110,7 @@ class CLICommand:
         self.workdir = wd
         self.context = None
         self.preferences = None
-        self.stdin = sys.stdin
+        self.stdin = sys.stdin.buffer
         self.cfg = (appworker and appworker.app and appworker.app.config)
 
         if access is not True and not access and self.ROLES:
@@ -306,7 +302,7 @@ class CLICommand:
         self.write_error(' '.join(args) + nl)
 
     async def repeatable_async_api_request(self, access, query):
-        if self.stdin == sys.stdin:
+        if self.stdin in (sys.stdin, sys.stdin.buffer):
             nei = None
             try:
                 return await self.worker.async_api_request(access, query)

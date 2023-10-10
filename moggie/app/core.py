@@ -11,6 +11,7 @@ import traceback
 import time
 import sys
 
+from moggie import Moggie
 from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
 from ..config.helpers import DictItemProxy, EncodingListItemProxy
 from ..api.requests import *
@@ -930,7 +931,7 @@ main app worker. Hints:
                 args.append('--%s=%s' % (k, v))
 
         rbuf_cmd = await CLI_COMMANDS.get(api_req.command).MsgRunnable(
-            self.worker, access, args)
+            Moggie(access=access, app=self, app_worker=self.worker), args)
         if rbuf_cmd is None:
             return ResponseCommand(api_req, 'text/error', 'No such command')
 

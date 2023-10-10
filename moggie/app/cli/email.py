@@ -286,8 +286,8 @@ class CommandParse(CLICommand):
 
         def _decrypt_or_verify_inline(part_bin, p_idx, part, parent):
             text = part.get('_TEXT', '')
-            decrypt = re.match('^\s*-----BEGIN PGP MESSAGE', text, flags=re.S)
-            verify = re.match('^\s*-----BEGIN PGP SIGNED', text, flags=re.S)
+            decrypt = re.match('^\\s*-----BEGIN PGP MESSAGE', text, flags=re.S)
+            verify = re.match('^\\s*-----BEGIN PGP SIGNED', text, flags=re.S)
 
             if p_idx in _done:
                 ctype = part['content-type']
@@ -379,10 +379,19 @@ class CommandParse(CLICommand):
         md = result.get('metadata')
         html_magic = (settings.with_html
             or settings.with_html_text or settings.with_html_clean)
+
+        quick_parse = None
         if data:
             from moggie.email.util import make_ts_and_Metadata, quick_msgparse
             from moggie.email.parsemime import parse_message
-            header_end, header_summary = quick_msgparse(data, 0)
+
+            quick_parse = quick_msgparse(data, 0)
+
+        if not quick_parse:
+            logging.warning('Failed to quick-parse: %s' % data)
+
+        else:
+            header_end, header_summary = quick_parse
 
             p = parse_message(data, fix_mbox_from=(data[:5] == b'From '))
 
@@ -560,7 +569,11 @@ class CommandParse(CLICommand):
         def _load(t, target):
             if t[:1] == '-':
                 if self.options['--stdin=']:
+                    # FIXME: This logic should be shared with other methods.
+                    #        Bump up to the CLICommand class?
                     data = self.options['--stdin='].pop(0)
+                    if data[:7] == 'base64:':
+                        data = base64.b64decode(data[7:])
                 else:
                     data = sys.stdin.buffer.read()
                 target.append({
@@ -568,6 +581,8 @@ class CommandParse(CLICommand):
                     'data': data})
                 return True
             elif t[:7] == 'base64:':
+                # FIXME: This logic should be shared with other methods.
+                #        Bump up to the CLICommand class?
                 target.append({
                     'base64': True,
                     'data': base64.b64decode(t[7:])})
@@ -1285,7 +1300,7 @@ class CommandEmail(CLICommand):
 
     def _load_email(self, fd):
         from moggie.email.parsemime import parse_message
-        if fd == sys.stdin.buffer and self.options['--stdin=']:
+        if fd in (sys.stdin.buffer, sys.stdin) and self.options['--stdin=']:
             data = self.options['--stdin='].pop(0)
         else:
             data = fd.read()

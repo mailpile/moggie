@@ -355,12 +355,15 @@ class BaseWorker(Process):
             prep_only=prep_only)
 
     def _ping(self, timeout=1):
+        conn = None
         try:
             conn = self._conn('ping', timeout=timeout, secret='-')
             result = conn.recv(len(self.HTTP_403))
         except Exception as e:
             logging.debug('PING failed (%s)' % e)
             result = None
+        if conn:
+            conn.close()
         if (result != self.HTTP_403):
             logging.debug('Unexpected PING response: %s' % result)
         return (result == self.HTTP_403)
@@ -384,7 +387,11 @@ class BaseWorker(Process):
             logging.debug('Launching %s(%s)'
                 % (type(self).__name__, self.name,))
 
-            self.start()
+            # Run in a separate thread, to avoid asyncio clashes
+            th = threading.Thread(target=self.start)
+            th.start()
+            th.join()
+
             for t in range(1, 25):
                 if self._load_url() and self._ping():
                     break

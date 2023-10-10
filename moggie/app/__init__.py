@@ -155,7 +155,12 @@ def Main(args):
             command = args.pop(0)
 
         if moggie.run(command, *args) != [False]:
-            os._exit(0)
+            if command in ('start', 'restart'):
+                # We need to use os._exit(0) here, to avoid hanging when
+                # the user has started a new Moggie background process.
+                os._exit(0)
+            else:
+                sys.exit(0)
 
     except Nonsense as e:
         sys.stderr.write('Error: %s\n' % e)
