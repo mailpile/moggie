@@ -71,7 +71,7 @@ def parse_imap(reply, decode=False):
             elif isinstance(dline, bytes):
                 m = IMAP_TOKEN.match(dline)
             else:
-                print('WARNING: Unparsed IMAP response data: %s' % (dline,))
+                logging.warning('Unparsed IMAP response data: %s' % (dline,))
                 m = None
             if m:
                 token = m.group(0)
@@ -473,11 +473,3 @@ if __name__ == "__main__":
             sys.stderr.flush()
             print(json.dumps(exc.as_dict(), indent=2))
             print(exc.traceback)
-
-    else:
-        results = doctest.testmod(optionflags=doctest.ELLIPSIS)
-        if results.failed:
-            print('%s' % (results, ))
-            sys.exit(1)
-        else:
-            print('Tests passed OK')

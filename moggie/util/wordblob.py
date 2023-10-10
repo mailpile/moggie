@@ -129,27 +129,6 @@ def create_wordblob(iter_keywords, **kwargs):
 if __name__ == '__main__':
     import time
 
-    blob = create_wordblob([bytes(w, 'utf-8') for w in [
-            'hello', 'world', 'this', 'is', 'great', 'oh', 'yeah',
-            'thislongwordgetsignored'
-        ]],
-        shortest=2,
-        longest=5,
-        maxlen=20)
-
-    # The noop is to just return the keyword itself!
-    assert(wordblob_search('bjarni', b'', 10) == ['bjarni'])
-    assert(wordblob_search('bja*rni', b'', 10) == ['bjarni'])
-
-    # Searches...
-    assert(wordblob_search('*', blob, 10) == [])
-    assert(wordblob_search('*****', blob, 10) == [])
-    assert(wordblob_search('worl*', blob, 10) == ['worl', 'world'])
-    assert(wordblob_search('*orld', blob, 10) == ['orld', 'world'])
-    assert(wordblob_search('*at', blob, 10) == ['at', 'great'])
-    assert(wordblob_search('w*d', blob, 10) == ['wd', 'world'])
-    assert(wordblob_search('*w*r*d*', blob, 10) == ['wrd', 'world'])
-
     blob2 = create_wordblob((
             b'%d' % random.randint(10000, 10240000) for i in range(0, 130000)
         ),
@@ -179,18 +158,5 @@ if __name__ == '__main__':
     s2 = n / (t2-t1)
     s3 = n / (t3-t2)
     s4 = n / (t4-t3)
-
-    # Test the LRU updates and blob searches which roughly preserve the
-    # order within the blob (so we get more recent matches firstish).
-    b1 = create_wordblob(b'five four three two one'.split(), shortest=1)
-    b1 = update_wordblob([b'five'], b1, shortest=1, lru=True)
-    b1 = update_wordblob([b'four'], b1, shortest=1, lru=True)
-    b1 = update_wordblob([b'three'], b1, shortest=1, lru=True)
-    b1 = update_wordblob([b'two'], b1, shortest=1, lru=True)
-    b1 = update_wordblob([b'one'], b1, blacklist=[b'three'], shortest=1, lru=True)
-    assert(b1 == b'one\ntwo\nfour\nfive')
-    b1 = b'One\nTwo\nThree\nFour\nFive'
-    assert(wordblob_search('f*', b1, 10, order=-1) == ['f', 'Five', 'Four'])
-    assert(wordblob_search('f*', b1, 10, order=+1) == ['f', 'Four', 'Five'])
 
     print('Tests pass OK: %d/%d/%d/%d qps in %d byte blob' % (s1, s2, s3, s4, len(blob2)))

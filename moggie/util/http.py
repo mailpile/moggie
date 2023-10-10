@@ -9,7 +9,7 @@ def url_parts(url):
     host = hopo[0]
     port = int(hopo[1] if (len(hopo) > 1)
         else (443 if (prot == 'https') else 80))
-    return (prot, host, port, '/'+path)
+    return (prot, host.split('@', 1)[-1], port, '/'+path)
 
 
 # This is deliberately minimal, to keep the overhead of our

@@ -22,4 +22,4 @@ def friendly_bytes(size):
         return '%dM' % (size // (1024*1024))
     if size >= 1024:
         return '%dK' % (size // 1024)
-    return size
+    return '%d' % size

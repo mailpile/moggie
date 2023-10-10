@@ -1,12 +1,16 @@
 import unittest
 import doctest
 
-import moggie.util.imap
 #import moggie.util.conn_brokers
+import moggie.util.imap
+import moggie.util.intset
 import moggie.util.mailpile
-import moggie.util.friendly
+import moggie.util.sendmail
 
 from moggie.util.dumbcode import *
+from moggie.util.friendly import *
+from moggie.util.intset import IntSet
+from moggie.util.wordblob import *
 
 
 class DoctestTests(unittest.TestCase):
@@ -75,3 +79,165 @@ class DummbCodeTests(unittest.TestCase):
         enc_b = dumb_encode_bin(sec, aes_key_iv=(key, iv))
         self.assertTrue(sec == dumb_decode(enc_a, aes_key=key))
         self.assertTrue(sec == dumb_decode(enc_b, aes_key=key))
+
+    def test_dumbcode_to_json(self):
+        import json
+        for thing in (
+                True, False, 1, "hello",
+                [1, 2, 3],
+                {'hi': [1, 2], 'hello': 'world'}):
+            self.assertEqual(json.loads(to_json(thing)), thing)
+
+    def test_dumbcode_from_json(self):
+        for thing in (
+                True, False, 1, "hello",
+                [1, 2, 3],
+                {'hi': [1, 2], 'hello': 'world'}):
+            self.assertEqual(from_json(json.dumps(thing)), thing)
+
+    def test_dumbcode_json_binary(self):
+        for thing in (
+                b'binary stuff',
+                IntSet([1, 2, 3, 4])):
+            self.assertEqual(from_json(to_json(thing)), thing)
+
+
+class FriendlyTests(unittest.TestCase):
+    def test_friendly_date(self):
+        ts = 1696845600
+        self.assertEqual(friendly_date(ts), '2023-10-09')
+        self.assertEqual(friendly_date(str(ts)), '2023-10-09')
+        self.assertEqual(friendly_date(None), '?')
+
+    def test_friendly_datetime(self):
+        ts = 1696845623
+        self.assertEqual(friendly_datetime(ts), '2023-10-09 10:00')
+        self.assertEqual(friendly_datetime(str(ts)), '2023-10-09 10:00')
+        self.assertEqual(friendly_datetime(None), '?')
+
+    def test_friendly_bytes(self):
+        self.assertEqual(friendly_bytes(1), '1')
+        self.assertEqual(friendly_bytes(1100), '1K')
+        self.assertEqual(friendly_bytes(110*1024), '110K')
+        self.assertEqual(friendly_bytes(11*1024*1024), '11M')
+        self.assertEqual(friendly_bytes(11*1024*1024*1024), '11G')
+        self.assertEqual(friendly_bytes(None), '?')
+
+
+class HttpTests(unittest.TestCase):
+    def test_url_parts(self):
+        for url, parse in (
+                ('http://example.org/foo',   ('http', 'example.org', 80, '/foo')),
+                ('http://user@example.org',  ('http', 'example.org', 80, '/')),
+                ('https://example.org',      ('https', 'example.org', 443, '/')),
+                ('https://example.org:123/', ('https', 'example.org', 123, '/')),
+                ('https://example.org:123/', ('https', 'example.org', 123, '/')),
+                ):
+            self.assertEqual(moggie.util.http.url_parts(url), parse)
+
+
+class SendmailTests(unittest.TestCase):
+    def test_partial_url(self):
+        parse_partial_url = moggie.util.sendmail.parse_partial_url
+        self.assertEqual(
+            parse_partial_url('http://user:pass@host:443/path/to/stuff'),
+            ('http', 'user', 'pass', 'host', 443, 'path/to/stuff'))
+        self.assertEqual(
+            parse_partial_url('user@host/path/to/stuff'),
+            ('smtp', 'user', None, 'host', 25, 'path/to/stuff'))
+        self.assertEqual(
+            parse_partial_url('localhost:125'),
+            ('smtp', None, None, 'localhost', 125, None))
+        self.assertEqual(
+            parse_partial_url('user:secret@localhost:125'),
+            ('smtp', 'user', 'secret', 'localhost', 125, None))
+
+
+class IntsetTest(unittest.TestCase):
+    def test_intset(self):
+        self.assertEqual(IntSet.DEF_BITS, 64)
+
+        is1 = IntSet([1, 3, 10])
+        self.assertTrue(10 in is1)
+        self.assertTrue(4 not in is1)
+        self.assertTrue(1024 not in is1)
+        self.assertTrue(10 in list(is1))
+        self.assertTrue(11 not in list(is1))
+        is1 |= 11
+        self.assertTrue(10 in list(is1))
+        self.assertTrue(11 in list(is1))
+        is1 &= [1, 3, 9, 44]
+        self.assertTrue(3 in list(is1))
+        is1 -= 9
+        self.assertTrue(9 not in is1)
+        is1 |= 9
+        self.assertTrue(9 in is1)
+        is1 -= [9]
+        self.assertTrue(9 not in is1)
+        self.assertTrue(11 not in list(is1))
+        self.assertTrue(len(is1.tobytes(strip=False)) == (5 + is1.DEF_INIT * is1.bits // 8))
+        is1 ^= [9, 44, 45, 46]
+        self.assertTrue(9 in is1)
+        self.assertTrue(46 in is1)
+        self.assertTrue(47 not in is1)
+        is1 ^= [9, 11]
+        self.assertTrue(9 not in is1)
+        self.assertTrue(11 in is1)
+
+        a100 = IntSet.All(100)
+        self.assertTrue(bool(a100))
+        self.assertTrue(99 in a100)
+        self.assertTrue(100 not in a100)
+        self.assertTrue(len(list(a100)) == 100)
+        self.assertTrue(list(IntSet.Sub(a100, IntSet.All(99))) == [99])
+        a100 -= 99
+        self.assertTrue(98 in a100)
+        self.assertTrue(99 not in a100)
+        self.assertTrue(0 in a100)
+
+        e_is1 = dumb_encode_asc(is1, compress=128)
+        d_is1 = dumb_decode(e_is1)
+        #print('%s' % e_is1)
+        self.assertTrue(len(e_is1) < 1024)
+        self.assertTrue(list(d_is1) == list(is1))
+        e_is1 = dumb_encode_bin(is1)
+        d_is1 = dumb_decode(e_is1)
+        self.assertTrue(list(d_is1) == list(is1))
+
+
+class WordblobTest(unittest.TestCase):
+    def test_wordblob(self):
+        blob = create_wordblob([bytes(w, 'utf-8') for w in [
+                'hello', 'world', 'this', 'is', 'great', 'oh', 'yeah',
+                'thislongwordgetsignored'
+            ]],
+            shortest=2,
+            longest=5,
+            maxlen=20)
+
+        # The noop is to just return the keyword itself!
+        self.assertEqual(wordblob_search('bjarni', b'', 10), ['bjarni'])
+        self.assertEqual(wordblob_search('bja*rni', b'', 10), ['bjarni'])
+
+        # Searches...
+        self.assertEqual(wordblob_search('*', blob, 10), [])
+        self.assertEqual(wordblob_search('*****', blob, 10), [])
+        self.assertEqual(wordblob_search('worl*', blob, 10), ['worl', 'world'])
+        self.assertEqual(wordblob_search('*orld', blob, 10), ['orld', 'world'])
+        self.assertEqual(wordblob_search('*at', blob, 10), ['at', 'great'])
+        self.assertEqual(wordblob_search('w*d', blob, 10), ['wd', 'world'])
+        self.assertEqual(wordblob_search('*w*r*d*', blob, 10), ['wrd', 'world'])
+
+        # Test the LRU updates and blob searches which roughly preserve the
+        # order within the blob (so we get more recent matches firstish).
+        b1 = create_wordblob(b'five four three two one'.split(), shortest=1)
+        b1 = update_wordblob([b'five'], b1, shortest=1, lru=True)
+        b1 = update_wordblob([b'four'], b1, shortest=1, lru=True)
+        b1 = update_wordblob([b'three'], b1, shortest=1, lru=True)
+        b1 = update_wordblob([b'two'], b1, shortest=1, lru=True)
+        b1 = update_wordblob([b'one'], b1, blacklist=[b'three'], shortest=1, lru=True)
+        self.assertEqual(b1, b'one\ntwo\nfour\nfive')
+        b1 = b'One\nTwo\nThree\nFour\nFive'
+        self.assertEqual(wordblob_search('f*', b1, 10, order=-1), ['f', 'Five', 'Four'])
+        self.assertEqual(wordblob_search('f*', b1, 10, order=+1), ['f', 'Four', 'Five'])
+

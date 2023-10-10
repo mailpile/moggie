@@ -139,7 +139,11 @@ class IntSet:
                 return False
             if (self.npa is None) or (other.npa is None):
                 return True
-            return not numpy.array_equal(self.npa, other.npa)
+            if numpy.array_equal(self.npa, other.npa):
+                return False
+            # This strips the zeroes, so IntSets of varying sizes
+            # with the same bits set will be considered equal.
+            return self.tobytes() != other.tobytes()
         else:
             return True
 
@@ -321,62 +325,6 @@ register_dumb_decoder(IntSet.ENC_ASC, IntSet.DumbDecode)
 
 if __name__ == "__main__":
     import time
-    from ..util.dumbcode import *
-
-    assert(IntSet.DEF_BITS == 64)
-
-    is1 = IntSet([1, 3, 10])
-    assert(10 in is1)
-    assert(4 not in is1)
-    assert(1024 not in is1)
-    assert(10 in list(is1))
-    assert(11 not in list(is1))
-    is1 |= 11
-    assert(10 in list(is1))
-    assert(11 in list(is1))
-    is1 &= [1, 3, 9, 44]
-    assert(3 in list(is1))
-    is1 -= 9
-    assert(9 not in is1)
-    is1 |= 9
-    assert(9 in is1)
-    is1 -= [9]
-    assert(9 not in is1)
-    assert(11 not in list(is1))
-    assert(len(is1.tobytes(strip=False)) == (5 + is1.DEF_INIT * is1.bits // 8))
-    is1 ^= [9, 44, 45, 46]
-    assert(9 in is1)
-    assert(46 in is1)
-    assert(47 not in is1)
-    is1 ^= [9, 11]
-    assert(9 not in is1)
-    assert(11 in is1)
-
-    a100 = IntSet.All(100)
-    assert(bool(a100))
-    assert(99 in a100)
-    assert(100 not in a100)
-    assert(len(list(a100)) == 100)
-    assert(list(IntSet.Sub(a100, IntSet.All(99))) == [99])
-    a100 -= 99
-    assert(98 in a100)
-    assert(99 not in a100)
-    assert(0 in a100)
-
-    e_is1 = dumb_encode_asc(is1, compress=128)
-    d_is1 = dumb_decode(e_is1)
-    #print('%s' % e_is1)
-    assert(len(e_is1) < 1024)
-    assert(list(d_is1) == list(is1))
-    e_is1 = dumb_encode_bin(is1)
-    d_is1 = dumb_decode(e_is1)
-    assert(list(d_is1) == list(is1))
-
-    #print('%s' % list(is1))
-    #for i in is1.chunks(size=1, reverse=False):
-    #    print('%s' % list(i))
-    #for i in is1.chunks(size=1, reverse=True):
-    #    print('%s' % list(i))
 
     many = list(range(0, 10240000, 10))
     some = list(range(0, 1024000, 10))

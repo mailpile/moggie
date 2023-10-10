@@ -350,27 +350,3 @@ async def sendmail_smtp(message_bytes, via, frm, recipients, _id, progress_cb,
 SENDMAIL_HANDLERS = [
     (500,  lambda via: (via[:1] in ('|', '/')),  sendmail_exec),
     (999,  lambda via: True,                     sendmail_smtp)]
-
-
-if __name__ == '__main__':
-    def _assert(val, want=True, msg='assert'):
-        if isinstance(want, bool):
-            if (not val) == (not want):
-                want = val
-        if val != want:
-            raise AssertionError('%s(%s==%s)' % (msg, val, want))
-
-    _assert(
-        parse_partial_url('http://user:pass@host:443/path/to/stuff'),
-        ('http', 'user', 'pass', 'host', 443, 'path/to/stuff'))
-    _assert(
-        parse_partial_url('user@host/path/to/stuff'),
-        ('smtp', 'user', None, 'host', 25, 'path/to/stuff'))
-    _assert(
-        parse_partial_url('localhost:125'),
-        ('smtp', None, None, 'localhost', 125, None))
-    _assert(
-        parse_partial_url('user:secret@localhost:125'),
-        ('smtp', 'user', 'secret', 'localhost', 125, None))
-
-    print('Tests pass OK')
