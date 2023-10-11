@@ -1,0 +1,54 @@
+MIME-Version: 1.0
+Content-Type: multipart/signed; boundary="foGvpPBnVZh__4gPLcD8_7WC1_Q"; 
+ protocol="application/pgp-signature"; micalg="pgp-sha512"
+Content-Transfer-Encoding: 7bit
+Autocrypt: addr="alice@openpgp.example"; prefer-encrypt="mutual"; 
+ keydata="mDMEXEcE6RYJKwYBBAHaRw8BAQdArjWwk3FAqyiFbFBKT4TzXcVBqPTB3gmzlC/Ub7O1u
+ 120JkFsaWNlIExvdmVsYWNlIDxhbGljZUBvcGVucGdwLmV4YW1wbGU+iJAEExYIADgCGwMFCwkIBwI
+ GFQoJCAsCBBYCAwECHgECF4AWIQTrhbtfozp14V6UTmPyMVUMT0fjjgUCXaWfOgAKCRDyMVUMT0fjj
+ ukrAPoDnHBSogOmsHOsd9qGsiZpgRnOdypvbm+QtXZqth9rvwD9HcDC0tC+PHAsO7OTh1S1TC9RiJs
+ vawAfCPaQZoed8gK4OARcRwTpEgorBgEEAZdVAQUBAQdAQv8GIa2rSTzgqbXCpDDYMiKRVitCsy203
+ x3sE9+eviIDAQgHiHgEGBYIACAWIQTrhbtfozp14V6UTmPyMVUMT0fjjgUCXEcE6QIbDAAKCRDyMVU
+ MT0fjjlnQAQDFHUs6TIcxrNTtEZFjUFm1M0PJ1Dng/cDW4xN80fsn0QEA22Kr7VkCjeAEC08VSTeV+
+ QFsmz55/lntWkwYWhmvOgE="
+Message-ID: <47e7165d1ec160ea670ad0c0438664c5@mailpile>
+Date: Tue, 20 Jun 2023 19:03:51 -0000
+Subject: Signed e-mail w/ Autocrypt
+From: =?utf-8?Q?Alice_L=C3=B6velace?= <alice@openpgp.example>
+To: "Alice Lovelace" <alice@openpgp.example>
+
+--foGvpPBnVZh__4gPLcD8_7WC1_Q
+Content-Type: text/plain; charset="utf-8"; protected-headers="v1"
+Content-Disposition: inline
+Content-Transfer-Encoding: base64
+Message-ID: <47e7165d1ec160ea670ad0c0438664c5@mailpile>
+Date: Tue, 20 Jun 2023 19:03:51 -0000
+Subject: Signed e-mail w/ Autocrypt
+From: =?utf-8?Q?Alice_L=C3=B6velace?= <alice@openpgp.example>
+To: "Alice Lovelace" <alice@openpgp.example>
+
+VGjDrXMgw61zIGEgdGVzdCwgSSBob3BlIHlvdSBsw6bDpsOmw6ZrIGl0
+
+--foGvpPBnVZh__4gPLcD8_7WC1_Q
+Content-Type: application/pgp-signature; name="OpenPGP-digital-signature.html"
+Content-Disposition: attachment; filename="OpenPGP-digital-signature.html"
+
+<html><body><h1>  OpenPGP Digital Signature  </h1><p>
+
+This is a digital signature, which can be used to verify the
+authenticity of this message. You can safely discard or ignore
+this file if your e-mail software does not support digital
+signatures.
+
+</p><pre>
+-----BEGIN PGP SIGNATURE-----
+
+wnUEABYKAB0FAmSR+BcWIQTrhbtfozp14V6UTmPyMVUMT0fjjgAKCRDyMVUMT0fj
+jtudAQC1ic72snXi3w+9CZPBoGKHK9fNPGDjPZEKzbLqjJ/GAwEAov4JTVC8XRFU
+vWRrAijyHWlY5YWZTwRPTNgJMjU0tQg=
+=+m2K
+-----END PGP SIGNATURE-----
+
+</pre></body></html>
+
+--foGvpPBnVZh__4gPLcD8_7WC1_Q--

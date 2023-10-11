@@ -1,0 +1,22 @@
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Disposition: inline
+Content-Transfer-Encoding: 7bit
+Message-ID: <42fab30d07d1dd074de67124dd4d4671@mailpile>
+Date: Tue, 20 Jun 2023 19:03:49 -0000
+Subject: Simple encrypted e-mail
+From: =?utf-8?Q?Alice_L=C3=B6velace?= <alice@openpgp.example>
+To: "Alice Lovelace" <alice@openpgp.example>
+
+-----BEGIN PGP MESSAGE-----
+
+wV4DR2b2udXyHrYSAQdAv0C7LGvMoZBfORHImnhgSrCbD+Lq2VbJMvjW455aPVMw
+MzBH8yobKpNhypBfS8tVAn0wLFrPaQaDwUZXlRHgoUdrKzdxjcKrVbtw0UWmiffp
+0sAhAa4v6+Wg/5hZj6FMTTn2ZTUNfmuYLC/yemJt9MbrHyKAxPTmSg8XXwJkF9+t
+C9uzHaRO603SJes30zh1+CFbNdkWsr/3T/MX6TT7/j16iTgHFF05zfcRv5hLXX6H
+DPEV3sRDohX9yQs2vbCIkg0Q7x7SSI6b1JKQ/UtkW7Z5Shak8IbAFz7fkuQDZTgp
+8K7Gj9Svp0q34DGUCBOmIz3dvtkEv2UTZ+YTOKyxFCvdeQ6GHRwRAgRMg1KpMwz0
+Ryss0JPPhpnFEhhesCVAh52RCW+861scZfzAar+Wad/Laj+k
+=TyOR
+-----END PGP MESSAGE-----
+

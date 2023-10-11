@@ -1,0 +1,24 @@
+MIME-Version: 1.0
+Content-Type: multipart/alternative; boundary="AW_SpadXqRLWhEwlyN58H5rFbSw"
+Content-Transfer-Encoding: 7bit
+Message-ID: <6db782587a8ce243ddf0eb4e829665bd@mailpile>
+Date: Tue, 20 Jun 2023 19:03:48 -0000
+Subject: Multipart/alternative e-mail (with HTML)
+From: =?utf-8?Q?Alice_L=C3=B6velace?= <alice@openpgp.example>
+To: "Alice Lovelace" <alice@openpgp.example>
+
+--AW_SpadXqRLWhEwlyN58H5rFbSw
+Content-Type: text/plain; charset="utf-8"
+Content-Disposition: inline
+Content-Transfer-Encoding: base64
+
+VGjDrXMgw61zIGEgdGVzdCwgSSBob3BlIHlvdSBsw6bDpsOmw6ZrIGl0
+
+--AW_SpadXqRLWhEwlyN58H5rFbSw
+Content-Type: text/html; charset="utf-8"
+Content-Disposition: inline
+Content-Transfer-Encoding: base64
+
+PHA+VGjDrXMgw61zIGEgdGVzdCwgSSBob3BlIHlvdSBsw6bDpsOmw6ZrIGl0PC9wPg==
+
+--AW_SpadXqRLWhEwlyN58H5rFbSw--

@@ -112,6 +112,8 @@ class Moggie:
 
         for command in cls._COMMANDS:
             name = command.replace('-', '_')
+            if name in ('import',):
+                name += '_'
 
             sync_method = _mk_method(command)
             async_method =  _mk_async_method(command)
@@ -166,6 +168,14 @@ class Moggie:
 
     def _on_stop(self, result):
         self._app = self._app_worker = None
+
+    def _tell_user(self, msg):
+        if self._mode == self.MODE_CLI:
+            sys.stderr.write(msg.rstrip() + '\n')
+            sys.stderr.flush()
+        else:
+            # FIXME: There might be better ways...
+            logging.info(msg)
 
     def enable_default_logging(self):
         import logging

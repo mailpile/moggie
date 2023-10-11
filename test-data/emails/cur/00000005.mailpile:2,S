@@ -1,0 +1,40 @@
+MIME-Version: 1.0
+Content-Type: multipart/signed; boundary="Gz9Q8NRQdFuIqUPDHgvCI90Uni4"; 
+ protocol="application/pgp-signature"; micalg="pgp-sha512"
+Content-Transfer-Encoding: 7bit
+Message-ID: <5f6fe0c17ba59379664a95a6d9143c3e@mailpile>
+Date: Tue, 20 Jun 2023 19:03:48 -0000
+Subject: Simple signed e-mail
+From: =?utf-8?Q?Alice_L=C3=B6velace?= <alice@openpgp.example>
+To: "Alice Lovelace" <alice@openpgp.example>
+
+--Gz9Q8NRQdFuIqUPDHgvCI90Uni4
+Content-Type: text/plain; charset="utf-8"
+Content-Disposition: inline
+Content-Transfer-Encoding: base64
+
+VGjDrXMgw61zIGEgdGVzdCwgSSBob3BlIHlvdSBsw6bDpsOmw6ZrIGl0
+
+--Gz9Q8NRQdFuIqUPDHgvCI90Uni4
+Content-Type: application/pgp-signature; name="OpenPGP-digital-signature.html"
+Content-Disposition: attachment; filename="OpenPGP-digital-signature.html"
+
+<html><body><h1>  OpenPGP Digital Signature  </h1><p>
+
+This is a digital signature, which can be used to verify the
+authenticity of this message. You can safely discard or ignore
+this file if your e-mail software does not support digital
+signatures.
+
+</p><pre>
+-----BEGIN PGP SIGNATURE-----
+
+wnUEABYKAB0FAmSR+BQWIQTrhbtfozp14V6UTmPyMVUMT0fjjgAKCRDyMVUMT0fj
+jrDlAQDUwNURQWZNLz9YEb8oLSfPrO5jcEP7/KgtF2GPcBOPzwEAsy3OZeJezrVZ
+pyEoLKM43QYjW6NomxpS1IRQMJEX7A4=
+=Sd2+
+-----END PGP SIGNATURE-----
+
+</pre></body></html>
+
+--Gz9Q8NRQdFuIqUPDHgvCI90Uni4--

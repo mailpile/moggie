@@ -1,12 +1,16 @@
 import asyncio
 import os
 import shlex
+import time
 import unittest
 
 from moggie import Moggie
 
 
 class OfflineMoggieTest(unittest.TestCase):
+    """
+    Tests for moggie commands which should run without a live back-end.
+    """
     def test_moggie_help(self):
         self.assertRegex(Moggie().help()[0]['text'], 'moggie search')
 
@@ -41,9 +45,17 @@ class OfflineMoggieTest(unittest.TestCase):
 
 
 class OnlineMoggieTest(unittest.TestCase):
+    """
+    Tests for moggie commands which require a working, live backend.
+
+    Ultimately, every major moggie API command *should* be tested here to
+    ensure our API stays unbroken as development proceeds!
+    """
     def setUpClass():
         OnlineMoggieTest.work_dir = wd = os.path.join(
             os.path.dirname(__file__), '..', 'tmp', 'moggie-test')
+        OnlineMoggieTest.test_email_dir = os.path.join(
+            os.path.dirname(__file__), '..', 'test-data', 'emails')
 
         os.system(shlex.join(['rm', '-rf', wd]))
         os.mkdir(wd, 0o0755)
@@ -53,13 +65,35 @@ class OnlineMoggieTest(unittest.TestCase):
 
     def tearDownClass():
         OnlineMoggieTest.moggie.stop()
-        #os.system(shlex.join(['rm', '-rf', OnlineMoggieTest.work_dir]))
+        os.system(shlex.join(['rm', '-rf', OnlineMoggieTest.work_dir]))
 
-    def test_moggie_help(self):
+    def test_moggie_001_help(self):
         self.assertRegex(self.moggie.help()[0]['text'], 'moggie search')
 
-    def test_moggie_count(self):
+    def test_moggie_002_count(self):
         self.assertTrue('*' in self.moggie.count()[0])
 
-    def test_moggie_help2(self):
-        self.assertEqual(1, 1)
+    def test_moggie_003_import_new(self):
+        self.moggie.import_(self.test_email_dir, tag='inbox', config_only=True)
+        self.moggie.new()
+
+        terms = ['all:mail', 'in:incoming', 'in:inbox']
+        for tries in range(0, 100):
+            counts = self.moggie.count(*terms, multi=True)[0]
+            if counts['all:mail'] > 5 and counts['in:incoming'] == 0:
+                break
+            time.sleep(0.100)
+        self.assertTrue(counts['in:incoming'] == 0)
+        self.assertTrue(counts['in:inbox'] > 5)
+        self.assertTrue(counts['all:mail'] > 5)
+
+    def test_moggie_004_search(self):
+        self.assertFalse(self.moggie.search('in:incoming'))  # No results
+
+        results = self.moggie.search('alice', 'subject:autocrypt')
+        self.assertEquals(len(results), 1)
+        self.assertEquals(results[0]['date_relative'], '2023-06-20')
+        self.assertEquals(results[0]['authors'],       'Alice Lövelace')
+        self.assertEquals(results[0]['tags'],          ['inbox'])
+
+        # FIXME: Many, many more tests! Search has so many different modes

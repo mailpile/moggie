@@ -24,7 +24,7 @@ def CommandStart(moggie, args):
         if wait or ('--wait' in args):
             worker.join()
         else:
-            sys.stderr.write('Running %s in the background.\n' % worker.KIND)
+            moggie._tell_user('Running %s in the background.' % worker.KIND)
         return worker
     else:
         return False
@@ -37,9 +37,9 @@ def CommandStop(moggie, args, exit=True):
     if worker.connect(autostart=False):
         result = worker.quit()
         if result and result.get('quitting'):
-            sys.stderr.write('Shutting down %s.\n' % worker.KIND)
+            moggie._tell_user('Shutting down %s.' % worker.KIND)
             return True
-    sys.stderr.write('Not running? (%s)\n' % worker.KIND)
+    moggie._tell_user('Not running? (%s)' % worker.KIND)
     return False
 
 
@@ -128,7 +128,7 @@ def CommandMuttalike(moggie, args):
             profile_dir=moggie.work_dir,
             level=loglevel)
         if loglevel <= logging.INFO:
-            sys.stderr.write('Logging to %s (startup in 2s)\n' % (logfile,))
+            moggie._tell_user('Logging to %s (startup in 2s)' % (logfile,))
             time.sleep(2)
 
     if sys.stdin.isatty() and sys.stdout.isatty():
@@ -163,6 +163,6 @@ def Main(args):
                 sys.exit(0)
 
     except Nonsense as e:
-        sys.stderr.write('Error: %s\n' % e)
+        moggie._tell_user('Error: %s' % e)
 
     sys.exit(1)
