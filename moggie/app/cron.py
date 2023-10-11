@@ -1,7 +1,6 @@
 import datetime
 import logging
 import os
-import shlex
 import time
 import threading
 
@@ -13,12 +12,13 @@ class Cron:
     An SQL-backed scheduler that supports crontab(5)-like rules and syntax.
     """
 
-    def __init__(self, data_directory, encryption_keys):
+    def __init__(self, data_directory, encryption_keys, eval_env=None):
         ext = 'sqz' if encryption_keys else 'sq3'
         path = os.path.join(data_directory, 'crontab.%s' % ext)
         self.db = ZipEncryptedSQLite3(path, encryption_keys=encryption_keys)
         self.configure_db()
         self.id_counter = int(1000 * time.time())
+        self.eval_env = globals() if (eval_env is None) else eval_env
 
         # FIXME: i18n? Allow other languages in crontab? Or no?
         self.dow = {
@@ -179,25 +179,32 @@ class Cron:
             action))
 
     def _run_action(self, _id, action):
-        try:
-            if action.startswith('moggie '):
-                logging.info('cron(%s): %s' % (_id, action))
+        def _runner():
+            nonlocal _id, action
+            try:
+                if action.startswith('moggie '):
+                    logging.info('FIXME! cron(%s): %s' % (_id, action))
 
-            elif action[:1] in ('!', '~', os.path.sep):
-                action = action.lstrip('!')
-                logging.info('cron(%s/shell): %s' % (_id, action))
-                os.system(action)
+                elif action[:1] in ('!', '~', os.path.sep):
+                    action = action.lstrip('!')
+                    logging.info('cron(%s/shell): %s' % (_id, action))
+                    os.system(action)
 
-            else:
-                logging.info('cron(%s/python): %s' % (_id, action))
-                eval(action, globals())
+                else:
+                    logging.info('cron(%s/python): %s' % (_id, action))
+                    eval(action, self.eval_env)
 
-        except KeyboardInterrupt:
-            raise
-        except:
-            logging.exception('cron(%s) FAILED' % (_id,))
+            except KeyboardInterrupt:
+                raise
+            except:
+                logging.exception('cron(%s) FAILED' % (_id,))
 
-    def run_scheduled(self, context=None, now=None):
+        at = threading.Thread(target=_runner)
+        at.daemon = True
+        at.start()
+        return at
+
+    def run_scheduled(self, context=None, join=True, now=None):
         now = int(now or time.time())
 
         sql = """
@@ -210,6 +217,7 @@ class Cron:
         else:
             args = (now,)
 
+        threads = []
         for due in self.db.execute(sql, args):
             _id, action, mins, hrs, mdays, mnths, wkdays = due
             if mins or hrs or mdays or mnths or wkdays:
@@ -224,9 +232,10 @@ class Cron:
             else:
                 self._delete_where(_id=_id)
 
-            at = threading.Thread(target=self._run_action, args=(_id, action))
-            at.daemon = True
-            at.start()
+            threads.append(self._run_action(_id, action))
+        if join:
+            for at in threads:
+                at.join()
 
         self.db.save()
 
@@ -263,9 +272,8 @@ class Cron:
         self._log_schedule(
             _id, action, next_run, minutes, hours, month_days, months, weekdays)
 
-    def parse_crontab(self, crontext):
-        import shlex
-        self._delete_where(source='crontab')
+    def parse_crontab(self, crontext, source='crontab'):
+        self._delete_where(source=source)
         for line in crontext.splitlines():
             line = line.split('#', 1)[0].strip()
             if not line:
@@ -273,26 +281,7 @@ class Cron:
             mm, hh, d, m, wd, action = line.split(None, 5)
             self.schedule_action(action,
                 minutes=mm, hours=hh, month_days=d, months=m, weekdays=wd,
-                source='crontab',
+                source=source,
                 save=False)
         self.db.save()
 
-
-if __name__ == '__main__':
-    import doctest
-    logging.basicConfig(level=logging.DEBUG)
-
-    now = int(time.time())
-    crond = Cron('/tmp', [b'1234123412341234'])
-    crond.parse_crontab("""\
-# This is a test, comment
-45  6,18  * * *  moggie new      # This is another comment
-*/5    *  * * *  /usr/bin/touch /tmp/os.system.test
-""")
-
-    crond.run_scheduled(now=now+24*3600)
-    crond.run_scheduled(now=now+48*3600)
-
-    results = doctest.testmod(
-        optionflags=doctest.ELLIPSIS, extraglobs={'crond': crond})
-    print('%s' % (results,))

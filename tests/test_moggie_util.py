@@ -15,8 +15,10 @@ from moggie.util.wordblob import *
 
 class DoctestTests(unittest.TestCase):
     def run_doctests(self, module):
-        result = doctest.testmod(module)
-        self.assertFalse(result.failed)
+        results = doctest.testmod(module)
+        if results.failed:
+            print(results)
+        self.assertFalse(results.failed)
 
     def test_doctests_imap(self):
         self.run_doctests(moggie.util.imap)
