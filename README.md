@@ -70,6 +70,14 @@ Install Moggie on Raspbian 11:
    2. python3 -m pip install aiosmtplib
    3. git clone --recurse-submodules https://github.com/mailpile/moggie
 
+Or, if you use nix:
+
+   1. nix-shell -p python3Packages.{numpy,cryptography,pycryptodomex,urwid}
+                   python3Packages.{appdirs,setproctitle,pyqrcode,packaging}
+                   python3Packages.{aiosmtplib,aiodns,dkimpy,pgpy,pgpdump}
+                   python3Packages.markdown openssl git
+   2. git clone --recurse-submodules https://github.com/mailpile/moggie
+
 Or, if you prefer a virtualenv:
 
    1. git clone --recurse-submodules https://github.com/mailpile/moggie
@@ -77,6 +85,7 @@ Or, if you prefer a virtualenv:
    3. python3 -m venv --system-site-packages .venv
    4. source .venv/bin/activate
    5. python3 -m pip install -r requirements.txt
+
 
 *(Note that the virtualenv method is somewhat prone to failure, since many
 of moggie's dependencies are tricky to build from source. A hybrid approach
