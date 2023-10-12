@@ -1,10 +1,14 @@
+import copy
 import datetime
 import logging
 import os
+import shlex
 import time
 import threading
 
+from moggie import Moggie
 from ..storage.sqlite_zip import ZipEncryptedSQLite3
+from ..util.friendly import friendly_date, friendly_datetime
 
 
 class Cron:
@@ -12,13 +16,16 @@ class Cron:
     An SQL-backed scheduler that supports crontab(5)-like rules and syntax.
     """
 
-    def __init__(self, data_directory, encryption_keys, eval_env=None):
+    def __init__(self, moggie, encryption_keys, eval_env=None):
         ext = 'sqz' if encryption_keys else 'sq3'
-        path = os.path.join(data_directory, 'crontab.%s' % ext)
+        path = os.path.join(moggie.work_dir, 'crontab.%s' % ext)
         self.db = ZipEncryptedSQLite3(path, encryption_keys=encryption_keys)
         self.configure_db()
         self.id_counter = int(1000 * time.time())
-        self.eval_env = globals() if (eval_env is None) else eval_env
+
+        self._moggie = moggie
+        self._external_moggie = Moggie(moggie.work_dir)
+        self._eval_env_extra = eval_env
 
         # FIXME: i18n? Allow other languages in crontab? Or no?
         self.dow = {
@@ -178,33 +185,78 @@ class Cron:
             mins or '*', hrs or '*', mdays or '*', mnths or '*', wkdays or '*',
             action))
 
-    def _run_action(self, _id, action):
-        def _runner():
-            nonlocal _id, action
+    def _eval_env(self):
+        now_ts = int(time.time())
+        now = datetime.datetime.now()
+        env = {
+            'yyyy_mm_dd': friendly_date(now_ts),
+            'now_ts': now_ts,
+            'now': now}
+        if self._eval_env_extra:
+            env.update(self._eval_env_extra)
+        if 'moggie' not in env:
+            env['moggie'] = self._external_moggie.connect()
+        return env
+
+    def _action_runner(self, _id, action, prefer_async=False):
+        if action[:7] == 'moggie ':
+            if prefer_async:
+                async def _async_runner():
+                    nonlocal _id, action, action
+                    args = shlex.split(action % self._eval_env())[1:]
+                    logging.info('cron(%s/moggie): %s' % (_id, args))
+                    await self._moggie.connect().async_run(*args)
+                return (True, _async_runner)
+            else:
+                def _runner():
+                    nonlocal _id, action, action
+                    args = shlex.split(action % self._eval_env())[1:]
+                    logging.info('cron(%s/moggie): %s' % (_id, args))
+                    self._external_moggie.connect().run(*args)
+
+        elif action[:1] in ('!', '~', os.path.sep):
+            action = action.lstrip('!')
+            def _runner():
+                nonlocal _id, action
+                action = action % self._eval_env()
+                logging.info('cron(%s/sh): %s' % (_id, action))
+                os.system(action)
+
+        else:
+            def _runner():
+                nonlocal _id, action
+                logging.info('cron(%s/py): %s' % (_id, action))
+                eval(action, self._eval_env())
+
+        if prefer_async:
+            return (False, _runner)
+        return _runner
+
+    def _run_action(self, _id, action, runner=None):
+        if runner is None:
+            runner = self._action_runner(_id, action)
+        def _thread_runner():
+            nonlocal _id, runner
             try:
-                if action.startswith('moggie '):
-                    logging.info('FIXME! cron(%s): %s' % (_id, action))
-
-                elif action[:1] in ('!', '~', os.path.sep):
-                    action = action.lstrip('!')
-                    logging.info('cron(%s/shell): %s' % (_id, action))
-                    os.system(action)
-
-                else:
-                    logging.info('cron(%s/python): %s' % (_id, action))
-                    eval(action, self.eval_env)
-
+                runner()
             except KeyboardInterrupt:
                 raise
             except:
                 logging.exception('cron(%s) FAILED' % (_id,))
 
-        at = threading.Thread(target=_runner)
+        at = threading.Thread(target=_thread_runner)
         at.daemon = True
         at.start()
         return at
 
-    def run_scheduled(self, context=None, join=True, now=None):
+    async def _async_run_action(self, _id, action):
+        is_async, _runner = self._action_runner(_id, action, prefer_async=True)
+        if is_async:
+            await _runner()
+        else:
+            return self._run_action(_id, action, runner=_runner)
+
+    def _yield_due_and_reschedule(self, context, now):
         now = int(now or time.time())
 
         sql = """
@@ -217,9 +269,13 @@ class Cron:
         else:
             args = (now,)
 
-        threads = []
         for due in self.db.execute(sql, args):
             _id, action, mins, hrs, mdays, mnths, wkdays = due
+            yield _id, action
+
+            # Deleting or rescheduling the event happens AFTER it has been
+            # yielded; if our caller crashes while handling the event and
+            # never comes back, the current event stays scheduled.
             if mins or hrs or mdays or mnths or wkdays:
                 next_run = self.calculate_next(
                     mins, hrs, mdays, mnths, wkdays, now=now).timestamp()
@@ -232,11 +288,23 @@ class Cron:
             else:
                 self._delete_where(_id=_id)
 
+    def run_scheduled(self, context=None, join=True, now=None):
+        threads = []
+        for _id, action in self._yield_due_and_reschedule(context, now):
             threads.append(self._run_action(_id, action))
         if join:
             for at in threads:
                 at.join()
+        self.db.save()
 
+    async def async_run_scheduled(self, context=None, join=True, now=None):
+        threads = []
+        for _id, action in self._yield_due_and_reschedule(context, now):
+            threads.append(await self._async_run_action(_id, action))
+        if join:
+            for at in threads:
+                if at is not None:
+                    at.join()
         self.db.save()
 
     def schedule_action(self, action,

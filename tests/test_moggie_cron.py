@@ -7,6 +7,9 @@ import unittest
 
 import moggie.app.cron
 
+from moggie import Moggie
+from moggie.app.cron import Cron
+
 
 class MoggieCronTests(unittest.TestCase):
     def test_cron(self):
@@ -15,26 +18,30 @@ class MoggieCronTests(unittest.TestCase):
         testsqz = os.path.join(tmpdir, 'crontab.sqz')
 
         os.system(shlex.join(['rm',  '-f', testfile, testsqz]))
-
-        global history
         history = []
 
         now = int(time.time())
-        crond = moggie.app.cron.Cron(tmpdir, [b'1234123412341234'],
-            eval_env=globals())
+        mog = Moggie(tmpdir)
+        env = {'history': history, 'moggie': mog, 'testfile': testfile}
+        crond = Cron(mog, [b'1234123412341234'], eval_env=env)
 
         for times in (1, 2):
             # Parse it twice; this guarantees that we only ever keep one
             # crontab worth of events in the schedule.
             crond.parse_crontab("""\
 # This is a test, comment
-45  6,18  * * *  history.append('hello')  # Test Python code
-*/5    *  * * *  history.append('world')  # More Python, diff schedule
-00    00  * * *  /usr/bin/touch "%s"      # Test shell commands
-""" % testfile)
+45  6,18  * * *  history.append('hello')        # Test Python code
+*/5    *  * * *  history.append('world')        # More Python, diff schedule
+00    00  * * *  /usr/bin/touch "%(testfile)s"  # Test shell commands
+00    00  * * *  history.append(moggie.help())  # Moggie in Python
+""" % env)
 
         for hour in range(0, 24):
             crond.run_scheduled(now=now + 300 + hour*3600)
+
+        # Did help get rendered?
+        self.assertEqual(1,
+             sum(1 for e in history if isinstance(e, list) and e[0]['text']))
 
         # The 6am / 6pm event should run twice
         self.assertEqual(2, sum(1 for e in history if e == 'hello'))

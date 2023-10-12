@@ -1,3 +1,17 @@
+# This is moggie's scheduler.
+#
+# It currently supports crontab-like scheduling, as well as internal
+# one-off scheduling of events. Some events live in $MOGGIE_HOME/crontab,
+# but others live in the encrypted SQLite3 database (crontab.sqz).
+#
+# FIXME: It will probably also make sense to allow scheduling actions
+#        based on things that happen within the app, e.g. new mail arrives
+# or the user has been using the app for N weeks, or something of that
+# nature, not just time. This will require extending the crontab(5)
+# syntax and defining a vocabulary of internal events. But exposing that
+# logic to the crontab file so the user can see it and tweak it would be
+# a very nice thing.
+
 import asyncio
 import base64
 import copy
@@ -24,6 +38,7 @@ from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorkers
 from ..workers.search import SearchWorker
 from .cli import CLI_COMMANDS
+from .cron import Cron
 
 
 def _b(p):
@@ -51,12 +66,29 @@ main app worker. Hints:
        'ttf': 'font/ttf',
        'woff': 'font/woff'}
 
+    DEFAULT_CRONTAB = """\
+# This is the schedule for moggie updates, checking mail, unsnoozing
+# snoozed messages, things like that.
+#
+# This file uses a very similar format to crontab(5). Commands can be
+# internal moggie API calls, shell commands, or python one-liners.
+# This file is automatically reloaded by moggie if changed.
+#
+*/2  * * * *  moggie new --only-inboxes
+*/30 * * * *  moggie new
+#
+# FIXME: This would be a good way to un-snooze snoozed mail...
+#
+#*    * * * *  moggie tag +inbox -zzz-%(yyyy_mm_dd)s -- in:zzz-%(yyyy_mm_dd)s
+"""
+
     def __init__(self, app_worker):
         self.work_dir = os.path.normpath(# FIXME: This seems a bit off
             os.path.join(app_worker.worker_dir, '..'))
 
         self.worker = app_worker
         self.config = AppConfig(self.work_dir)
+        self.moggie = Moggie(app=self, app_worker=app_worker, access=True)
 
         self.rpc_functions = {
             b'rpc/notify':            (True, self.rpc_notify),
@@ -74,6 +106,9 @@ main app worker. Hints:
         self.stores = {}
         self.search = None
         self.ticker = None
+        self.cron = None
+        self.crontab_internal = "*/5 * * * *  app.load_crontab()"
+        self.crontab_last_loaded = 0
 
         # FIXME: Make this customizable somehow
         self.theme = {'_unused_body_bg': '#fff'}
@@ -84,6 +119,23 @@ main app worker. Hints:
 
     # Lifecycle
 
+    def load_crontab(self):
+        crontab_fn = os.path.join(self.work_dir, 'crontab')
+        try:
+            if not os.path.exists(crontab_fn):
+                with open(crontab_fn, 'w') as fd:
+                    fd.write(self.DEFAULT_CRONTAB)
+
+            cron_mtime = os.path.getmtime(crontab_fn)
+            if cron_mtime != self.crontab_last_loaded:
+                # Mark that we tried, even if we then fail here below
+                self.crontab_last_loaded = cron_mtime
+                with open(crontab_fn, 'r') as fd:
+                    self.cron.parse_crontab(fd.read())
+                logging.info('Loaded crontab from %s' % crontab_fn)
+        except Exception as e:
+            logging.exception('Failed to read crontab: %s' % crontab_fn)
+
     async def tick(self):
         now = int(time.time())
 
@@ -92,7 +144,11 @@ main app worker. Hints:
         logging.debug('Have %d live workers, reaping zombies.'
             % len(multiprocessing.active_children()))
 
-        self.schedule(now + 120, self.tick())
+        if self.cron is not None:
+            await self.cron.async_run_scheduled()
+            self.schedule(now + 60, self.tick())
+        else:
+            self.schedule(now + 120, self.tick())
 
     def schedule(self, when, job):
         self._schedule.append((when, job))
@@ -151,6 +207,14 @@ main app worker. Hints:
         #        abort and notify the user that formats have changed and they
         #        need to nuke their data. This should NEVER happen after we go
         #        beta.
+
+        if self.cron is None:
+            self.cron = Cron(self.moggie, aes_keys, eval_env={
+                'moggie': self.moggie,
+                'config': self.config,
+                'app': self})
+            self.cron.parse_crontab(self.crontab_internal, source='app.core')
+            self.load_crontab()
 
         missing_metadata = self.metadata is None
         if missing_metadata:
@@ -503,8 +567,12 @@ main app worker. Hints:
         result = []
         if path is True:
             from ..config.paths import mail_path_suggestions
+            paths = mail_path_suggestions(
+                config=self.config, context=ctx, local=True)
+
             # FIXME: Security and access controls, please?
-            for suggest in mail_path_suggestions(local=True):
+
+            for suggest in paths:
                 path = suggest['path']
                 if path.startswith('imap:'):
                     info = {'path': path}

@@ -134,7 +134,7 @@ class ZipEncryptedSQLite3:
                 zf.writestr(fi, data)
                 zf.close()
 
-            logging.info('sqlite_zip(%s): Saved' % (self.db_filepath,))
+            logging.debug('sqlite_zip(%s): Saved' % (self.db_filepath,))
 
         return True
 

@@ -272,7 +272,11 @@ class Moggie:
             return result
 
         # Update our idea of what the current event loop is
-        self.loop = asyncio.get_event_loop()
+        try:
+            self.loop = asyncio.get_event_loop()
+        except RuntimeError:
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
 
         kwargs['result_buffer'] = result
         task = self.async_run(command, *args, **kwargs)
