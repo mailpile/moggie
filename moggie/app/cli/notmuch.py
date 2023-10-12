@@ -270,8 +270,8 @@ FIXME: Document html and html formats!
             msgs = dict((i[1] or tid, Metadata(*i).parsed())
                 for i in thread['messages'])
 
-            top = msgs[tid]
-            md = msgs[thread['hits'][0]]
+            top = msgs.get(tid, {})
+            md = msgs.get(thread['hits'][0], {})
 
             ts = min(msgs[i]['ts'] for i in thread['hits'])
             fc = sum(len(m['ptrs']) for m in msgs.values())

@@ -338,6 +338,11 @@ class AppWorker(PublicWorker):
         return self.app.config.access_from_token(str(secret, 'utf-8'),
             _raise=False)
 
+    def get_moggie(self, req_env, allow_anonymous=False, **req_kwargs):
+        # Use get_auth to fetch access credentials, construct a moggie
+        # object with our app/app-worker.
+        pass  # FIXME
+
     def get_auth(self, req_env, allow_anonymous=False, **req_kwargs):
         # Set req_env[auth_*], or raise PermissionError
         access_requires(req_env, **req_kwargs)

@@ -229,6 +229,7 @@ class BaseWorker(Process):
         except:
             logging.exception('Crashed!')
         finally:
+            self._sock.close()
             logging.info('Stopped %s(%s), pid=%d'
                 % (type(self).__name__, self.name, os.getpid()))
             try:
@@ -543,6 +544,7 @@ class BaseWorker(Process):
                 conn.shutdown(socket.SHUT_WR)
             except BrokenPipeError as e:
                 logging.warning('Upload(%s) failed: %s' % (path, e))
+                conn.close()
                 raise
         else:
             logging.debug('async_call(%s)'  % (fn,))
@@ -553,9 +555,11 @@ class BaseWorker(Process):
             peeked = await loop.sock_recv(conn, self.PEEK_BYTES)
         except socket.timeout:
             logging.warning('TIMED OUT: %s' % (fn,))
+            conn.close()
             raise
         except:
             logging.exception('Error receiving from socket')
+            conn.close()
             raise
 
         if (peeked.startswith(self.HTTP_200)
@@ -568,14 +572,17 @@ class BaseWorker(Process):
                     if not chunk:
                         break
                     data_cb(None, chunk)
+                conn.close()
             else:
                 while True:
                     chunk = await loop.sock_recv(conn, self.READ_BYTES)
                     if not chunk:
                         break
                     data += chunk
+                conn.close()
                 return self._call_return(hdr, data)
         else:
+            conn.close()
             # FIXME: Parse the HTTP response code and raise better exceptions
             raise PermissionError(str(peeked[:12], 'latin-1'))
 
@@ -644,6 +651,8 @@ class BaseWorker(Process):
             peeked = conn.recv(self.PEEK_BYTES, socket.MSG_PEEK)
         except socket.timeout:
             logging.warning('TIMED OUT: %s' % (path,))
+            if conn:
+                conn.close()
             raise
 
         if (peeked.startswith(self.HTTP_200)
@@ -652,11 +661,15 @@ class BaseWorker(Process):
             junk = conn.recv(len(hdr) + 4)
             conn = conn.makefile(mode='rb')
             if b'application/json' in hdr:
-                return self._call_return(hdr, conn.read())
+                result = self._call_return(hdr, conn.read())
+                conn.close()
+                return result
             else:
                 return (hdr, conn)
         else:
             # FIXME: Parse the HTTP response code and raise better exceptions
+            if conn:
+                conn.close()
             raise PermissionError(str(peeked[:12], 'latin-1'))
 
     def client_info_tuple(self):

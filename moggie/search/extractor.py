@@ -1,3 +1,6 @@
+#
+# FIXME: Reuse moggie.app.cli.email.CommandEmail.Parse
+#
 import copy
 import re
 import time
@@ -266,7 +269,7 @@ if __name__ == '__main__':
     unittest = (len(sys.argv) <= 1)
     if not unittest:
         if sys.argv[1] == '-':
-            msg = bytes(sys.stdin.read(), 'utf-8')
+            msg = sys.stdin.buffer.read()
         else:
             msg = open(sys.argv[1], 'rb').read()
     else:

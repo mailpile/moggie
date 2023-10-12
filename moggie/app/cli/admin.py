@@ -1178,6 +1178,7 @@ class CommandBrowse(CLICommand):
         'fs': 'Files and folders',
         'imap': 'Remote IMAP mailboxes',
         'spool': 'Incoming system mail',
+        'config': 'Moggie settings',
         'home': 'Your home directory',
         'mailpilev1': 'Legacy Mailpile v1 data',
         'thunderbird': 'Thunderbird mailboxes'}

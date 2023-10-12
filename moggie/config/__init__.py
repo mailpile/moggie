@@ -820,7 +820,8 @@ class AppConfig(ConfigParser):
     def context_zero(self):
         with self:
             czero = self.CONTEXT_ZERO
-            self[czero].update({'name': 'My Mail'})
+            if czero not in self:
+                self[czero].update({'name': 'My Mail'})
             self.do_not_save()
             return ContextConfig(self, czero)
 

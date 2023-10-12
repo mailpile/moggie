@@ -1,4 +1,5 @@
 import os
+import logging
 import sys
 
 from .. import platforms
@@ -115,6 +116,7 @@ def mail_path_suggestions(
         config=None, context=None,
         local=False, mailpilev1=True, thunderbird=True):
 
+    user_home = os.path.expanduser('~')
     found = set()
     paths = []
     def _p(src, val, must_exist=False):
@@ -127,36 +129,53 @@ def mail_path_suggestions(
                 return True
         return False
 
-    # FIXME: Extract thing from our own config file!
-    #        IMAP accounts, folders with mailboxes, ...
-    if not local:
-        return paths
+    if local:
+        _p('spool', user_mail_spool(), must_exist=True)
+        _p('home', user_home, must_exist=True)
+        _p('home', os.path.expanduser('~/mail'), must_exist=True)
+        _p('home', os.path.expanduser('~/Mail'), must_exist=True)
+        _p('home', os.path.expanduser('~/Maildir'), must_exist=True)
 
-    _p('spool', user_mail_spool(), must_exist=True)
-    _p('home', os.path.expanduser('~'), must_exist=True)
-    _p('home', os.path.expanduser('~/mail'), must_exist=True)
-    _p('home', os.path.expanduser('~/Mail'), must_exist=True)
-    _p('home', os.path.expanduser('~/Maildir'), must_exist=True)
+    # Extract thing from our own config file!
+    if config:
+        context = config.get_context(context or config.CONTEXT_ZERO)
+        home_prefix = os.path.join(user_home, '')
+        for path, pol in context.get_path_policies().items():
+            try:
+                path = str(path, 'utf-8')
+                if (pol.get('watch_policy')
+                        or pol.get('account')
+                        or pol.get('copy_policy')
+                        or pol.get('tags')):
+                    if path.startswith(home_prefix):
+                        _p('home', path, must_exist=True)
+                    elif os.path.exists(path):
+                        _p('fs', path)
+                    else:
+                        _p('config', path)
+            except UnicodeDecodeError:
+                logging.error('FIXME: Skipped path, not utf-8: %s' % path)
 
     # Do we have an old Mailpile lying around?
-    if mailpilev1:
-        mailpilev1 = DEFAULT_WORKDIR(
-            app='MAILPILE', appname='mailpile', appname_uc='Mailpile')
-        if _p('mailpilev1', os.path.join(mailpilev1, 'mail'), must_exist=True):
-            parent = os.path.dirname(mailpilev1)
-            for profile in os.listdir(parent):
-                if profile not in ('.', '..'):
-                    profile_mail = os.path.join(parent, profile, 'mail')
-                    _p('mailpilev1', profile_mail, must_exist=True)
+    if local and mailpilev1:
+            mailpilev1 = DEFAULT_WORKDIR(
+                app='MAILPILE', appname='mailpile', appname_uc='Mailpile')
+            if _p('mailpilev1', os.path.join(mailpilev1, 'mail'), must_exist=True):
+                parent = os.path.dirname(mailpilev1)
+                for profile in os.listdir(parent):
+                    if profile not in ('.', '..'):
+                        profile_mail = os.path.join(parent, profile, 'mail')
+                        _p('mailpilev1', profile_mail, must_exist=True)
 
-    # How about Thunderbird?
-    if thunderbird:
-        from .importers.thunderbird import ThunderbirdConfig
-        tbird = ThunderbirdConfig().load()
-        for path in tbird.mailbox_paths():
-            _p('thunderbird', path, must_exist=True)
-        for path in tbird.imap_paths():
-            _p('thunderbird', path)
+        # How about Thunderbird?
+    if local and thunderbird:
+            from .importers.thunderbird import ThunderbirdConfig
+            tbird = ThunderbirdConfig().load()
+            for path in tbird.mailbox_paths():
+                _p('thunderbird', path, must_exist=True)
+            for path in tbird.imap_paths():
+                _p('thunderbird', path)
+
 
     # FIXME: Look around for other mail clients and check their configs too
 
