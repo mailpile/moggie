@@ -10,8 +10,8 @@ class MessageDialog(urwid.WidgetWrap):
 
     signals = ['close']
 
-    def __init__(self, tui_frame, message='', title=''):
-        self.tui_frame = tui_frame
+    def __init__(self, tui, message='', title=''):
+        self.tui = tui
 
         self.close_button = CloseButton(
             lambda x: self._emit('close'), style='popsubtle')
@@ -35,7 +35,11 @@ class MessageDialog(urwid.WidgetWrap):
     def make_widgets(self):
         return []
 
-    def update_pile(self, message='', focus=1):
+    def update_pile(self, message='', widgets=False, buttons=False, focus=1):
+        if buttons:
+            self.buttons = self.make_buttons()
+        if widgets:
+            self.widgets = self.make_widgets()
         button_bar = [
             ('weight', 1, urwid.Text('')),
             ('weight', 1, urwid.Text(''))]
@@ -80,6 +84,19 @@ class MessageDialog(urwid.WidgetWrap):
                 except IndexError:
                     pass
         return False
+
+    def focus_last(self):
+        last_focusable = None
+        for i, w in enumerate(self.pile.contents):
+            if (hasattr(w[0], 'selectable') and w[0].selectable()):
+                try:
+                    last_focusable = i
+                except IndexError:
+                    pass
+        if last_focusable is None:
+            return False
+        self.pile.set_focus(last_focusable)
+        return True
 
     def wrap(self, txt, maxwidth=(WANTED_WIDTH-3)):
         lines = []

@@ -22,16 +22,23 @@ class EditLine(urwid.Edit):
 
 
 class PopUpManager(urwid.PopUpLauncher):
-    def __init__(self, tui_frame, content):
+    def __init__(self, tui, content):
         super().__init__(content)
-        self.tui_frame = tui_frame
+        self.tui = tui
         self.target = None
 
-    def open_with(self, target, *target_args):
-        self.target = target(self.tui_frame, *target_args)
-        urwid.connect_signal(self.target, 'close',
-            lambda b: self.close_pop_up())
+    def open_with(self, target, *target_args, **target_kwargs):
+        self.target = target(self.tui, *target_args, **target_kwargs)
+        urwid.connect_signal(
+            self.target, 'close', lambda b: self.close_pop_up())
         return self.open_pop_up()
+
+    def showing_popup(self):
+        return (self.target is not None)
+
+    def close_pop_up(self):
+        self.target = None
+        return super().close_pop_up()
 
     def create_pop_up(self):
         return self.target
@@ -42,7 +49,7 @@ class PopUpManager(urwid.PopUpLauncher):
                 return getattr(self.target, attr)()
             else:
                 return default
-        cols, rows = self.tui_frame.screen.get_cols_rows()
+        cols, rows = self.tui.screen.get_cols_rows()
         wwidth = min(cols, _w('wanted_width', self.target.WANTED_WIDTH))
         return {
             'left': (cols//2)-(wwidth//2),
@@ -55,7 +62,7 @@ class Selectable(urwid.WidgetWrap):
     def __init__(self, contents, on_select=None):
         self.contents = contents
         self.on_select = on_select or {}
-        self._focusable = urwid.AttrMap(self.contents, '', FOCUS_MAP)
+        self._focusable = urwid.AttrMap(self.contents, {}, FOCUS_MAP)
         super(Selectable, self).__init__(self._focusable)
 
     def selectable(self):

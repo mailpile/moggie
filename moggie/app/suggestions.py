@@ -47,10 +47,14 @@ class SuggestionAddAccount(Suggestion):
     ID = 1
 
     # FIXME: Make wanted() check whether accounts have been added.
+    @classmethod
+    def If_Wanted(cls, context, config, **info):
+        # FIXME: Only suggest this if no accounts are configured
+        return cls(context, config)
 
 
 class SuggestionBrowse(Suggestion):
-    MESSAGE = 'Browse for mail on this computer'
+    MESSAGE = 'Browse for mail on this computer or online'
     UI_ACTION = Suggestion.UI_BROWSE
     ID = 2 
     # FIXME: Make wanted() check whether mailboxes have been added.
@@ -76,7 +80,7 @@ class SuggestionEncrypt(Suggestion):
 
 SUGGESTIONS = dict((s.ID, s) for s in [
     SuggestionWelcome,
-#   SuggestionAddAccount, -- FIXME
+    SuggestionAddAccount,
     SuggestionBrowse,
     SuggestionEncrypt,
     ])

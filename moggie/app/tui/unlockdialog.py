@@ -15,11 +15,11 @@ Enter your passphrase (or password) to unlock the app.
     def unlock(self, passphrase):
         passphrase = passphrase.replace('\n', '')
         if passphrase:
-            self.tui_frame.unlock(passphrase)
+            self.tui.unlock(passphrase)
         self._emit('close')
 
-    def __init__(self, tui_frame):
-        self.tui_frame = tui_frame
+    def __init__(self, tui):
+        self.tui = tui
 
         self.unlock_box = EditLine('Passphrase: ',
             multiline=False, mask='*', allow_tab=False, wrap='ellipsis')

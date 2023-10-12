@@ -6,13 +6,13 @@ from .messagedialog import MessageDialog
 
 
 class RetryDialog(MessageDialog):
-    def __init__(self, tui_frame, emsg):
+    def __init__(self, tui, emsg):
         self.emsg = emsg
         self.doingit = False
         self.needed_info = emsg['exc_data'].get('need')
         self.retry = emsg['request']
 
-        super().__init__(tui_frame, emsg['error'])
+        super().__init__(tui, emsg['error'])
 
     def make_buttons(self):
         return [
@@ -55,4 +55,4 @@ class RetryDialog(MessageDialog):
         completed = self.validate()
         if completed == len(self.needed_info):
             self._emit('close')
-            self.tui_frame.conn_manager.send(self.retry)
+            self.tui.conn_manager.send(self.retry)

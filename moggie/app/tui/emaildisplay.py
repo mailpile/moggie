@@ -39,9 +39,9 @@ because other e-mails referenced it.
 However, Moggie has yet to receive a copy.
 """
 
-    def __init__(self, tui_frame, ctx_src_id, metadata,
+    def __init__(self, tui, ctx_src_id, metadata,
             username=None, password=None, selected=False, parsed=None):
-        self.tui_frame = tui_frame
+        self.tui = tui
         self.ctx_src_id = ctx_src_id
         self.metadata = metadata
         self.username = username
@@ -72,7 +72,7 @@ However, Moggie has yet to receive a copy.
         self.send_email_request()
 
         me = 'emaildisplay'
-        _h = self.tui_frame.conn_manager.add_handler
+        _h = self.tui.conn_manager.add_handler
         self.cm_handler_ids = [
             _h(me, ctx_src_id, 'cli:show', self.incoming_parse),
             _h(me, ctx_src_id, 'cli:parse', self.incoming_parse)]
@@ -82,11 +82,11 @@ However, Moggie has yet to receive a copy.
             self.email_display = [self.no_body(self.MESSAGE_MISSING)]
             self.update_content()
 
-        self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
+        self.tui.send_with_context(self.search_obj, self.ctx_src_id)
 
     def cleanup(self):
-        self.tui_frame.conn_manager.del_handler(*self.cm_handler_ids)
-        del self.tui_frame
+        self.tui.conn_manager.del_handler(*self.cm_handler_ids)
+        del self.tui
         del self.metadata
         del self.email
 
@@ -294,7 +294,7 @@ However, Moggie has yet to receive a copy.
                 'Failed to load or parse message, sorry!')]
 
         self.crumb = self.VIEW_CRUMBS[self.view]
-        self.tui_frame.update_topbar()
+        self.tui.update_topbar()
         self.update_content()
 
     def parsed_email_to_widget_list(self):
@@ -350,14 +350,14 @@ However, Moggie has yet to receive a copy.
             return [self.empty_body()]
 
     def no_body(self, message):
-        rows = self.tui_frame.max_child_rows() - len(self.header_lines)
+        rows = self.tui.max_child_rows() - len(self.header_lines)
         return urwid.BoxAdapter(
             SplashCat(decoration=ENVELOPES, message=message),
             rows)
 
     def on_attachment(self, att, filename):
         logging.debug('FIXME: User selected part %s' % att)
-        self.tui_frame.topbar.open_with(SaveOrOpenDialog,
+        self.tui.topbar.open_with(SaveOrOpenDialog,
             'Save or Open Attachment', self, att, filename)
 
     def get_data(self, att, callback=None):
@@ -365,10 +365,10 @@ However, Moggie has yet to receive a copy.
 
     def on_forward(self):
         logging.debug('FIXME: User wants to forward')
-        self.tui_frame.topbar.open_with(
+        self.tui.topbar.open_with(
             MessageDialog, 'FIXME: Forwarding does not yet work!')
 
     def on_reply(self, group=True):
         logging.debug('FIXME: User wants to reply (group=%s)' % group)
-        self.tui_frame.topbar.open_with(
+        self.tui.topbar.open_with(
             MessageDialog, 'FIXME: Repying does not yet work!')

@@ -112,6 +112,8 @@ DEFAULT_PALETTE = [
             ('email_cstate',   'yellow',      'black',     ''),
             ('email_key_sel',  'light green', 'black',     ''),
             ('email_val_sel',  'light green', 'black',     ''),
+            ('browse_cfg',     'light green', 'black',     ''),
+            ('browse_cfg_i',   'dark gray',   'black',     ''),
             ('browse_name',    'white',       'black',     ''),
             ('browse_info',    'dark gray',   'black',     ''),
             ('browse_label',   'dark gray',   'black',     ''),

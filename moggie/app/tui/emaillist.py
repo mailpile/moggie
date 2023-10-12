@@ -14,7 +14,7 @@ import time
 import urwid
 
 from ...email.metadata import Metadata
-from ...api.requests import RequestAddToIndex, RequestCommand
+from ...api.requests import RequestCommand
 from ..suggestions import Suggestion
 
 from .decorations import EMOJI
@@ -194,21 +194,21 @@ class EmailListWalker(urwid.ListWalker):
         if display:
             self.parent.keypress((100,), 'enter')
 
+
 class SuggestAddToIndex(Suggestion):
     MESSAGE = 'Add these messages to the search index'
 
-    def __init__(self, tui_frame, search_obj, ctx_src_id):
-        Suggestion.__init__(self, context, None)  # FIXME: Config?
-        self.tui_frame = tui_frame
+    def __init__(self, parent, search_obj, ctx_src_id):
+        Suggestion.__init__(self, search_obj['context'], None)
+        self.parent = parent
+        self.tui = parent.tui
         self.ctx_src_id = ctx_src_id
-        self.request_add = RequestAddToIndex(
-            context=search_obj['context'],
-            search=search_obj)
+        self.request_add = None  # FIXME
         self._message = self.MESSAGE
         self.adding = False
 
     def action(self):
-        self.tui_frame.send_with_context(self.request_add, self.ctx_src_id)
+        self.tui.send_with_context(self.request_add, self.ctx_src_id)
         self.adding = True
 
     def message(self):
@@ -228,8 +228,8 @@ class EmailList(urwid.Pile):
     VIEW_MESSAGES = 0
     VIEW_THREADS  = 1
 
-    def __init__(self, tui_frame, ctx_src_id, terms, view=None):
-        self.tui_frame = tui_frame
+    def __init__(self, tui, ctx_src_id, terms, view=None):
+        self.tui = tui
         self.ctx_src_id = ctx_src_id
         self.terms = terms
         self.view = view
@@ -256,12 +256,12 @@ class EmailList(urwid.Pile):
         self.emails = self.walker.emails
 
         self.listbox = urwid.ListBox(self.walker)
-        self.suggestions = SuggestionBox(self.tui_frame,
+        self.suggestions = SuggestionBox(self.tui,
             update_parent=self.update_content)
         self.widgets = []
 
         me = 'emaillist'
-        _h = self.tui_frame.conn_manager.add_handler
+        _h = self.tui.conn_manager.add_handler
         self.cm_handler_ids = [
             _h(me, ctx_src_id, 'cli:search', self.incoming_result),
             _h(me, ctx_src_id, 'cli:count', self.incoming_count)]
@@ -272,10 +272,10 @@ class EmailList(urwid.Pile):
         self.update_content()
 
     def cleanup(self):
-        self.tui_frame.conn_manager.del_handler(*self.cm_handler_ids)
+        self.tui.conn_manager.del_handler(*self.cm_handler_ids)
         self.search_obj = None
         self.count_obj = None
-        del self.tui_frame
+        del self.tui
         del self.walker.emails
         del self.emails
         del self.listbox
@@ -286,17 +286,17 @@ class EmailList(urwid.Pile):
         # FIXME: Should probably be using CommandMap !
         if key in (' ',):
             # FIXME: Is there a better way?
-            size = self.tui_frame.screen.get_cols_rows()
+            size = self.tui.screen.get_cols_rows()
             return self.listbox.keypress(size, key)
         if key == 'J':
             # FIXME: Is there a better way?
-            size = self.tui_frame.screen.get_cols_rows()
+            size = self.tui.screen.get_cols_rows()
             self.listbox.keypress(size, 'down')
             self.listbox.keypress(size, 'enter')
             return None
         if key == 'K':
             # FIXME: Is there a better way?
-            size = self.tui_frame.screen.get_cols_rows()
+            size = self.tui.screen.get_cols_rows()
             self.listbox.keypress(size, 'up')
             self.listbox.keypress(size, 'enter')
             return None
@@ -335,11 +335,11 @@ class EmailList(urwid.Pile):
             if self.total_available is not None:
                 self.crumb += ' (%d results)' % self.total_available
         if update:
-            self.tui_frame.update_columns()
+            self.tui.update_columns()
 
     def update_content(self, set_focus=False):
         self.widgets[0:] = []
-        rows = self.tui_frame.max_child_rows()
+        rows = self.tui.max_child_rows()
 
         if not self.emails:
             message = 'Loading ...' if self.loading else 'No mail here!'
@@ -348,6 +348,7 @@ class EmailList(urwid.Pile):
             if set_focus:
                 self.set_focus(0)
             return
+
         elif self.search_obj['req_type'] != 'search':
             pass
             #self.suggestions.set_suggestions([
@@ -378,8 +379,8 @@ class EmailList(urwid.Pile):
 
     def show_email(self, metadata, selected=False):
         self.walker.expand(metadata)
-        self.tui_frame.col_show(self,
-            EmailDisplay(self.tui_frame, self.ctx_src_id, metadata,
+        self.tui.col_show(self,
+            EmailDisplay(self.tui, self.ctx_src_id, metadata,
                 username=self.search_obj.get('username'),
                 password=self.search_obj.get('password'),
                 selected=selected))
@@ -390,18 +391,18 @@ class EmailList(urwid.Pile):
             return
         self.loading = time.time()
 
-        self.want_emails += max(100, self.tui_frame.max_child_rows() * 2)
+        self.want_emails += max(100, self.tui.max_child_rows() * 2)
         if self.search_obj['req_type'] == 'cli:search':
             self.search_obj.set_arg('--limit=', self.want_emails)
             if self.total_available is None:
-                self.tui_frame.send_with_context(
+                self.tui.send_with_context(
                     self.count_obj, self.ctx_src_id)
         elif self.search_obj['req_type'] == 'mailbox':
             self.search_obj['limit'] = None
         else:
             self.search_obj['limit'] = self.want_emails
 
-        self.tui_frame.send_with_context(self.search_obj, self.ctx_src_id)
+        self.tui.send_with_context(self.search_obj, self.ctx_src_id)
 
     def incoming_count(self, source, message):
         if (message['req_id'] == self.count_obj['req_id']
@@ -436,7 +437,7 @@ class EmailList(urwid.Pile):
             hks.extend([' ', ('col_hk', 'x:'), 'Select?'])
             hks.extend([' ', ('col_hk', 'E:'), 'Export'])
         if self.is_mailbox:
-            hks.extend([' ', ('col_hk', 'A:'), 'Add to Index'])
+            hks.extend([' ', ('col_hk', 'A:'), 'Add to moggie'])
         else:
             # FIXME: Mailboxes should have multiple views too
             pass  # hks.extend([' ', ('col_hk', 'V:'), 'Change View'])
@@ -446,13 +447,13 @@ class EmailList(urwid.Pile):
         return hks
 
     def on_toggle_view(self):
-        self.tui_frame.topbar.open_with(
+        self.tui.topbar.open_with(
             MessageDialog, 'FIXME: Toggling views does not work yet')
 
     def on_export(self):
-        self.tui_frame.topbar.open_with(
+        self.tui.topbar.open_with(
             MessageDialog, 'FIXME: Exporting mail does not work yet')
 
     def on_add_to_index(self):
-        self.tui_frame.topbar.open_with(
+        self.tui.topbar.open_with(
             MessageDialog, 'FIXME: Adding to the index does not work yet')

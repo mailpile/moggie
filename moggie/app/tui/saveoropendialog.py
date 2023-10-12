@@ -11,7 +11,7 @@ from .messagedialog import MessageDialog
 class SaveOrOpenDialog(MessageDialog):
     DEFAULT_TARGET = '~/Downloads'
 
-    def __init__(self, tui_frame, title, parent, part, filename, target=None):
+    def __init__(self, tui, title, parent, part, filename, target=None):
         self.parent = parent
         self.part = part
   
@@ -25,7 +25,7 @@ class SaveOrOpenDialog(MessageDialog):
         self.save_to = None
         self.want_open = False
 
-        super().__init__(tui_frame,
+        super().__init__(tui,
             message='Note: The directory must already exist.')
 
     def make_buttons(self):

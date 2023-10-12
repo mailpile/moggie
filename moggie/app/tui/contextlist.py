@@ -26,13 +26,13 @@ class ContextList(urwid.ListBox):
         ('outbox', (('8', 'OUTBOX',   'in:outbox'),)),
         ('sent',   (('9', 'Sent',     'in:sent'),)),
         ('drafts', (('0', 'Drafts',   'in:drafts'),)),
-        ('spam',   (('s', 'Spam',     'in:spam'),)),
+        ('junk',   (('s', 'Junk',     'in:junk'),)),
         ('trash',  (('d', 'Trash',    'in:trash'),))]
     TAG_KEYS = 'wertyu'
 
-    def __init__(self, tui_frame, update_parent=None, expanded=0, first=False):
+    def __init__(self, tui, update_parent=None, expanded=0, first=False):
         self.expanded = expanded
-        self.tui_frame = tui_frame
+        self.tui = tui
         self.update_parent = update_parent or (lambda: None)
         self.first = first
         self.crumb = ''
@@ -57,7 +57,7 @@ class ContextList(urwid.ListBox):
 
         # Configure event listeners, request a list of contexts.
         me = 'contextlist'
-        cm = self.tui_frame.conn_manager
+        cm = self.tui.conn_manager
         cm.add_handler(me, '*', self.search_obj, self.incoming_contexts)
         cm.add_handler(me, '*', self.counts_obj, self.incoming_counts)
         cm.add_handler(me, '*', 'pong', self.incoming_pong)
@@ -67,7 +67,10 @@ class ContextList(urwid.ListBox):
         pass
 
     def keypress(self, size, key):
-        if key in self.global_hks:
+        if key == 'B':
+            self.tui.show_browser(history=False)
+            return None
+        elif key in self.global_hks:
             hk = self.global_hks[key]
             if isinstance(hk, list):
                 hk = hk[0]
@@ -81,6 +84,11 @@ class ContextList(urwid.ListBox):
         self.update_content()
         if activate:
             self.activate_default_view()
+
+    def column_hks(self):
+        hks = []
+        hks.extend([' ', ('col_hk', 'B:'), 'Browse'])
+        return hks
 
     def activate_default_view(self):
         if self.default_action is not None:
@@ -124,7 +132,7 @@ class ContextList(urwid.ListBox):
         else:
             bridge = None
 
-        self.tui_frame.conn_manager.send(message_obj, bridge_name=bridge)
+        self.tui.conn_manager.send(message_obj, bridge_name=bridge)
 
     def add_history(self, desc, recreate, icon='-'):
         self.v_history = [vh for vh in self.v_history if (vh[1] != desc)]
@@ -138,7 +146,7 @@ class ContextList(urwid.ListBox):
 
     def show_overview(self, context):
         logging.debug('FIXME: Should show context %s' % context)
-        self.tui_frame.show_browser(history=False)
+        self.tui.show_browser(history=False)
 
     def show_connections(self, context):
         logging.debug('FIXME: Should show context connections')
@@ -147,7 +155,7 @@ class ContextList(urwid.ListBox):
         logging.debug('FIXME: Should show account details: %s' % account)
 
     def show_search(self, terms, ctx_src_id):
-        return self.tui_frame.show_search_result(
+        return self.tui.show_search_result(
             terms, ctx_src_id, history=False)
 
     def request_counts(self):
@@ -155,7 +163,7 @@ class ContextList(urwid.ListBox):
         self.awaiting_counts = {}
         for ctx_src_id, ctx in self.contexts.items():
             args = ['--multi']
-            all_tags = ctx.get('tags', []) + ctx.get('extra_tags', [])
+            all_tags = ctx.get('tags', []) + ctx.get('ui_tags', [])
             if all_tags:
                 for tag in set(all_tags):
                     tag = tag.lower()
@@ -203,13 +211,13 @@ class ContextList(urwid.ListBox):
         def _sel_ctx(which):
             # This goes through the main frame in case it wants to know
             # things have changed and coordinate with other UI elements.
-            return lambda *x: self.tui_frame.set_context(which)
+            return lambda *x: self.tui.set_context(which)
         def _sel_email(account):
             return lambda *x: self.show_account(account)
         def _sel_search(terms, ctx_src_id):
             return lambda *x: self.show_search(terms, ctx_src_id)
         def _sel_mailbox(path, ctx_src_id):
-            return lambda *x: self.tui_frame.show_mailbox(
+            return lambda *x: self.tui.show_mailbox(
                 path, ctx_src_id, history=False)
         def _sel_history(*args):
             return lambda *x: self.show_history(*args)
@@ -303,25 +311,28 @@ class ContextList(urwid.ListBox):
                     widgets.append(urwid.Divider())
 
                 shown = []
-                all_tags = ctx.get('tags', []) + ctx.get('extra_tags', [])
+                all_tags = ctx.get('tags', []) + ctx.get('ui_tags', [])
                 for tag, items in self.TAG_ITEMS:
                     all_lc_tags = [t.lower() for t in all_tags]
-                    if tag in all_lc_tags:
+                    if tag in all_lc_tags or not all_lc_tags:
                         tc = self.tag_counts[ctx_src_id].get(tag.lower()+'*', 0)
                         for ti, (sc, name, search) in enumerate(items):
-                            os = search and {'enter': _sel_search(
-                                search, ctx_src_id)}
+                            os = search and {
+                                'enter': _sel_search(search, ctx_src_id)}
                             if sc and os:
                                 self.global_hks[sc] = os['enter']
                             sc = (' %s:' % sc) if sc else '   '
                             widgets.append(Selectable(
                                 urwid.Text([
                                     ('hotkey', sc), name,
-                                    ('subtle', _friendly_count(tc) if (ti == 0) else '')]),
+                                    ('subtle', _friendly_count(tc)
+                                               if (ti == 0) else '')]),
                                 on_select=os))
                             if (ti == 0) and os and not shown:
                                 self.default_action = def_act = os['enter']
                         shown.append(tag)
+                if not shown:
+                    pass  # FIXME: Add All Mail?  Add it anyway?
 
                 count = 1
                 unshown = [t for t in all_tags if t.lower() not in shown]

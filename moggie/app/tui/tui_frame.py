@@ -52,6 +52,7 @@ class TuiFrame(urwid.Frame):
 
         self.hidden = 0
         self.crumbs = []
+        self.callbacks = {}
         self.notifications = []
         self.columns = urwid.Columns([self.filler1], dividechars=1)
         self.context_list = ContextList(self,
@@ -104,16 +105,51 @@ class TuiFrame(urwid.Frame):
                 await asyncio.sleep(0.25)
             else:
                 await asyncio.sleep(1)
-            expired = time.time() - 20
+            now = time.time()
             self.notifications = [
-                n for n in self.notifications if n['ts'] > expired]
+                n for n in self.notifications if n['ts'] > (now-20)]
+            for req_id, details in list(self.callbacks.items()):
+                if details['deadline'] < now:
+                    if details['on_error']:
+                        details['on_error']('Timed out')
+                    del self.callbacks[req_id]
 
-    def send_with_context(self, message_obj, context=None):
+    def show_modal(self, cls, *args, **kwargs):
+        return self.topbar.open_with(cls, *args, **kwargs)
+
+    def showing_modal(self):
+        return self.topbar.showing_popup()
+
+    def request_failed_modal(self, error):
+        pass
+
+    def send_with_context(self, message_obj,
+            context=None, on_reply=None, on_error=None, timeout=None):
+        if on_reply or on_error:
+            self.callbacks[message_obj['req_id']] = {
+                'message': message_obj,
+                'deadline': time.time() + (timeout or 24*3600),
+                'on_reply': on_reply,
+                'on_error': on_error}
+
         return self.context_list.send_with_context(message_obj, context)
 
     def handle_bridge_messages(self, bridge_name, message):
         #logging.debug('Incoming(%s): %s' % (bridge_name, message))
         try:
+            callback_info = self.callbacks.get(message.get('req_id'))
+            if callback_info:
+                try:
+                    callback_info['on_reply'](message)
+                except Exception as e:
+                    logging.exception('Callback handler asploded')
+                    try:
+                        callback_info['on_error'](e)
+                    except:
+                        logging.exception('Callback error handler asploded')
+                finally:
+                    del self.callbacks[message['req_id']]
+
             for widget in self.all_columns:
                 if hasattr(widget, 'handle_bridge_messages'):
                     try:
@@ -123,7 +159,7 @@ class TuiFrame(urwid.Frame):
 
             if 'error' in message and 'exception' in message:
                 # This only applies if we have a NeedInfo ?
-                self.topbar.open_with(RetryDialog, message)
+                self.show_modal(RetryDialog, message)
 
             elif message.get('req_type') in ('notification', 'unlocked'):
                 if message['req_type'] == 'unlocked':
@@ -164,7 +200,7 @@ class TuiFrame(urwid.Frame):
     def show_search_result(self, terms, context=None, history=True):
         # FIXME: The app should return an error and we retry
         if self.is_locked:
-            self.topbar.open_with(UnlockDialog)
+            self.show_modal(UnlockDialog)
             return
 
         _, ctx_src_id = self.context_list.get_context_and_src_ids(context)
@@ -183,7 +219,7 @@ class TuiFrame(urwid.Frame):
         self.conn_manager.send(RequestUnlock(passphrase))
 
     def ui_change_passphrase(self):
-        self.topbar.open_with(ChangePassDialog)
+        self.show_modal(ChangePassDialog)
 
     def change_passphrase(self, old_passphrase, new_passphrase,
             disconnect=False):
@@ -411,7 +447,12 @@ class TuiFrame(urwid.Frame):
             cols_rows = self.screen.get_cols_rows()
             if key == 'Q':
                 self.ui_quit()
-            elif key in ('q', 'esc', 'backspace'):
+            elif self.showing_modal():
+                if key in ('esc',):
+                    self.topbar.target._emit('close')
+                return key
+
+            if key in ('q', 'esc', 'backspace'):
                 if len(self.all_columns) > 1:
                     self.col_remove(self.all_columns[-1])
                 elif key == 'q':
@@ -425,9 +466,9 @@ class TuiFrame(urwid.Frame):
             # FIXME: Searching or unlocking is a global thing
             elif key == '/':
                 if self.is_locked:
-                    self.topbar.open_with(UnlockDialog)
+                    self.show_modal(UnlockDialog)
                 else:
-                    self.topbar.open_with(SearchDialog)
+                    self.show_modal(SearchDialog)
 
             # FIXME: This definitely belongs elsewhere!
             elif key == 'C':

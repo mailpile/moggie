@@ -43,11 +43,11 @@ Use an asterisk (*) to search for word fragments.
                 return term + '*'
             terms = ' '.join(_fuzz(w) for w in terms.split(' ') if w)
         if terms:
-            self.tui_frame.show_search_result(terms)
+            self.tui.show_search_result(terms)
         self._emit('close')
 
-    def __init__(self, tui_frame):
-        self.tui_frame = tui_frame
+    def __init__(self, tui):
+        self.tui = tui
         close_button = CloseButton(
             on_select=lambda b: self._emit('close'), style='popsubtle')
 

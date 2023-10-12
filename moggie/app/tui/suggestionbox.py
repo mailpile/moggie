@@ -10,12 +10,12 @@ from .widgets import *
 class SuggestionBox(urwid.Pile):
     DISMISSED = set()
 
-    def __init__(self, tui_frame,
+    def __init__(self, tui,
             update_parent=None,
             fallbacks=None, suggestions=None, max_suggestions=3,
             omit_actions=None):
 
-        self.tui_frame = tui_frame
+        self.tui = tui
         self.update_parent = update_parent or (lambda: None)
         self.omit_actions = omit_actions or []
         self.max_suggestions = max_suggestions
@@ -35,7 +35,7 @@ class SuggestionBox(urwid.Pile):
             if _id in SuggestionBox.DISMISSED:
                 continue
             sg_obj = SUGGESTIONS[_id].If_Wanted(
-                context, None, ui_moved=self.tui_frame.user_moved)
+                context, None, ui_moved=self.tui.user_moved)
             if ((sg_obj is not None) and
                     (sg_obj.UI_ACTION not in self.omit_actions)):
                 suggest.append(sg_obj)
@@ -57,13 +57,13 @@ class SuggestionBox(urwid.Pile):
         def activate(*ignored):
             act = suggestion.action()  # FIXME
             if act == Suggestion.UI_QUIT:
-                self.tui_frame.ui_quit()
+                self.tui.ui_quit()
             elif act == Suggestion.UI_DISMISS:
                 self._on_dismiss(suggestion)()
             elif act == Suggestion.UI_BROWSE:
-                self.tui_frame.show_browser(history=False)
+                self.tui.show_browser(history=False)
             elif act == Suggestion.UI_ENCRYPT:
-                self.tui_frame.ui_change_passphrase()
+                self.tui.ui_change_passphrase()
             elif isinstance(act, RequestBase):
                 pass  # FIXME: Send this request to the backend
         return activate

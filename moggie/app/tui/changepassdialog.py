@@ -87,10 +87,10 @@ A suggestion: %s
                         self.update_pile('', focus=2)
 
             elif newp1 == newp2:
-                # self.tui_frame.change(passphrase)
+                # self.tui.change(passphrase)
                 self.update_pile(
                     'Updating passphrase and rotating keys...', focus=5)
-                self.tui_frame.change_passphrase(oldp, newp1,
+                self.tui.change_passphrase(oldp, newp1,
                      disconnect=self.disconnect.get_state())
                 emit_soon(self, 'close', seconds=2)
 
@@ -118,8 +118,8 @@ A suggestion: %s
         self.pile.contents = ([(w, ('pack', None)) for w in widgets])
         self.pile.focus_position = focus
 
-    def __init__(self, tui_frame):
-        self.tui_frame = tui_frame
+    def __init__(self, tui):
+        self.tui = tui
         self.doingit = False
 
         self.disconnect = urwid.CheckBox('Close active sessions.', False)
@@ -127,7 +127,7 @@ A suggestion: %s
         self.close_button = CloseButton(
             lambda x: self._emit('close'), style='popsubtle')
 
-        if self.tui_frame.was_locked:
+        if self.tui.was_locked:
             self.old_pass = urwid.Edit('Old passphrase: ',
                 multiline=True, mask='*', allow_tab=False, wrap='clip')
         else:
