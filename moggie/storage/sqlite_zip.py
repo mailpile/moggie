@@ -60,8 +60,8 @@ class ZipEncryptedSQLite3:
                              and self.db.total_changes != self.saved_at
                              and time.time() > self.save_next):
                         logging.debug(
-                            'sqlite_zip(%s): Background save at %d changes'
-                            % (self.db_filepath, self.db.total_changes))
+                            '[sqlite_zip] Background save at %d changes: %s'
+                            % (self.db.total_changes, self.db_filepath))
                         self.save()
                         self.save_next = int(
                             time.time() + self.save_min_interval)
@@ -134,7 +134,7 @@ class ZipEncryptedSQLite3:
                 zf.writestr(fi, data)
                 zf.close()
 
-            logging.debug('sqlite_zip(%s): Saved' % (self.db_filepath,))
+            logging.debug('[sqlite_zip] Saved %s' % (self.db_filepath,))
 
         return True
 

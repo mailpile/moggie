@@ -28,6 +28,8 @@ from ..app.core import AppCore
 from ..util.dumbcode import to_json, from_json
 from .public import PublicWorker, RequestTimer
 
+from moggie import Moggie
+
 
 @async_url('/')
 @http_require(secure_transport=True, csrf=False)
@@ -45,7 +47,7 @@ async def web_root(req_env):
         asyncio.get_event_loop().create_task(cmd.web_run())
         return {'mimetype': 'text/html; charset="utf-8"', 'eof': False}
     except Exception as e:
-        logging.exception('web_root failed: %s' % e)
+        logging.exception('[httpd] web_root failed: %s' % e)
         return {'code': 500, 'msg': 'Failed', 'body': 'Sorry\n'}
 
 
@@ -104,7 +106,7 @@ async def web_cli(req_env):
         cmd = await command.WebRunnable(
             req_env['worker'], access, frame, conn, req_env, args)
     except PermissionError as e:
-        logging.debug('PermissionError in WebRunnable: %s' % e)
+        logging.debug('[httpd] PermissionError in WebRunnable: %s' % e)
         return {'code': 403, 'msg': str(e), 'body': str(e)}
 
     asyncio.get_event_loop().create_task(cmd.web_run())
@@ -153,7 +155,7 @@ async def web_treeview(req_env):
         except PermissionError as e:
             code, msg, status = 403, str(e), 'rej'
         except:
-            logging.exception('web_pile failed')
+            logging.exception('[httpd] web_pile failed')
 
         # If we get this far, we had an internal error of some sort.
         timer.status = status
@@ -183,7 +185,7 @@ async def web_websocket(opcode, msg, conn, ws,
                 await conn.send(result['body'])
                 return
         except:
-            logging.exception('websocket failed: %s' % (msg,))
+            logging.exception('[httpd] websocket failed: %s' % (msg,))
         await conn.send(to_json({'error': code, 'result': result}))  #FIXME
 
 
@@ -215,7 +217,7 @@ async def web_api(req_env):
         except PermissionError as e:
             code, msg, status = 403, str(e), 'rej'
         except:
-            logging.exception('web_api failed')
+            logging.exception('[httpd] web_api failed')
 
         # If we get this far, we had an internal error of some sort.
         timer.status = status
@@ -243,7 +245,7 @@ def web_themed(req_env):
         return req_env['app'].get_static_asset(req_env.request_path[8:],
             themed=True)
     except:
-        logging.exception('Theming failed')
+        logging.exception('[httpd] Theming failed')
         return {'code': 404, 'ttl': 3600, 'msg': 'Not Found'}
 
 
@@ -348,19 +350,19 @@ class AppWorker(PublicWorker):
         access_requires(req_env, **req_kwargs)
         req_acl = req_env.get('access')
         if 'auth_basic' in req_env:
-            # FIXME: If we have a username and password, yay
             username, password = req_env['auth_basic']
-            logging.warning('FIXME: BASIC AUTH')
+            logging.warning('[httpd] FIXME: basic auth is not yet implemented')
         elif 'auth_bearer' in req_env:
             acl = self.app.config.access_from_token(
                 req_env['auth_bearer'],
                 super_token=self.auth_token)
-            logging.debug('Access: %s = %s' % (acl.config_key, acl))
+            logging.debug('[httpd] Access is %s=%s' % (acl.name, acl))
             return acl
         elif req_acl:
-            logging.debug('Access: %s' % (req_acl,))
+            logging.debug('[httpd] Access is %s=%s' % (req_acl.name, req_acl))
             return req_acl
         elif allow_anonymous:
+            logging.debug('[httpd] Access is anonymous')
             return None
         raise PermissionError('Please login')
 

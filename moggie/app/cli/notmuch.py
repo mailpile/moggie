@@ -1251,6 +1251,7 @@ class CommandCount(CLICommand):
     """
     NAME = 'count'
     ROLES = AccessConfig.GRANT_READ
+    WEBSOCKET = False
     WEB_EXPOSE = True
     OPTIONS = [[
         (None, None, 'search'),

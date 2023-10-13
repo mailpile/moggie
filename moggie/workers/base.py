@@ -200,8 +200,8 @@ class BaseWorker(Process):
             signal.signal(signal.SIGUSR2, self.log_more)
         configure_logging(
             type(self).__name__, stdout=self.LOG_STDOUT, level=self.log_level)
-        logging.info('Started %s(%s), pid=%d'
-            % (type(self).__name__, self.name, os.getpid()))
+        logging.info('[%s] Started %s, pid=%d'
+            % (self.name, type(self).__name__, os.getpid()))
 
         close_private_fds()
         try:
@@ -230,8 +230,8 @@ class BaseWorker(Process):
             logging.exception('Crashed!')
         finally:
             self._sock.close()
-            logging.info('Stopped %s(%s), pid=%d'
-                % (type(self).__name__, self.name, os.getpid()))
+            logging.info('[%s] Stopped %s, pid=%d'
+                % (self.name, type(self).__name__, os.getpid()))
             try:
                 os.remove(self._status_file)
                 logging.shutdown()
@@ -361,12 +361,13 @@ class BaseWorker(Process):
             conn = self._conn('ping', timeout=timeout, secret='-')
             result = conn.recv(len(self.HTTP_403))
         except Exception as e:
-            logging.debug('PING failed (%s)' % e)
+            logging.debug('[%s] PING failed (%s)' % (self.name, e))
             result = None
         if conn:
             conn.close()
         if (result != self.HTTP_403):
-            logging.debug('Unexpected PING response: %s' % result)
+            logging.debug(
+                '[%s] Unexpected PING response: %s' % (self.name, result))
         return (result == self.HTTP_403)
 
     def connect(self, autostart=True, quick=False):
@@ -381,12 +382,12 @@ class BaseWorker(Process):
 
             self.url = self.url_parts = None
             if self.exitcode is not None:
-                logging.debug('Cannot relaunch %s(%s)'
-                    % (type(self).__name__, self.name,))
+                logging.debug('[%s] Cannot relaunch %s'
+                    % (self.name, type(self).__name__))
                 return None
 
-            logging.debug('Launching %s(%s)'
-                % (type(self).__name__, self.name,))
+            logging.info('[%s] Launching %s'
+                % (self.name, type(self).__name__))
 
             # Run in a separate thread, to avoid asyncio clashes
             th = threading.Thread(target=self.start)
@@ -396,7 +397,9 @@ class BaseWorker(Process):
             for t in range(1, 25):
                 if self._load_url() and self._ping():
                     break
-                logging.debug('Still not responding, waiting ...')
+                if t > 2:
+                    logging.debug(
+                        '[%s] Still not responding, waiting ...' % self.name)
                 time.sleep(0.05 * t)
 
             if self.url and self._ping():
@@ -405,8 +408,8 @@ class BaseWorker(Process):
         return None
 
     def notify(self, message, data=None, caller=None):
-        logging.info('Notify%s%s: %s'
-            % (' ' if caller else '', caller or '', message))
+        logging.info('[%s] Notify%s%s: %s'
+            % (self.name, ' ' if caller else '', caller or '', message))
         if self._notify:
             try:
                 notification = {'message': message}
@@ -418,9 +421,11 @@ class BaseWorker(Process):
             except KeyboardInterrupt:
                 raise
             except PermissionError:
-                logging.error('Failed to notify %s' % self._notify)
+                logging.error(
+                    '[%s] Failed to notify %s' % (self.name, self._notify))
             except:
-                logging.exception('Failed to notify %s' % self._notify)
+                logging.exception(
+                    '[%s] Failed to notify %s' % (self.name, self._notify))
 
     def callback_url(self, fn):
         return '%s/%s' % (self.url, fn)
@@ -536,8 +541,8 @@ class BaseWorker(Process):
         on_connect()
 
         if upload:
-            logging.debug(
-                'async_call(%s), uploading %d bytes'  % (fn, len(upload)))
+            #logging.debug(
+            #    'async_call(%s), uploading %d bytes'  % (fn, len(upload)))
             try:
                 conn.settimeout(len(upload) // 10)
                 await loop.sock_sendall(conn, upload)
@@ -547,7 +552,7 @@ class BaseWorker(Process):
                 conn.close()
                 raise
         else:
-            logging.debug('async_call(%s)'  % (fn,))
+            pass  #logging.debug('async_call(%s)'  % (fn,))
 
         try:
             conn.settimeout(None)
@@ -1038,7 +1043,8 @@ class WorkerPool:
                 else:
                     return await worker.async_call(loop, fn, *args, **kwa)
             except socket.error as e:
-                logging.exception('socket.error in WorkerPool.async_call')
+                logging.exception(
+                    '[%s] socket.error in WorkerPool.async_call' % self.name)
                 w_tuple[2] = None
             finally:
                 if w_tuple:

@@ -1,3 +1,17 @@
+# This is moggie's scheduler.
+#
+# It currently supports crontab-like scheduling, as well as internal
+# one-off scheduling of events. Some events live in $MOGGIE_HOME/crontab,
+# but others live in the encrypted SQLite3 database (crontab.sqz).
+#
+# FIXME: It will probably also make sense to allow scheduling actions
+#        based on things that happen within the app, e.g. new mail arrives
+# or the user has been using the app for N weeks, or something of that
+# nature, not just time. This will require extending the crontab(5)
+# syntax and defining a vocabulary of internal events. But exposing that
+# logic to the crontab file so the user can see it and tweak it would be
+# a very nice thing.
+#
 import copy
 import datetime
 import logging
@@ -180,7 +194,7 @@ class Cron:
 
     def _log_schedule(self,
             _id, action, next_run, mins, hrs, mdays, mnths, wkdays):
-        logging.debug('cron: scheduled %s for %d [%s %s %s %s %s] %s' % (
+        logging.debug('[cron] Scheduled %s for %d [%s %s %s %s %s] %s' % (
             _id, next_run,
             mins or '*', hrs or '*', mdays or '*', mnths or '*', wkdays or '*',
             action))
@@ -204,14 +218,14 @@ class Cron:
                 async def _async_runner():
                     nonlocal _id, action, action
                     args = shlex.split(action % self._eval_env())[1:]
-                    logging.info('cron(%s/moggie): %s' % (_id, args))
+                    logging.info('[cron] %s/moggie: %s' % (_id, args))
                     await self._moggie.connect().async_run(*args)
                 return (True, _async_runner)
             else:
                 def _runner():
                     nonlocal _id, action, action
                     args = shlex.split(action % self._eval_env())[1:]
-                    logging.info('cron(%s/moggie): %s' % (_id, args))
+                    logging.info('[cron] %s/moggie: %s' % (_id, args))
                     self._external_moggie.connect().run(*args)
 
         elif action[:1] in ('!', '~', os.path.sep):
@@ -219,13 +233,13 @@ class Cron:
             def _runner():
                 nonlocal _id, action
                 action = action % self._eval_env()
-                logging.info('cron(%s/sh): %s' % (_id, action))
+                logging.info('[cron] %s/sh: %s' % (_id, action))
                 os.system(action)
 
         else:
             def _runner():
                 nonlocal _id, action
-                logging.info('cron(%s/py): %s' % (_id, action))
+                logging.info('[cron] %s/py: %s' % (_id, action))
                 eval(action, self._eval_env())
 
         if prefer_async:
@@ -242,7 +256,7 @@ class Cron:
             except KeyboardInterrupt:
                 raise
             except:
-                logging.exception('cron(%s) FAILED' % (_id,))
+                logging.exception('[cron] %s FAILED' % (_id,))
 
         at = threading.Thread(target=_thread_runner)
         at.daemon = True
@@ -262,7 +276,7 @@ class Cron:
         sql = """
             SELECT id, action, minutes, hours, month_days, months, weekdays
               FROM crontab
-             WHERE next_run < ?"""
+             WHERE next_run <= ?"""
         if context:
             sql += ' AND context = ?'
             args = (now, context)

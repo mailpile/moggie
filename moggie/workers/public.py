@@ -102,8 +102,15 @@ class MoggieConnPool(uPageKiteConnPool):
 
 
 class MoggiePageKiteManager(uPageKite):
+    def __init__(self, app_worker, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.app_worker = app_worker
+
     def get_conn_pool(self, conns):
         return MoggieConnPool(conns, self)
+
+    async def tick(self, **attrs):
+        await self.app_worker.app.tick(attrs)
 
 
 class RequestTimer:
@@ -375,7 +382,7 @@ class PublicWorker(BaseWorker):
                 handler=self.httpd.handle_http_request)
             self.kite.listening_port = port
 
-            self.pk_manager = MoggiePageKiteManager([self.kite],
+            self.pk_manager = MoggiePageKiteManager(self, [self.kite],
                 socks=[self.kite],
                 public=self._is_public(),
                 uPK=uPK)

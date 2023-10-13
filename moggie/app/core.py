@@ -1,17 +1,3 @@
-# This is moggie's scheduler.
-#
-# It currently supports crontab-like scheduling, as well as internal
-# one-off scheduling of events. Some events live in $MOGGIE_HOME/crontab,
-# but others live in the encrypted SQLite3 database (crontab.sqz).
-#
-# FIXME: It will probably also make sense to allow scheduling actions
-#        based on things that happen within the app, e.g. new mail arrives
-# or the user has been using the app for N weeks, or something of that
-# nature, not just time. This will require extending the crontab(5)
-# syntax and defining a vocabulary of internal events. But exposing that
-# logic to the crontab file so the user can see it and tweak it would be
-# a very nice thing.
-
 import asyncio
 import base64
 import copy
@@ -97,7 +83,6 @@ main app worker. Hints:
             b'rpc/set_secret':        (True, self.rpc_set_secret),
             b'rpc/crypto_status':     (True, self.rpc_crypto_status)}
 
-        self._schedule = []
         self.counter = int(time.time()) - 1663879773
         self.metadata = None
         self.importer = None
@@ -105,7 +90,6 @@ main app worker. Hints:
         self.openpgp_workers = {}
         self.stores = {}
         self.search = None
-        self.ticker = None
         self.cron = None
         self.crontab_internal = "*/5 * * * *  app.load_crontab()"
         self.crontab_last_loaded = 0
@@ -132,35 +116,20 @@ main app worker. Hints:
                 self.crontab_last_loaded = cron_mtime
                 with open(crontab_fn, 'r') as fd:
                     self.cron.parse_crontab(fd.read())
-                logging.info('Loaded crontab from %s' % crontab_fn)
+                logging.info('[crontab] Loaded from %s' % crontab_fn)
         except Exception as e:
-            logging.exception('Failed to read crontab: %s' % crontab_fn)
+            logging.exception('[crontab] Read failed: %s' % crontab_fn)
 
-    async def tick(self):
-        now = int(time.time())
-
+    async def tick(self, log_attrs):
         if self.storage:
-            self.storage.housekeeping()
-        logging.debug('Have %d live workers, reaping zombies.'
-            % len(multiprocessing.active_children()))
+            self.storage.housekeeping()  # Reaps zombies
 
-        if self.cron is not None:
-            await self.cron.async_run_scheduled()
-            self.schedule(now + 60, self.tick())
-        else:
-            self.schedule(now + 120, self.tick())
+        log_attrs['workers'] = 1 + len(multiprocessing.active_children())
+        del log_attrs['mem_free']
+        logging.info('[app] Still alive! '
+            + '; '.join('%s=%s' % pair for pair in log_attrs.items()))
 
-    def schedule(self, when, job):
-        self._schedule.append((when, job))
-        self._schedule.sort(key=lambda i: (i[0], repr(i[1])))
-
-    async def ticker_task(self):
-        while True:
-            now = time.time()
-            while self._schedule and self._schedule[0][0] <= now:
-                t, job = self._schedule.pop(0)
-                asyncio.create_task(job)
-            await asyncio.sleep(1)
+        await self.cron.async_run_scheduled()
 
     def _get_openpgp_worker(self, ctx):
         from moggie.workers.openpgp import OpenPGPWorker
@@ -245,16 +214,11 @@ main app worker. Hints:
         notify_url = self.worker.callback_url('rpc/notify')
         log_level = self.worker.log_level
 
-        if self.ticker is None:
-            self._ticker = self.ticker_task()
-            loop = asyncio.get_event_loop()
-            loop.create_task(self._ticker)
-            loop.create_task(self.tick())
-
         if start_encrypted:
             if not self.config.has_crypto_enabled:
                 from moggie.crypto.passphrases import generate_passcode
-                logging.info('Generating initial (unlocked) encryption keys.')
+                logging.info(
+                    '[app] Generating initial (unlocked) encryption keys.')
                 passphrase = generate_passcode(groups=5)
                 self.config[self.config.SECRETS]['passphrase'] = passphrase
                 self.config.provide_passphrase(passphrase)
@@ -262,7 +226,7 @@ main app worker. Hints:
 
             if not self.start_encrypting_workers():
                 logging.warning(
-                    'Failed to start encrypting workers. Need login?')
+                    '[app] Failed to start encrypting workers. Need login?')
 
         self.storage = StorageWorkers(self.worker.worker_dir,
             metadata=self.metadata,
@@ -425,11 +389,9 @@ main app worker. Hints:
 
         # FIXME: The access object should give us some more details, e.g.
         #        IP address if the user is remote - this is our audit log!
-        logging.info('[config] %s [%s] for %s' % (
+        logging.info('[api/config] %s [%s] for %s' % (
             'Creating' if create else 'Updating', section, access.name))
 
-        logging.info('SET: create=%s section=%s updates=%s'
-            % (create, section, updates))
         with self.config:
           for update in updates:
             op, var = update['op'], update.get('variable')
@@ -477,7 +439,7 @@ main app worker. Hints:
                 self.config.all_access[section].new_token(ttl=ttl)
             else:
                 errors.append('Unknown op: %s(%s)' % (op, var))
-                logging.info('ConfigSet error: %s' % errors[-1])
+                logging.info('[api/config] error: %s' % errors[-1])
 
         return ResponseConfigSet(api_request, result, error=', '.join(errors))
 
@@ -744,11 +706,11 @@ main app worker. Hints:
                     r2 = await md.with_caller(conn_id).async_add_metadata(
                         loop, r1['emails'], update=True)
                     hits = r2['added'] + r2['updated']
-                    logging.info('Added %d messages to index' % len(hits))
+                    logging.info(
+                        '[api/tag] Added %d messages to index' % len(hits))
 
                 tag_op_sets[i] = (tagops, hits)
 
-        logging.info('Tagopsets: %s' % (tag_op_sets,))
         results = await self.search.with_caller(conn_id).async_tag(loop,
             tag_op_sets,
             tag_namespace=tag_ns,
@@ -824,7 +786,7 @@ main app worker. Hints:
                 return ResponseNotification({
                     'message': 'Passphrase incorrect or permission denied.'})
             except:
-                logging.exception('Change Passphrase failed')
+                logging.exception('[api/changepass] Change Passphrase failed')
             finally:
                 self.start_workers()
         return None
@@ -866,7 +828,7 @@ main app worker. Hints:
         with config:
             for req in requests:
                 if not req['path']:
-                    logging.exception('Path is required: %s' % req)
+                    logging.exception('[api/paths] Path is required: %s' % req)
                     raise ValueError('Path is required')
                 context.set_path(req['path'],
                     label=req.get('label'),
@@ -917,12 +879,12 @@ main app worker. Hints:
             if only_inboxes:
                 _tags = lambda p: pols[p].get('tags', [])
                 paths = [p for p in pols if 'inbox' in _tags(p)]
-                logging.debug('Import: configured Inboxes: %s' % paths)
+                logging.debug('[api/import] Configured Inboxes: %s' % paths)
             else:
                 paths = list(pols.keys())
-                logging.debug('Import: configured paths: %s' % paths)
+                logging.debug('[api/import] Configured paths: %s' % paths)
         else:
-            logging.debug('Import: requested paths: %s' % paths)
+            logging.debug('[api/import] Requested paths: %s' % paths)
 
         to_import = {}
         recursed = set()
@@ -938,7 +900,8 @@ main app worker. Hints:
                     username=api_request.get('username'),
                     password=api_request.get('password'))
                 if not result:
-                    logging.debug('Failed to get info for %s' % path)
+                    logging.debug(
+                        '[api/import] Failed to get info for %s' % path)
                     continue
 
                 contents = result.get('contents') or []
@@ -953,18 +916,22 @@ main app worker. Hints:
                     if r.get('magic'):
                         ppol = context.get_path_policies(rpath).get(rpath, {})
                         if only_inboxes and 'inbox' not in ppol['tags']:
-                            logging.debug('Not an Inbox: %s/%s' % (r, ppol))
+                            logging.debug(
+                                '[api/import] Not an Inbox: %s/%s' % (r, ppol))
                             continue
                         elif (not import_full
                                 and 'mtime' in r
                                 and ppol.get('updated')):
                             if int(ppol['updated'], 16) >= r['mtime']:
-                                logging.debug('Unchanged: %s/%s' % (r, ppol))
+                                logging.debug(
+                                    '[api/import] Unchanged: %s' % (r['path'],))
                                 continue
-                        logging.debug('Should import: %s/%s' % (r, ppol))
+                        logging.debug(
+                            '[api/import] Should import: %s with %s'
+                            % (r['path'], ppol))
                         to_import[rpath] = ppol
             except:
-                logging.exception('Failed to check path %s' % path)
+                logging.exception('[api/import] Failed to check path %s' % path)
 
         def _import_path(context, req, path, policy, compact_now):
             policy_tags = (policy.get('tags') or '').split(',')
@@ -1077,24 +1044,33 @@ main app worker. Hints:
         try:
             api_req = to_api_request(client_request)
         except KeyError as e:
-            logging.warning('Invalid request: %s' % e)
+            logging.warning('[api] Invalid request: %s' % e)
             return {'code': 500}
 
         try:
+            who = 'internal' if access is True else access.name
+            if type(api_req) == RequestPing:
+                pass
+            else:
+                what = api_req['req_type'] + ('%s' % api_req.get('args', ''))
+                if len(what) > 120:
+                    what = what[:118] + '..'
+                fmt = '[api] %s/%s requested %s'
+                logging.info(fmt % (who, (conn_id or 'internal'), what))
             result = await self._route_api_request(conn_id, access, api_req)
         except APIException as exc:
             result = error = exc.as_dict()
             error['error'] = str(exc)
             error['request'] = api_req
             del error['traceback']
-            logging.debug('Returning error %s: %s %s'
+            logging.debug('[api] Returning error %s: %s %s'
                 % (exc.__class__.__name__, error['error'], error['exc_data']))
         except PermissionError as exc:
             result = error = APIAccessDenied().as_dict()
             error['error'] = str(exc)
             error['request'] = api_req
             del error['traceback']
-            logging.debug('Returning error %s: %s %s'
+            logging.debug('[api] Returning error %s: %s %s'
                 % (exc.__class__.__name__, error['error'], error['exc_data']))
 
         if internal:
@@ -1137,7 +1113,7 @@ main app worker. Hints:
     def get_static_asset(self, path, themed=False):
         mimetype = self.EXT_TO_MIME.get(path.rsplit('.', 1)[-1])
         if '..' in path or not mimetype:
-            logging.debug('Rejecting path: %s' % path)
+            logging.debug('[assets] Rejecting path: %s' % path)
             raise ValueError('Naughty path')
         for prefix in self.asset_paths:
             filepath = os.path.join(prefix, path)
@@ -1171,11 +1147,12 @@ main app worker. Hints:
             if access:
                 access = self.config.all_access[access]
             else:
+                # FIXME: Understand and document why this is safe
                 access = self.config.access_zero()
             rv = await self.api_request(None, access, request, internal=True)
             self.worker.reply_json(rv, **kwargs['reply_kwargs'])
         except:
-            logging.exception('rpc_api failed %s' % (request,))
+            logging.exception('[api/rpc] Failed %s' % (request,))
             self.worker.reply_json({'error': 'FIXME'}, **kwargs['reply_kwargs'])
 
     def rpc_ask_secret(self, context, resource, **kwargs):

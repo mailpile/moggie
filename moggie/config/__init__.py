@@ -254,9 +254,10 @@ class AccessConfig(ConfigSectionProxy):
         for t in self.tokens:
             tsig = self.make_signature(*data, token=t)
             if sig == tsig:
-                logging.debug('OK: %s == %s' % (sig, tsig))
+                #logging.debug('OK: %s == %s' % (sig, tsig))
                 return t
-            logging.debug('BAD: %s != %s' % (sig, tsig))
+            logging.warning(
+                '[config] Invalid signature: %s != %s' % (sig, tsig))
         return False
 
     def grants(self, context, roles):
@@ -507,7 +508,8 @@ class ContextConfig(ConfigSectionProxy):
                 try:
                     p, l, a, t, wp, cp, u = path_policy.rsplit(b':', 6)
                 except ValueError:
-                    logging.error('Invalid path policy: %s' % path_policy)
+                    logging.error(
+                        '[config] Invalid path policy: %s' % path_policy)
                     continue
                 if p == path:
                     if _partial:
@@ -533,7 +535,7 @@ class ContextConfig(ConfigSectionProxy):
             if _remove and _null_entry(ee):
                 return False
 
-            logging.debug('New path(%s) policy entry: %s' % (path, ee))
+            logging.debug('[config] New path policy: %s' % (ee,))
             self.paths.append(ee)
             # Note: get_path_policies() inheritance depends on us being
             #       sorted so parent directories come first.
