@@ -1,6 +1,8 @@
+import copy
 import logging
 import re
 import sys
+import time
 import urwid
 
 from ...email.addresses import AddressInfo
@@ -8,11 +10,15 @@ from ...email.metadata import Metadata
 from ...email.parsemime import MessagePart
 from ...api.requests import RequestCommand
 from ...util.dumbcode import to_json
+from ...util.mailpile import sha1b64
 
 from .widgets import *
 from .messagedialog import MessageDialog
 from .decorations import EMOJI, ENVELOPES
 from .saveoropendialog import SaveOrOpenDialog
+
+
+RESULT_CACHE = {}
 
 
 class EmailDisplay(urwid.ListBox):
@@ -68,21 +74,20 @@ However, Moggie has yet to receive a copy.
         adjust = 3 if selected else 2
         self.set_focus(len(self.header_lines) - adjust)
 
-        self.search_obj = self.get_search_obj()
-        self.send_email_request()
-
         me = 'emaildisplay'
         _h = self.tui.conn_manager.add_handler
         self.cm_handler_ids = [
             _h(me, ctx_src_id, 'cli:show', self.incoming_parse),
             _h(me, ctx_src_id, 'cli:parse', self.incoming_parse)]
 
-    def send_email_request(self):
-        if self.metadata.get('missing'):
-            self.email_display = [self.no_body(self.MESSAGE_MISSING)]
-            self.update_content()
+        # Expire things from our result cache
+        deadline = time.time() - 600
+        expired = [k for k, (t, c) in RESULT_CACHE.items() if t < deadline]
+        for k in expired:
+            del RESULT_CACHE[k]
 
-        self.tui.send_with_context(self.search_obj, self.ctx_src_id)
+        self.search_id, self.search_obj = self.get_search_obj()
+        self.send_email_request()
 
     def cleanup(self):
         self.tui.conn_manager.del_handler(*self.cm_handler_ids)
@@ -221,7 +226,7 @@ However, Moggie has yet to receive a copy.
     def toggle_view(self):
         next_view = (self.VIEWS.index(self.view) + 1)  % len(self.VIEWS)
         self.view = self.VIEWS[next_view]
-        self.search_obj = self.get_search_obj()
+        self.search_id, self.search_obj = self.get_search_obj()
         self.send_email_request()
 
     def get_search_obj(self):
@@ -257,7 +262,8 @@ However, Moggie has yet to receive a copy.
         if self.password:
             parse_args.append('--password=%s' % self.password)
         parse_args.append(to_json(self.metadata))
-        return RequestCommand(command, args=parse_args)
+        cache_id = sha1b64('%s' % parse_args)
+        return cache_id, RequestCommand(command, args=parse_args)
 
     def empty_body(self):
         if self.metadata.get('missing'):
@@ -268,11 +274,22 @@ However, Moggie has yet to receive a copy.
         else:
             return self.no_body('Empty message')
 
-    def incoming_parse(self, source, message):
-        logging.debug('msg=%.2048s' % message)
-        if message['req_id'] != self.search_obj['req_id']:
+    def send_email_request(self):
+        cached = RESULT_CACHE.get(self.search_id)
+        if cached:
+            self.incoming_parse(None, copy.deepcopy(cached[1]), cached=True)
+        else:
+            if self.metadata.get('missing'):
+                self.email_display = [self.no_body(self.MESSAGE_MISSING)]
+                self.update_content()
+
+            self.tui.send_with_context(self.search_obj, self.ctx_src_id)
+
+    def incoming_parse(self, source, message, cached=False):
+        if message['req_id'] != self.search_obj['req_id'] and not cached:
             return
 
+        RESULT_CACHE[self.search_id] = (time.time(), copy.deepcopy(message))
         self.email_display = []
         if message['mimetype'] == 'application/moggie-internal':
             for data in message['data']:
