@@ -1,8 +1,10 @@
 #! /usr/bin/env python
-
-from __future__ import generators
-from __future__ import print_function
-
+#
+# This is code from Spambayes 1.1b3, simplified for use within moggie.
+# The original LICENSE.TXT file is included in the same subdirectory.
+#
+##############################################################################
+#
 # An implementation of a Bayes-like spam classifier.
 #
 # Paul Graham's original description:
@@ -40,13 +42,11 @@ from __future__ import print_function
 
 import math
 
-from mailpile.spambayes.Options import options
-from mailpile.spambayes.chi2 import chi2Q
-from mailpile.spambayes.safepickle import pickle_read, pickle_write
+from .chi2 import chi2Q
+
 
 LN2 = math.log(2)       # used frequently by chi-combining
 
-PICKLE_VERSION = 5
 
 class WordInfo(object):
     # A WordInfo is created for each distinct word.  spamcount is the
@@ -60,47 +60,143 @@ class WordInfo(object):
     # to conserve memory.
     __slots__ = 'spamcount', 'hamcount'
 
-    def __init__(self):
-        self.__setstate__((0, 0))
+    def __init__(self, spamcount=0, hamcount=0):
+        self.spamcount, self.hamcount = (spamcount, hamcount)
 
     def __repr__(self):
         return "WordInfo" + repr((self.spamcount, self.hamcount))
 
-    def __getstate__(self):
-        return self.spamcount, self.hamcount
-
-    def __setstate__(self, t):
-        self.spamcount, self.hamcount = t
-
 
 class Classifier:
-    # Defining __slots__ here made Jeremy's life needlessly difficult when
-    # trying to hook this all up to ZODB as a persistent object.  There's
-    # no space benefit worth getting from slots in this class; slots were
-    # used solely to help catch errors earlier, when this code was changing
-    # rapidly.
+    """
+    An implementation of a Bayes-like spam classifier. Originally from the
+    spambayes project, simplified and adapted for use with moggie.
 
-    #__slots__ = ('wordinfo',  # map word to WordInfo record
-    #             'nspam',     # number of spam messages learn() has seen
-    #             'nham',      # number of non-spam messages learn() has seen
-    #            )
+    This implementation is due to Tim Peters et alia.
 
+    Classifier options and their defaults are described below.
+
+    use_chi_squared_combining=True
+
+      For vectors of random, uniformly distributed probabilities,
+      -2*sum(ln(p_i)) follows the chi-squared distribution with 2*n degrees
+      of freedom.  This is the "provably most-sensitive" test the original
+      scheme was monotonic with.  Getting closer to the theoretical basis
+      appears to give an excellent combining method, usually very extreme in
+      its judgment, yet finding a tiny (in # of msgs, spread across a huge
+      range of scores) middle ground where lots of the mistakes live.  This
+      is the best method so far. One systematic benefit is is immunity to
+      "cancellation disease". One systematic drawback is sensitivity to
+      *any* deviation from a uniform distribution, regardless of whether
+      actually evidence of ham or spam. Rob Hooft alleviated that by
+      combining the final S and H measures via (S-H+1)/2 instead of via
+      S/(S+H)). In practice, it appears that setting ham_cutoff=0.05, and
+      spam_cutoff=0.95, does well across test sets; while these cutoffs are
+      rarely optimal, they get close to optimal.  With more training data,
+      Tim has had good luck with ham_cutoff=0.30 and spam_cutoff=0.80 across
+      three test data sets (original c.l.p data, his own email, and newer
+      general python.org traffic).
+
+    use_bigrams=False
+
+      Generate both unigrams (words) and bigrams (pairs of
+      words). However, extending an idea originally from Gary Robinson,
+      the message is 'tiled' into non-overlapping unigrams and bigrams,
+      approximating the strongest outcome over all possible tilings.
+
+      Note that to really test this option you need to retrain with it on,
+      so that your database includes the bigrams - if you subsequently turn
+      it off, these tokens will have no effect.  This option will at least
+      double your database size given the same training data, and will
+      probably at least triple it.
+
+      You may also wish to increase the max_discriminators (maximum number
+      of extreme words) option if you enable this option, perhaps doubling or
+      quadrupling it.  It's not yet clear.  Bigrams create many more hapaxes,
+      and that seems to increase the brittleness of minimalist training
+      regimes; increasing max_discriminators may help to soften that effect.
+      OTOH, max_discriminators defaults to 150 in part because that makes it
+      easy to prove that the chi-squared math is immune from numeric
+      problems.  Increase it too much, and insane results will eventually
+      result (including fatal floating-point exceptions on some boxes).
+
+      This option is experimental, and may be removed in a future release.
+      We would appreciate feedback about it if you use it - email
+      spambayes@python.org with your comments and results.
+
+    unknown_word_prob=0.5
+
+      These two control the prior assumption about word probabilities.
+      unknown_word_prob is essentially the probability given to a word that
+      has never been seen before.  Nobody has reported an improvement via
+      moving it away from 1/2, although Tim has measured a mean spamprob of
+      a bit over 0.5 (0.51-0.55) in 3 well-trained classifiers.
+
+    unknown_word_strength=0.45
+
+      This adjusts how much weight to give the prior assumption relative to
+      the probabilities estimated by counting.  At 0 the counting estimates
+      are believed 100%, even to the extent of assigning certainty (0 or 1)
+      to a word that has appeared in only ham or only spam. This is a disaster.
+
+      As unknown_word_strength tends toward infinity, all probabilities
+      tend toward unknown_word_prob.  All reports were that a value near 0.4
+      worked best, so this does not seem to be corpus-dependent.
+
+    minimum_prob_strength=0.1
+
+      When scoring a message, ignore all words with
+      abs(word.spamprob - 0.5) < minimum_prob_strength. This may be a hack,
+      but it has proved to reduce error rates in many tests.
+      0.1 appeared to work well across all corpora.
+
+    max_discriminators=150
+
+      The maximum number of extreme words to look at in a message, where
+      "extreme" means with spam probability farthest away from 0.5. 150
+      appears to work well across all corpora tested.
+
+    """
     # allow a subclass to use a different class for WordInfo
     WordInfoClass = WordInfo
 
-    def __init__(self):
+    def __init__(self,
+            use_chi_squared_combining=True,
+            use_bigrams=False,
+            unknown_word_prob=0.5,
+            unknown_word_strength=0.45,
+            minimum_prob_strength=0.1,
+            max_discriminators=150):
+
+        self.use_chi_squared_combining = use_chi_squared_combining
+        self.use_bigrams = use_bigrams
+        self.unknown_word_prob = unknown_word_prob
+        self.unknown_word_strength = unknown_word_strength
+        self.minimum_prob_strength = minimum_prob_strength
+        self.max_discriminators = max_discriminators
+
         self.wordinfo = {}
         self.probcache = {}
         self.nspam = self.nham = 0
 
-    def __getstate__(self):
-        return (PICKLE_VERSION, self.wordinfo, self.nspam, self.nham)
+        if self.use_chi_squared_combining:
+            self.spamprob = self.chi2_spamprob
+        self.classify = self.spamprob
 
-    def __setstate__(self, t):
-        if t[0] != PICKLE_VERSION:
-            raise ValueError("Can't unpickle -- version %s unknown" % t[0])
-        (self.wordinfo, self.nspam, self.nham) = t[1:]
+    def __iter__(self):
+        yield '*', (self.nspam, self.nham)
+        for word, info in self.wordinfo.items():
+            yield word, (info.spamcount, info.hamcount)
+
+    def load(self, iterator):
+        self.wordinfo = {}
         self.probcache = {}
+        for word, (spamcount, hamcount) in iterator:
+            self.wordinfo[word] = self.WordInfoClass(spamcount, hamcount)
+        totals = self.wordinfo.pop('*')
+        self.nspam = totals.spamcount
+        self.nham = totals.hamcount
+        return self
 
     # spamprob() implementations.  One of the following is aliased to
     # spamprob, depending on option settings.
@@ -190,9 +286,6 @@ class Classifier:
         else:
             return prob
 
-    if options["Classifier", "use_chi_squared_combining"]:
-        spamprob = chi2_spamprob
-
     def learn(self, wordstream, is_spam):
         """Teach the classifier by example.
 
@@ -200,7 +293,7 @@ class Classifier:
         True, you're telling the classifier this message is definitely spam,
         else that it's definitely not spam.
         """
-        if options["Classifier", "use_bigrams"]:
+        if self.use_bigrams:
             wordstream = self._enhance_wordstream(wordstream)
         self._add_msg(wordstream, is_spam)
 
@@ -209,7 +302,7 @@ class Classifier:
 
         Pass the same arguments you passed to learn().
         """
-        if options["Classifier", "use_bigrams"]:
+        if self.use_bigrams:
             wordstream = self._enhance_wordstream(wordstream)
         self._remove_msg(wordstream, is_spam)
 
@@ -243,8 +336,8 @@ class Classifier:
 
         prob = spamratio / (hamratio + spamratio)
 
-        S = options["Classifier", "unknown_word_strength"]
-        StimesX = S * options["Classifier", "unknown_word_prob"]
+        S = self.unknown_word_strength
+        StimesX = S * self.unknown_word_prob
 
 
         # Now do Robinson's Bayesian adjustment.
@@ -357,9 +450,9 @@ class Classifier:
     # Tokens with spamprobs less than minimum_prob_strength away from 0.5
     # aren't returned.
     def _getclues(self, wordstream):
-        mindist = options["Classifier", "minimum_prob_strength"]
+        mindist = self.minimum_prob_strength
 
-        if options["Classifier", "use_bigrams"]:
+        if self.use_bigrams:
             # This scheme mixes single tokens with pairs of adjacent tokens.
             # wordstream is "tiled" into non-overlapping unigrams and
             # bigrams.  Non-overlap is important to prevent a single original
@@ -425,15 +518,15 @@ class Classifier:
                     push(tup)
             clues.sort()
 
-        if len(clues) > options["Classifier", "max_discriminators"]:
-            del clues[0 : -options["Classifier", "max_discriminators"]]
+        if len(clues) > self.max_discriminators:
+            del clues[0 : -self.max_discriminators]
         # Return (prob, word, record).
         return [t[1:] for t in clues]
 
     def _worddistanceget(self, word):
         record = self._wordinfoget(word)
         if record is None:
-            prob = options["Classifier", "unknown_word_prob"]
+            prob = self.unknown_word_prob
         else:
             prob = self.probability(record)
         distance = abs(prob - 0.5)
@@ -478,6 +571,3 @@ class Classifier:
 
     def _wordinfokeys(self):
         return self.wordinfo.keys()
-
-
-Bayes = Classifier
