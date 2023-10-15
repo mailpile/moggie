@@ -879,10 +879,12 @@ main app worker. Hints:
             if only_inboxes:
                 _tags = lambda p: pols[p].get('tags', [])
                 paths = [p for p in pols if 'inbox' in _tags(p)]
-                logging.debug('[api/import] Configured Inboxes: %s' % paths)
+                logging.debug('[api/import] Configured Inboxes in %s: %s'
+                    % (ctx, paths))
             else:
                 paths = list(pols.keys())
-                logging.debug('[api/import] Configured paths: %s' % paths)
+                logging.debug('[api/import] Configured paths in %s: %s'
+                    % (ctx, paths))
         else:
             logging.debug('[api/import] Requested paths: %s' % paths)
 

@@ -1033,11 +1033,11 @@ class CommandImport(CLICommand):
                 compact=bool(self.options['--compact']),
                 policies=requests)))
 
-    async def run_import_only(self):
-        ctx_id = self.get_context()
+    async def run_import_only(self, context_id=None):
+        context_id = context_id or self.get_context()
         self.print('%s' % await self.worker.async_api_request(self.access,
             RequestPathImport(
-                context=ctx_id,
+                context=context_id,
                 import_full=bool(self.options['--full-scan']),
                 only_inboxes=bool(self.options['--only-inboxes']),
                 compact=bool(self.options['--compact']),
@@ -1049,48 +1049,6 @@ class CommandImport(CLICommand):
         else:
             return await self.run_path_policies()
 
-    async def UNUSED_run(self):
-        def _next():
-            path, request_obj = requests.pop(0)
-            sys.stdout.write('[import] Processing %s\n' % path)
-            self.worker.api_request(True, request_obj)
-
-        _next()
-        while True:
-            try:
-                if config_only:
-                    msg = {
-                       'message': '[import] Updated configuration only',
-                       'data': {'pending': 0}}
-                else:
-                    msg = await self.await_messages('notification', timeout=120)
-
-                if msg and msg.get('message'):
-                    sys.stdout.write('\33[2K\r' + msg['message'])
-                    if msg.get('data', {}).get('pending') == 0:
-                        sys.stdout.write('\n')
-                        if requests:
-                            _next()
-                        else:
-                            if self.options['--compact']:
-                                self.metadata_worker().compact(full=True)
-                                self.search_worker().compact(full=True)
-                            return True
-                else:
-                    print('\nUnknown error (%s) or timed out.' % msg)
-                    return False
-            except (asyncio.CancelledError, KeyboardInterrupt):
-                if requests:
-                    print('\n[CTRL+C] Will exit after this import. Interrupt again to force quit.')
-                    requests = []
-                else:
-                    print('\n[CTRL+C] Exiting. Running imports may complete in the background.')
-                    return False
-            except:
-                logging.exception('Woops')
-                raise
-        return True
-
 
 class CommandNew(CommandImport):
     """# moggie new [options] [</paths/to/mailboxes/...> ...]
@@ -1100,6 +1058,8 @@ class CommandNew(CommandImport):
     If no path is specified, check all configured paths that have a
     watch-policy of "watch" or "sync". If the path is not configured, this
     will have the same effect as a one-off `moggie import`.
+
+    If no context is specified, all contexts will be checked.
 
     ### Options
 
@@ -1115,7 +1075,7 @@ class CommandNew(CommandImport):
         AccessConfig.GRANT_TAG_RW)
     OPTIONS = [[
         (None, None, 'general'),
-        ('--context=', ['default'], 'X=<ctx>, import into a specific context'),
+        ('--context=',         [], 'X=<ctx>, check only a specific context'),
         ('--full-scan',        [], 'Ignore modification times, scan everything'),
         ('--only-inboxes',     [], 'Only check mailboxes tagged with inbox'),
         ('--compact',          [], 'Compact the search engine after importing'),
@@ -1128,7 +1088,12 @@ class CommandNew(CommandImport):
         return []
 
     async def run(self):
-        return await self.run_import_only()
+        results = {}
+        if not self.options['--context=']:
+            self.options['--context='] = list(self.get_all_contexts().keys())
+        for ctx in self.options['--context=']:
+            results[ctx] = await self.run_import_only(context_id=ctx)
+        return results
 
 
 class CommandBrowse(CLICommand):

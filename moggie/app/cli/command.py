@@ -339,13 +339,16 @@ class CLICommand:
     def handle_message(self, message):
         self.messages.append(message)
 
-    def get_context(self, ctx=None):
+    def get_all_contexts(self):
         cfg = self.cfg
         if cfg is None:
             from ...config import AppConfig
             cfg = self.cfg = AppConfig(self.workdir)
+        return self.cfg.contexts
 
-        all_contexts = cfg.contexts
+    def get_context(self, ctx=None):
+        all_contexts = self.get_all_contexts()  # Sets self.cfg as side effect
+        cfg = self.cfg
         ctx = ctx or (self.options.get('--context=') or ['default'])[-1]
         if ctx == 'default':
             if self.access is True or not self.access:
