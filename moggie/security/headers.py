@@ -101,7 +101,7 @@ def validate_dates(metadata_ts, parsed_email, remote_only=True, now=None):
 
     timezones = sorted(list(set(timezones)))
     timestamps = sorted(list(set(timestamps)))
-    max_diff = timestamps[-1] - timestamps[0]
+    max_diff = (timestamps[-1] - timestamps[0]) if timestamps else 0
     info = {
         'delta': max_diff,
         'delta_large': (max_diff > 2*24*3600),

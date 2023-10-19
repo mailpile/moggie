@@ -54,7 +54,7 @@ class CSSSelector:
         description.add(tag)
         for a, v in attrs:
             if not v:
-                next
+                continue
             if a == 'class':
                 for word in v.split():
                     description.add('.' + word)

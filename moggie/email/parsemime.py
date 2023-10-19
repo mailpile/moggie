@@ -348,6 +348,8 @@ class MessagePart(dict):
             ct, ctp = part.get('content-type', ['', {}])
             cd, cdp = part.get('content-disposition', ['', {}])
             first = ':first' if (non_mime < 1) else ''
+            if not ct:
+                ct = ''
 
             candidates = decryptors.get(ct+first) or decryptors.get(ct, [])
             if not (ct.startswith('multipart/') or ct == 'text/x-mime-preamble'):
