@@ -858,6 +858,9 @@ class SearchEngine:
     def explain(self, terms):
         return explain_ops(self.parse_terms(terms, self.magic_map))
 
+    def get_version(self):
+        return self.history.get('ver', 0)
+
     def search(self, terms,
             tag_namespace='',
             mask_deleted=True, mask_tags=None, more_terms=None,

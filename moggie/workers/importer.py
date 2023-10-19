@@ -14,18 +14,23 @@
 # https://stackoverflow.com/questions/938733/total-memory-used-by-python-process
 # https://stackoverflow.com/questions/22102999/get-total-physical-memory-in-python
 #
+import asyncio
+import base64
 import logging
 import os
+import random
 import time
 import traceback
 import threading
 
+from .base import BaseWorker
 from ..api.requests import *
 from ..util.dumbcode import dumb_encode_asc, dumb_decode
+from ..util.intset import IntSet
 from ..storage.files import FileStorage
 from ..search.extractor import KeywordExtractor
 from ..search.filters import FilterEngine, FilterError
-from .base import BaseWorker
+from ..app.cli.email import CommandParse
 
 
 class ImportWorker(BaseWorker):
@@ -53,9 +58,12 @@ class ImportWorker(BaseWorker):
         BaseWorker.__init__(self, status_dir,
             name=name, notify=notify, log_level=log_level)
         self.functions.update({
+            b'autotag': (True, self.api_autotag),
+            b'autotag_train': (True, self.api_autotag_train),
             b'import_search': (True, self.api_import_search)})
 
-        self.filters = FilterEngine().load(
+        self.filters = FilterEngine()  # FIXME: add moggie, encryption keys?
+        self.filters.load(
             os.path.normpath(os.path.join(status_dir, '..', 'filters')),
             quick=False, create=True)
 
@@ -67,13 +75,15 @@ class ImportWorker(BaseWorker):
         self.progress = self._no_progress(None)
         self.idle_running = False
 
-        self.kwe = KeywordExtractor()  # FIXME: Configurable? Plugins?
-
         self.lock = threading.Lock()
         self.keyword_batches = []
         self.keyword_batch_no = 0
         self.keyword_thread = None
         self.keywords = {}
+
+        self.parser_settings = CommandParse.Settings(with_keywords=True)
+        self.parser_settings.with_openpgp = False
+        self.allow_network = False
 
         assert(self.app and self.search)
 
@@ -81,6 +91,32 @@ class ImportWorker(BaseWorker):
         if hasattr(self.fs, 'forked'):
             self.fs.forked()
         return super().run(*args, **kwargs)
+
+    def _get_email(self, metadata):
+        try:
+            if metadata.pointers[0].is_local_file:
+                email = self.fs.email(metadata, full_raw=True)
+            else:
+                # FIXME: Passwords etc? Without them importing from IMAP fails.
+                email = self.app.api_request(True,
+                    RequestEmail(metadata=metadata, full_raw=True),
+                    ).get('email', {})
+            return base64.b64decode(email.get('_RAW', b''))
+        except:
+            logging.exception('[import] Failed to load %s' % (metadata,))
+            return None
+
+    def _mk_parser(self):
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        def parse(email):
+            return loop.run_until_complete(CommandParse.Parse(None, email,
+                settings=self.parser_settings,
+                allow_network=self.allow_network))
+        return parse
 
     def _fix_tags_and_scope(self, tag_namespace, tags, _all=True):
         def _fix(tag):
@@ -96,6 +132,7 @@ class ImportWorker(BaseWorker):
         if not tag_namespace:
             return sorted(list(tags))
 
+        special = []  # FIXME, which tags are special? Any?
         nt = ['@%s' % tag_namespace] if (_all and tag_namespace) else []
         nt.extend(
             t if ('@' in t or t in special) else ('%s@%s' % (t, tag_namespace))
@@ -110,7 +147,7 @@ class ImportWorker(BaseWorker):
     def on_idle(self, last_running):
         if not self.idle_running and self.progress is not None:
             self.idle_running = True
-            logging.info('Launching full import in background.')
+            logging.info('[import] Launching full import in background.')
             def _full_index():
                 self._start_keyword_loop()
                 if self.keyword_batches:
@@ -119,7 +156,7 @@ class ImportWorker(BaseWorker):
                     for tag_ns in [None]:  # FIXME
                         self._index_full_messages(None, tag_ns, self.progress)
                 except Exception as e:
-                    logging.exception('Indexing failed: %s' % e)
+                    logging.exception('[import] Indexing failed: %s' % e)
                 finally:
                     self.idle_running = False
             self.add_background_job(_full_index, which='full')
@@ -130,6 +167,181 @@ class ImportWorker(BaseWorker):
         return self.call('import_search',
             request_obj, initial_tags, tag_namespace,
             bool(force), full, compact)
+
+    def api_autotag(self, tag_namespace, tags, search, **kwargs):
+        if tags:
+            tags = self._fix_tags_and_scope(tag_namespace, tags, _all=False)
+        logging.debug('Requested autotag for %s on %s' % (tags, search))
+
+        if not (search and 'results' in search):
+            raise ValueError('Search terms are required')
+
+        result = search['results']
+        hits = dumb_decode(result['hits'])
+        logging.debug(
+            '[autotag] Requested autotagging for %s using "%s" (%d hits)'
+             % (tags, result['terms'], sum(1 for hit in hits)))
+
+        results = []
+        autotaggers = []
+        for tag in tags:
+            autotagger = self.filters.get_autotagger(tag)
+            if not autotagger:
+                msg = 'Autotagging requsted, but not enabled for %s' % tag
+                logging.error('[autotag] ' + msg)
+                results.append(msg)
+            elif not autotagger.is_trained():
+                msg = ('Autotagging requested, but need more training for %s'
+                    % tag)
+                logging.error('[autotag] ' + msg)
+                results.append(msg)
+            else:
+                autotaggers.append(autotagger)
+
+        add_tags = {}
+        rm_tags = {}
+        if autotaggers:
+            unloadable = checked = tagged = untagged = 0
+            moggie_parse = self._mk_parser()
+            res = self.metadata.metadata(hits, tags=None, threads=False)
+            for md in res['metadata']:
+                try:
+                    eml = self._get_email(md)
+                    if eml:
+                        checked += 1
+                        kws = moggie_parse(eml)['parsed']['_KEYWORDS']
+                        for at in autotaggers:
+                            if at.classify(kws) > at.threshold:
+                                t = add_tags[at.tag] = add_tags.get(at.tag, [])
+                                t.append(md.idx)
+                                tagged += 1
+                            else:
+                                u = rm_tags[at.tag] = rm_tags.get(at.tag, [])
+                                u.append(md.idx)
+                                untagged += 1
+                    else:
+                        unloadable += 1
+                except:
+                    unloadable += 1
+                    logging.exception('[autotag] Failed to parse %d' % md.idx)
+            msg = ('Checked %d messages (%d failed), add/remove %d/%d tags.'
+                % (checked, unloadable, tagged, untagged))
+            logging.info('[autotag] ' + msg)
+            results.append(msg)
+
+        tagops = []
+        tagops.extend(
+            (['+%s' % tag], IntSet(idxs)) for tag, idxs in add_tags.items())
+        tagops.extend(
+            (['-%s' % tag], IntSet(idxs)) for tag, idxs in rm_tags.items())
+        logging.debug('Tagops: %s' % tagops)
+        results.append(self.search.tag(tagops,
+            record_history=True,
+            tag_namespace=tag_namespace))
+
+        self.reply_json(results)
+
+    def api_autotag_train(self, tag_namespace, tags, search, **kwargs):
+        if tags:
+            tags = self._fix_tags_and_scope(tag_namespace, tags, _all=False)
+
+        if search and 'results' in search:
+            result = search['results']
+            all_hits = dumb_decode(result['hits'])
+            auto = False
+            logging.debug(
+                '[autotag] Requested training for %s using "%s" (%d hits)'
+                % (tags, result['terms'], sum(1 for hit in all_hits)))
+        else:
+            auto = True
+            result = all_hits = None
+            logging.debug('[autotag] Requested auto-training for %s' % (tags,))
+
+        def _sample(seq, autotagger, is_spam):
+            k = autotagger.MIN_CORPUS * 5
+            seq = set(seq)
+            seq -= set(autotagger.spam_ids if is_spam else autotagger.ham_ids)
+            seq = list(seq)
+            if len(seq) < k:
+                return sorted(seq)
+            else:
+                return sorted(random.sample(seq, k))
+
+        self.filters.load()
+        plan = {}
+        versions = {}
+        for tag in tags:
+            res = result
+            autotagger = self.filters.get_autotagger(tag, create=(not auto))
+            if auto:
+                if autotagger and autotagger.training_auto:
+                    req = autotagger.auto_train_search_obj(None)
+                    res = self.search.search(req['terms'],
+                        tag_namespace=tag_namespace,
+                        mask_deleted=req.get('mask_deleted', False),
+                        mask_tags=req.get('mask_tags', []),
+                        with_tags=req.get('with_tags', False))
+                    versions[tag] = res['version']
+                else:
+                    logging.debug('[autotag] Not auto-training %s' % tag)
+                    continue
+                ham_ids = dumb_decode(res['hits'])
+            else:
+                ham_ids = IntSet(copy=all_hits)
+
+            tag_info = res['tags'].get(tag)
+            if tag_info:
+                spam_ids = dumb_decode(tag_info[1])
+                ham_ids -= spam_ids
+            else:
+                spam_ids = []
+
+            plan[tag] = (
+                _sample(spam_ids, autotagger, True),
+                _sample(ham_ids, autotagger, False))
+
+        wanted = IntSet()
+        for spam_ids, ham_ids in plan.values():
+            wanted |= spam_ids
+            wanted |= ham_ids
+
+        moggie_parse = self._mk_parser()
+        unloadable = set()
+        keywords = {}
+        res = self.metadata.metadata(wanted, tags=None, threads=False)
+        for md in res['metadata']:
+            try:
+                eml = self._get_email(md)
+                if eml:
+                    keywords[md.idx] = moggie_parse(eml)['parsed']['_KEYWORDS']
+                else:
+                    unloadable.add(md.idx)
+            except:
+                logging.exception('[autotag] Failed to parse %d' % md.idx)
+
+        results = []
+        for tag, (spam_ids, ham_ids) in plan.items():
+            autotagger = self.filters.get_autotagger(tag, create=False)
+            spam_ids = set(spam_ids) - unloadable
+            ham_ids = set(ham_ids) - unloadable
+            for _id in spam_ids:
+                if _id in keywords:
+                    autotagger.learn(_id, keywords[_id], is_spam=True)
+            for _id in ham_ids:
+                if _id in keywords:
+                    autotagger.learn(_id, keywords[_id], is_spam=False)
+
+            msg = ('Trained %s with %d spam, %d ham, %d failed.'
+                % (tag, len(spam_ids), len(ham_ids), len(unloadable)))
+            logging.info('[autotag] ' + msg)
+            results.append(msg)
+
+            if tag in versions:
+                autotagger.trained_version = versions[tag]
+            # FIXME: autotagger.prune()
+            self.filters.save_autotagger(tag)
+
+        self.reply_json(results)
 
     def api_import_search(self,
             request, initial_tags, tag_namespace, force, full, compact,
@@ -142,22 +354,9 @@ class ImportWorker(BaseWorker):
                     request_obj, initial_tags, tag_namespace, force, full,
                     compact, caller=caller)
             except:
-                import traceback
-                traceback.print_exc()
+                logging.exception('[import] Failed to import search')
         self.add_background_job(background_import_search)
         self.reply_json({'running': True})
-
-    def _get_email(self, metadata):
-        try:
-            if metadata.pointers[0].is_local_file:
-                return self.fs.email(metadata, text=True, data=False)
-            else:
-                return self.app.api_request(True,
-                    RequestEmail(metadata=metadata, text=True),
-                    ).get('email')
-        except Exception as e:
-            logging.exception('Failed to load %s: %s' % (metadata, e))
-            return None
 
     def _notify_progress(self, progress=None):
         progress = progress or self.progress
@@ -205,11 +404,11 @@ class ImportWorker(BaseWorker):
             self.progress['kw'] = ''
             time.sleep(0.25)
             if not self.keywords and not self.keyword_batches:
-                logging.debug('keyword loop: exiting')
+                logging.debug('[import] keyword loop: exiting')
                 return
 
             logging.debug(
-                'keyword loop: Entered loop (keywords=%d)'
+                '[import] keyword loop: Entered loop (keywords=%d)'
                 % len(self.keywords))
 
             # Add/remove results from the search engine
@@ -257,7 +456,7 @@ class ImportWorker(BaseWorker):
                         else:
                             time.sleep(0.02)
                         if not self.keep_running:
-                            logging.debug('keyword loop: exiting early')
+                            logging.debug('[import] keyword loop: exiting early')
                             return
 
             self.progress['kw'] = ''
@@ -274,7 +473,8 @@ class ImportWorker(BaseWorker):
             # 5. Remove messages from Incoming
             for bno, tag, idxs in done:
                 self.progress['pending'] -= 1
-                logging.debug('Marking batch %d complete (%s): %s messages'
+                logging.debug(
+                    '[import] Marking batch %d complete (%s): %s messages'
                     % (bno, tag, len(idxs)))
                 self.search.del_results([[idxs, tag]], wait=True)
 
@@ -286,12 +486,12 @@ class ImportWorker(BaseWorker):
             if self.keyword_thread and self.keyword_thread.is_alive():
                 pass
             else:
-                logging.debug('keyword loop: Launching thread')
+                logging.debug('[import] keyword loop: Launching thread')
                 def _loop_runner():
                     try:
                         self._keyword_loop(delay=after)
                     except:
-                        logging.exception('Keyword loop crashed')
+                        logging.exception('[import] Keyword loop crashed')
                     self.keyword_thread = None
                 thr = threading.Thread(target=_loop_runner)
                 self.keywords = self.keywords or {}
@@ -302,15 +502,15 @@ class ImportWorker(BaseWorker):
 
     def _index_full_messages2(self, email_idxs, tag_namespace, progress, old):
         in_queue = 'in:incoming-old' if old else 'in:incoming'
-        incoming = self._fix_tags_and_scope(tag_namespace, [in_queue], _all=False)
-        incoming = incoming[0]
+        incoming = self._fix_tags_and_scope(tag_namespace, [in_queue],
+            _all=False)[0]
         if email_idxs:
             email_idxs = list(self.search.intersect(incoming, email_idxs))
         else:
             all_incoming = self.search.search(incoming)['hits']
             email_idxs = list(dumb_decode(all_incoming))
         if not email_idxs:
-            logging.debug('No messages to process (%s).' % incoming)
+            logging.debug('[import] No messages to process (%s).' % incoming)
             return
 
         progress['emails_new'] = len(email_idxs)
@@ -319,13 +519,16 @@ class ImportWorker(BaseWorker):
 
         ntime, bc, ec = int(time.time()), 0, 0
 
+        moggie_parse = self._mk_parser()
+        self.filters.load()
         message_batches = []
         for i in range(0, len(email_idxs), self.BATCH_SIZE):
             last_loop = len(email_idxs) <= i+self.BATCH_SIZE
 
             idx_batch = email_idxs[i:i+self.BATCH_SIZE]
             logging.info(
-                'Processing [%d..%d]/%d (last_loop=%s, keywords=%d)' % (
+                '[import] Processing [%d..%d]/%d (last_loop=%s, keywords=%d)'
+                % (
                     i, i+len(idx_batch)-1, len(email_idxs), last_loop,
                     len(self.keywords)))
 
@@ -343,17 +546,16 @@ class ImportWorker(BaseWorker):
 
                 email = self._get_email(md)
                 if not email:
-                    logging.exception('Failed to load %s' % (md,))
+                    logging.exception('[import] Failed to load %s' % (md,))
                     continue
 
-                # 2. Generate keywords and tags
-                stat, kws = self.kwe.extract_email_keywords(md, email)
-                # FIXME: Check status: want more data? e.g. full attachments?
+                # Parse the e-mail and extract keywords.
+                # This uses the same logic as `moggie parse`.
+                email = moggie_parse(email)['parsed']
+                kws = set(email['_KEYWORDS'])
 
                 # 3. Run the filtering logic to mutate keywords/tags
                 if not old:
-                    if 0 == (self.imported % 1000):
-                        self.filters.load()
                     self.filters.filter(tag_namespace, kws, md, email)
                 with self.lock:
                     for kw in kws:
@@ -420,9 +622,9 @@ class ImportWorker(BaseWorker):
             def _full_index():
                 self._index_full_messages(email_idxs, tag_namespace, progress)
                 if compact:
-                    logging.info('Compacting metadata')
+                    logging.info('[import] Compacting metadata')
                     self.metadata.compact(full=True)
-                    logging.info('Compacting search index')
+                    logging.info('[import] Compacting search index')
                     self.search.compact(full=True)
             return _full_index
 

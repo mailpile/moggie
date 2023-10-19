@@ -71,6 +71,26 @@ class RequestTag(RequestBase):
         }, req_id=req_id)
 
 
+class RequestAutotag(RequestBase):
+    def __init__(self, context='', tags=[], search=None, req_id=None):
+        self.update({
+            'req_type': 'autotag',
+            'context': context,
+            'tags': tags,
+            'search': search
+        }, req_id=req_id)
+
+
+class RequestAutotagTrain(RequestBase):
+    def __init__(self, context='', tags=[], search=None, req_id=None):
+        self.update({
+            'req_type': 'autotag_train',
+            'context': context,
+            'tags': tags,
+            'search': search
+        }, req_id=req_id)
+
+
 class RequestPathImport(RequestBase):
     def __init__(self,
             context='', paths=[],
@@ -278,6 +298,8 @@ def to_api_request(_input):
     cls = {
          'cli': RequestCommand,
          'tag': RequestTag,
+         'autotag': RequestAutotag,
+         'autotag_train': RequestAutotagTrain,
          'ping': RequestPing,
          'email': RequestEmail,
          'counts': RequestCounts,

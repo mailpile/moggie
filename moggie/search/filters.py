@@ -19,11 +19,16 @@
 #   - Probably need a richer set of FILTER_RULE(...) arguments, so we
 #     can autogenerate/edit filter rules with a high-level user interface.
 #
+import copy
 import logging
 import os
+import random
 import re
 import time
 import traceback
+
+from ..util.dumbcode import from_json, to_json
+from ..util.spambayes import Classifier
 
 
 DEFAULT_NEW_FILTER_SCRIPT = """\
@@ -41,10 +46,9 @@ if 'status:o' in keywords:
 
 
 # Check if we think message is spam, unless already classified
-if ('in:spam' not in keywords) and ('in:notspam' not in keywords):
-    run_autotagger('spam')
-
-if 'in:spam' in keywords:
+if ('in:junk' not in keywords) and ('in:notjunk' not in keywords):
+    run_autotagger('in:junk')
+if 'in:junk' in keywords:
     remove_tag('inbox')
 """
 
@@ -101,8 +105,20 @@ class FilterEnv(dict):
         self.py.settings = settings or {}
         self.called_filter_rule = True
 
-    def run_autotagger(self, which=None, skip=None):
-        pass  # FIXME
+    def run_autotagger(self, tag):
+        tag = 'in:%s' % (tag.split(':')[-1])
+        if self.tag_namespace and ('@' not in tag):
+            tag += '@%s' % self.tag_namespace
+        at = self.py.engine.get_autotagger(tag, create=False)
+        if at is None:
+            self.py.engine.log_once(
+                logging.error, '[import] Failed to load autotagger: %s' % tag)
+        else:
+            rank = at.classify(self.keywords)
+            if rank > at.threshold:
+                self.keywords.add(tag)
+                logging.debug(
+                    '[import] Auto-tagged (rank=%.3f) with: %s' % (rank, tag))
 
     def remove(self, *kwsets):
         for kws in kwsets:
@@ -134,9 +150,107 @@ class FilterEnv(dict):
                     pass
 
 
+class AutoTagger:
+    MIN_CORPUS = 250
+    SKIP_RE = re.compile(
+        '(^\d+$'
+        '|^.{0,3}$'
+        '|^[^:]{30,}$'
+        '|^(email|to|from|cc|date|day|month|year|msgid):'
+        '|.*@'
+        ')')
+
+    def __init__(self, tag=None):
+        self.tag = tag
+        self.classifier_type = 'spambayes'  # Future proofing for other kinds!
+        self.classifier = Classifier()
+        self.training_auto = True
+        self.trained_version = 0
+        self.threshold = 0.90
+        self.spam_ids = []
+        self.ham_ids = []
+        self.info = {}
+
+    def from_json(self, raw_json):
+        self.info = info = from_json(raw_json)
+        self.tag = info.pop('tag')
+        self.spam_ids = info.pop('spam_ids', [])
+        self.ham_ids = info.pop('ham_ids', [])
+        self.threshold = float(info.pop('threshold', 0.9))
+        self.training_auto = bool(info.pop('training_auto', True))
+        self.trained_version = info.pop('trained_version', 0)
+        self.classifier_type = info.pop('classifier', 'spambayes')
+        self.classifier.load(info.pop('data', []))
+        return self
+
+    def to_json(self):
+        info = copy.copy(self.info)
+        info.update({
+            'tag': self.tag,
+            'spam_ids': self.spam_ids,
+            'ham_ids': self.ham_ids,
+            'threshold': self.threshold,
+            'training_auto': self.training_auto,
+            'trained_version': self.trained_version,
+            'classifier': self.classifier_type,
+            'data': list(self.classifier)})
+        return to_json(info)
+
+    @classmethod
+    def MakeSearchObject(self, context=None, terms=None):
+        from ..api.requests import RequestSearch
+        req = RequestSearch(context=context, terms=terms)
+        req['mask_deleted'] = False
+        req['with_tags'] = True
+        req['mask_tags'] = []
+        req['uncooked'] = True
+        return req
+
+    def auto_train_search_obj(self, ctx):
+        if not self.training_auto:
+            raise ValueError('Auto-training is disabled for %s' % self.tag)
+        return self.MakeSearchObject(
+            context=ctx,
+            terms='%s +version:%d..' % (self.tag, self.trained_version + 1))
+
+    def is_trained(self):
+        return (len(self.ham_ids) >= (self.MIN_CORPUS // 2)
+            and len(self.spam_ids) >= (self.MIN_CORPUS // 2))
+
+    def classify(self, keywords):
+        if not self.is_trained():
+            return 0.5
+        return self.classifier.classify(keywords)
+
+    def learn(self, _id, keywords, is_spam=True):
+        set_yes = self.spam_ids if is_spam else self.ham_ids
+        set_no = self.ham_ids if is_spam else self.spam_ids
+        keywords = [k.lower() for k in keywords if not self.SKIP_RE.match(k)]
+        if _id in set_no:
+            self.classifier.unlearn(keywords, not is_spam)
+            set_no.remove(_id)
+        self.classifier.learn(keywords, is_spam)
+        set_yes.append(_id)
+
+    def prune(self, ratio=0.1):
+        prune_spam = int(len(self.spam_ids) * ratio)
+        prune_ham = int(len(self.ham_ids) * ratio)
+        if not (prune_spam and prune_ham):
+            return
+
+        # FIXME: Add a method to the spambayes classifier to decay the
+        #        counts in the word-list according to our ratio, and then
+        # prune any zeroes from the word count list. Prune our lists of
+        # message IDs according to the same ratio.
+
+        return False
+
+
 class FilterRule:
-    def __init__(self, script=None, filename=None, mock_debug=None):
+    def __init__(self,
+            script=None, engine=None, filename=None, mock_debug=None):
         self.name = ''
+        self.engine = engine
         self.req_any = set()
         self.req_all = set()
         self.exclude = set()
@@ -150,8 +264,8 @@ class FilterRule:
         self.script = self._compile(filename)
 
     @classmethod
-    def Load(cls, rulestr, **kwargs):
-        return cls(rulestr.strip() or 'pass', **kwargs).validate()
+    def Load(cls, rulestr, *args, **kwargs):
+        return cls(rulestr.strip() or 'pass', *args, **kwargs).validate()
 
     def _compile(self, filename):
         raw = self.raw_script or DEFAULT_NEW_FILTER_SCRIPT
@@ -191,38 +305,60 @@ class FilterRule:
 
 
 class FilterEngine:
-    def __init__(self, mock_os=None, mock_open=None, mock_exc=None):
+    def __init__(self,
+            moggie=None, encryption_keys=None,
+            mock_os=None, mock_open=None, mock_exc=None):
+        self.moggie = moggie
+        self.aes_keys = encryption_keys
         self.os = mock_os or os
         self.open = mock_open or open
         self.on_exc = mock_exc or logging.debug
         self.loaded = {}
         self.filter_dirs = []
+        self.writable_dirs = []
+        self.autotaggers = {}
+        self.logged = set()
         self.pys = {
-            'DEFAULT': FilterRule.Load(DEFAULT_NEW_FILTER_SCRIPT)}
+            'DEFAULT': FilterRule.Load(DEFAULT_NEW_FILTER_SCRIPT, self)}
+
+    def log_once(self, log_method, message):
+        if message in self.logged:
+            return
+        self.logged.add(message)
+        log_method(message)
 
     def load(self, filter_dir=None, quick=True, create=False):
         if filter_dir and (filter_dir not in self.filter_dirs):
             self.filter_dirs.append(filter_dir)
+            if create:
+                self.writable_dirs.append(filter_dir)
+
+        # FIXME: Support loading from encrypted zips - especially the
+        #        autotagger databases leak private message content.
 
         for fdir in ([filter_dir] if filter_dir else self.filter_dirs):
 
             if create and not self.os.path.exists(fdir):
                 os.mkdir(fdir, 0o0700)
-                with open(os.path.join(fdir, 'default.py'), 'w') as fd:
+                with open(self.os.path.join(fdir, 'default.py'), 'w') as fd:
                     fd.write(DEFAULT_NEW_FILTER_SCRIPT)
                 logging.info('Created default filter rule in %s' % fdir)
 
             for fn in self.os.listdir(fdir):
-                if fn.endswith('.py'):
+                try:
                     fpath = self.os.path.join(fdir, fn)
+                    mtime = self.os.path.getmtime(fpath)
+                    if quick and mtime == self.loaded.get(fpath, 0):
+                        continue
+                except OSError as e:
+                    self.on_exc(e)
+                    continue
+
+                if fn.endswith('.py'):
                     fd = None
                     try:
-                        mtime = self.os.path.getmtime(fpath)
-                        if quick and mtime == self.loaded.get(fpath, 0):
-                            continue
-
-                        fd = self.open(fpath)
-                        fr = FilterRule.Load(fd.read(), filename=fn)
+                        with self.open(fpath) as fd:
+                            fr = FilterRule.Load(fd.read(), self, filename=fn)
                         self.pys[fr.name] = fr
                         self.loaded[fpath] = mtime
                     except FilterError as e:
@@ -232,7 +368,57 @@ class FilterEngine:
                     finally:
                         if fd:
                             fd.close()
+
+                elif fn.endswith('.atag'):
+                    try:
+                        self.load_autotagger(fpath)
+                        self.loaded[fpath] = mtime
+                    except (OSError, ValueError, KeyError) as e:
+                        self.on_exc(e)
+
         return self
+
+    def load_autotagger(self, fpath):
+        with self.open(fpath, 'rb') as fd:
+            json_data = fd.read()
+        at = AutoTagger().from_json(json_data)
+        self.autotaggers[at.tag] = (fpath, at)
+        logging.info('[import] Loaded autotagging rules for %s: %s'
+            % (at.tag, fpath))
+
+    def save_autotagger(self, tag):
+        # FIXME: This should encrypt the contents!
+        try:
+            fpath, at = self.autotaggers[tag]
+            dump = at.to_json()
+            with self.open(fpath, 'w') as fd:
+                fd.write(dump)
+            logging.info('[import] Updated autotagging rules for %s: %s'
+                % (at.tag, fpath))
+            return True
+        except:
+            logging.exception('[import] Failed to save: %s' % fpath)
+            return False
+
+    def get_autotagger(self, tag, create=False):
+        if tag not in self.autotaggers:
+            if not create:
+                return None
+            at = AutoTagger(tag)
+            fpath = None
+            while self.writable_dirs:
+                fname = '%x.atag' % random.randint(0x10000, 0xffffffff)
+                fpath = self.os.path.join(self.writable_dirs[0], fname)
+                if not self.os.path.exists(fpath):
+                    break
+            if fpath:
+                self.autotaggers[tag] = (fpath, at)
+                if not self.save_autotagger(tag):
+                    del self.autotaggers[tag]
+                    return None
+            else:
+                return None
+        return self.autotaggers[tag][1]
 
     def filter(self, tag_namespace, keywords, metadata, parsed_email,
             which=None):
@@ -246,11 +432,12 @@ class FilterEngine:
             if fr.req_any and (keywords & fr.req_any):
                 continue
             if (not fr.exclude) or not (keywords & fr.exclude):
-                logging.debug('Applying filter rule: %s' % fn)
+                self.log_once(logging.debug, 'Applying filter rule: %s' % fn)
                 keywords = fr.filter(
                     tag_namespace, keywords, metadata, parsed_email)
 
         return keywords
+
 
 if __name__ == '__main__':
     # Configure a deliberately broken filter rule.

@@ -19,7 +19,7 @@ class SearchWorker(BaseWorker):
         '/etc/dictionaries-common/words',
         '/usr/share/dict/words']
 
-    MASK_TAGS = ('in:trash', 'in:spam')
+    MASK_TAGS = ('in:trash', 'in:junk')
 
     EXACT_SEARCHES = ('msgid', 'message-id', 'id', 'mid')
 
@@ -317,6 +317,7 @@ class SearchWorker(BaseWorker):
             'mask_deleted': mask_deleted,
             'mask_tags': mask_tags,
             'tag_namespace': tns,
+            'version': self._engine.get_version(),
             'query': self._explain_ops(ops)}
 
         logging.debug('Searched: %s' % result)

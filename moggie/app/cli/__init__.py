@@ -62,6 +62,8 @@ CLI_COMMANDS = LazyLoader({
     'browse':  (_lazy_admin, 'CommandBrowse'),
     'encrypt': (_lazy_admin, 'CommandEnableEncryption'),
     'config':  (_lazy_admin, 'CommandConfig'),
+    'autotag': (_lazy_admin, 'CommandAutotag'),
+    'autotagtrain': (_lazy_admin, 'CommandAutotagTrain'),
 
     'websocket': (_lazy_dev, 'CommandWebsocket'),
 

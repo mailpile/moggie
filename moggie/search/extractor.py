@@ -172,7 +172,8 @@ class KeywordExtractor:
             ts = parsed_email['_DATE_TS']
         elif parsed_email.get('date'):
             tt = email.utils.parsedate_tz(parsed_email['date'])
-            ts = int(time.mktime(tt[:9])) - tt[9]
+            if tt:
+                ts = int(time.mktime(tt[:9])) - tt[9]
         if ts > 0:
             keywords |= set(ts_to_keywords(ts))
 

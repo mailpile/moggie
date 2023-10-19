@@ -184,14 +184,14 @@ class Classifier:
         self.classify = self.spamprob
 
     def __iter__(self):
-        yield '*', (self.nspam, self.nham)
+        yield '*', self.nspam, self.nham
         for word, info in self.wordinfo.items():
-            yield word, (info.spamcount, info.hamcount)
+            yield word, info.spamcount, info.hamcount
 
     def load(self, iterator):
         self.wordinfo = {}
         self.probcache = {}
-        for word, (spamcount, hamcount) in iterator:
+        for word, spamcount, hamcount in iterator:
             self.wordinfo[word] = self.WordInfoClass(spamcount, hamcount)
         totals = self.wordinfo.pop('*')
         self.nspam = totals.spamcount

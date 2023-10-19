@@ -340,6 +340,7 @@ class CLICommand:
         self.messages.append(message)
 
     def get_all_contexts(self):
+        # FIXME: This should make an API call, not load the config directly
         cfg = self.cfg
         if cfg is None:
             from ...config import AppConfig

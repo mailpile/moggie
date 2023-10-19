@@ -621,8 +621,9 @@ main app worker. Hints:
                 loop,
                 terms,
                 tag_namespace=tag_ns,
-                mask_deleted=api_request.get('mask_deleted', True),
                 more_terms=scope_s,
+                mask_deleted=api_request.get('mask_deleted', True),
+                mask_tags=api_request.get('mask_tags'),
                 with_tags=(not api_request.get('only_ids', False)))
             if api_request.get('uncooked'):
                 return s_result
@@ -1002,6 +1003,25 @@ main app worker. Hints:
         result = await worker.async_call(loop, op, *args, qs=kwargs, hide_qs=True)
         return result
 
+    async def api_req_autotag(self, conn_id, access, api_request):
+        # Will raise ValueError or NameError if access denied
+        ctx = api_request['context']
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
+        loop = asyncio.get_event_loop()
+        return await self.importer.with_caller(conn_id).async_call(
+            loop, 'autotag',
+            tag_ns, api_request['tags'], api_request['search'])
+
+    async def api_req_autotag_train(self, conn_id, access, api_request):
+        # Will raise ValueError or NameError if access denied
+        ctx = api_request['context']
+        roles, tag_ns, scope_s = access.grants(ctx,
+            AccessConfig.GRANT_TAG_RW + AccessConfig.GRANT_TAG_X)
+        loop = asyncio.get_event_loop()
+        return await self.importer.with_caller(conn_id).async_call(
+            loop, 'autotag_train',
+            tag_ns, api_request['tags'], api_request['search'])
+
     async def _route_api_request(self, conn_id, access, api_req):
         # FIXME: This needs refactoring
         result = None
@@ -1037,6 +1057,10 @@ main app worker. Hints:
             result = await self.api_req_set_secret(conn_id, access, api_req)
         elif type(api_req) == RequestOpenPGP:
             result = await self.api_req_openpgp(conn_id, access, api_req)
+        elif type(api_req) == RequestAutotag:
+            result = await self.api_req_autotag(conn_id, access, api_req)
+        elif type(api_req) == RequestAutotagTrain:
+            result = await self.api_req_autotag_train(conn_id, access, api_req)
         elif type(api_req) == RequestPing:
             result = ResponsePing(api_req)
         return result
