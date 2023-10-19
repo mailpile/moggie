@@ -172,7 +172,14 @@ class EmailListWalker(urwid.ListWalker):
 
     def check(self, uuid, display=False):
         # FIXME: The spacebar still doesn't quite work elegantly.
-        had_any = (len(self.selected) > 0)
+        if self.selected_all:
+            self.selected_all = False
+            for visible in self.visible:
+                self.selected.add(visible['uuid'])
+            had_any = False  # Force a redraw
+        else:
+            had_any = (len(self.selected) > 0)
+
         if uuid in self.selected:
             if not display:
                 # FIXME: If message is currently displayed, update!
@@ -309,6 +316,9 @@ class EmailList(urwid.Pile):
         if key == 'A':
             self.on_add_to_index()
             return None
+        if key == 'X':
+            self.on_select_all()
+            return None
         return super().keypress(size, key)
 
     def make_search_obj(self):
@@ -357,13 +367,12 @@ class EmailList(urwid.Pile):
         # Inject suggestions above the list of messages, if any are
         # present. This can change dynamically as the backend sends us
         # hints.
-        if self.walker.selected and self.is_mailbox:
+        if self.walker.selected_all:
             self.widgets.append(urwid.Columns([
                 ('weight', 1, urwid.Text(('subtle',
-                    'NOTE: You are operating directly on a mailbox!\n'
-                    '      Tagging will add emails to the search index.\n'
-                    '      Deletion cannot be undone.'))),
-                ('fixed', 3, CloseButton(None))]))
+                        '\nAll matching messages are selected.\n'),
+                    align='center')),
+                ('fixed', 3, urwid.Text(' '))]))
         elif len(self.suggestions):
             self.widgets.append(self.suggestions)
 
@@ -446,6 +455,12 @@ class EmailList(urwid.Pile):
 
         return hks
 
+    def on_select_all(self):
+        self.walker.selected = set()
+        self.walker.selected_all = not self.walker.selected_all
+        self.walker._modified()
+        self.update_content()
+
     def on_toggle_view(self):
         self.tui.topbar.open_with(
             MessageDialog, 'FIXME: Toggling views does not work yet')
@@ -455,5 +470,18 @@ class EmailList(urwid.Pile):
             MessageDialog, 'FIXME: Exporting mail does not work yet')
 
     def on_add_to_index(self):
+        # If some messages are selected, tell user:
+        #    - Adding N messages to search engine
+        # If none or all are selected:
+        #    - Adding all messages to search engine
+        #
+        # Always Offer toggles:
+        #   [ ] Treat messages as "incoming" (filter for spam, add to inbox)
+        #
+        # If adding entire mailbox:
+        #   ( ) Treat mailbox as an Inbox, check frequently for new mail
+        #   ( ) Check periodically for new mail
+        #   ( ) Only add these messages
+        #
         self.tui.topbar.open_with(
             MessageDialog, 'FIXME: Adding to the index does not work yet')
