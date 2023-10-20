@@ -60,6 +60,7 @@ class ImportWorker(BaseWorker):
         self.functions.update({
             b'autotag': (True, self.api_autotag),
             b'autotag_train': (True, self.api_autotag_train),
+            b'autotag_classify': (True, self.api_autotag_classify),
             b'import_search': (True, self.api_import_search)})
 
         self.filters = FilterEngine()  # FIXME: add moggie, encryption keys?
@@ -74,6 +75,7 @@ class ImportWorker(BaseWorker):
         self.imported = 0
         self.progress = self._no_progress(None)
         self.idle_running = False
+        self.autotag_unloadable = set()
 
         self.lock = threading.Lock()
         self.keyword_batches = []
@@ -101,10 +103,15 @@ class ImportWorker(BaseWorker):
                 email = self.app.api_request(True,
                     RequestEmail(metadata=metadata, full_raw=True),
                     ).get('email', {})
-            return base64.b64decode(email.get('_RAW', b''))
-        except:
-            logging.exception('[import] Failed to load %s' % (metadata,))
+            if email:
+                return base64.b64decode(email.get('_RAW', b''))
+        except Exception as e:
+            logging.error('[import] Failed to load %s: %s' % (metadata.idx, e))
             return None
+
+        logging.info('[import] Failed to load %s [%s]'
+            % (metadata.idx, metadata,))
+        return None
 
     def _mk_parser(self):
         try:
@@ -241,9 +248,14 @@ class ImportWorker(BaseWorker):
 
         self.reply_json(results)
 
-    def api_autotag_train(self, tag_namespace, tags, search, **kwargs):
+    def api_autotag_train(self, tag_ns, tags, search, compact, **kwargs):
         if tags:
-            tags = self._fix_tags_and_scope(tag_namespace, tags, _all=False)
+            tags = self._fix_tags_and_scope(tag_ns, tags, _all=False)
+        elif tag_ns:
+            tags = [t for t in self.filters.autotaggers
+                    if t.endswith('@' + tag_ns)]
+        else:
+            tags = [t for t in self.filters.autotaggers]
 
         if search and 'results' in search:
             result = search['results']
@@ -258,7 +270,7 @@ class ImportWorker(BaseWorker):
             logging.debug('[autotag] Requested auto-training for %s' % (tags,))
 
         def _sample(seq, autotagger, is_spam):
-            k = autotagger.MIN_CORPUS * 5
+            k = autotagger.min_trained * 5
             seq = set(seq)
             seq -= set(autotagger.spam_ids if is_spam else autotagger.ham_ids)
             seq = list(seq)
@@ -277,7 +289,7 @@ class ImportWorker(BaseWorker):
                 if autotagger and autotagger.training_auto:
                     req = autotagger.auto_train_search_obj(None)
                     res = self.search.search(req['terms'],
-                        tag_namespace=tag_namespace,
+                        tag_namespace=tag_ns,
                         mask_deleted=req.get('mask_deleted', False),
                         mask_tags=req.get('mask_tags', []),
                         with_tags=req.get('with_tags', False))
@@ -306,10 +318,12 @@ class ImportWorker(BaseWorker):
             wanted |= ham_ids
 
         moggie_parse = self._mk_parser()
-        unloadable = set()
+        unloadable = self.autotag_unloadable
         keywords = {}
         res = self.metadata.metadata(wanted, tags=None, threads=False)
         for md in res['metadata']:
+            if md.idx in unloadable:
+                continue
             try:
                 eml = self._get_email(md)
                 if eml:
@@ -322,24 +336,58 @@ class ImportWorker(BaseWorker):
         results = []
         for tag, (spam_ids, ham_ids) in plan.items():
             autotagger = self.filters.get_autotagger(tag, create=False)
+            justdoit = (not auto) or (not autotagger.is_trained())
             spam_ids = set(spam_ids) - unloadable
             ham_ids = set(ham_ids) - unloadable
-            for _id in spam_ids:
-                if _id in keywords:
+            ignored = 0
+            # When auto-training, we only train on messages which we have
+            # seen before (user corrections) or messages which are already
+            # likely to be recognized (to gradually pick up new keywords).
+            # If this is a user request (not auto), we "just do it".
+            for _id in (i for i in spam_ids if i in keywords):
+                if (justdoit
+                        or autotagger.is_known(_id)
+                        or (autotagger.classify(keywords[_id]) > 0.8)):
                     autotagger.learn(_id, keywords[_id], is_spam=True)
-            for _id in ham_ids:
-                if _id in keywords:
+                else:
+                    ignored += 1
+            for _id in (i for i in ham_ids if i in keywords):
+                if (justdoit
+                        or autotagger.is_known(_id)
+                        or (autotagger.classify(keywords[_id]) < 0.2)):
                     autotagger.learn(_id, keywords[_id], is_spam=False)
+                else:
+                    ignored += 1
 
-            msg = ('Trained %s with %d spam, %d ham, %d failed.'
-                % (tag, len(spam_ids), len(ham_ids), len(unloadable)))
+            msg = ('Trained %s with %d pos, %d neg, %d ignored, %d failed.'
+                % (tag, len(spam_ids), len(ham_ids), ignored, len(unloadable)))
             logging.info('[autotag] ' + msg)
             results.append(msg)
 
             if tag in versions:
                 autotagger.trained_version = versions[tag]
             # FIXME: autotagger.prune()
+            if compact:
+                autotagger.compact()
             self.filters.save_autotagger(tag)
+
+        self.reply_json(results)
+
+    def api_autotag_classify(self, tag_ns, tags, keywords, **kwargs):
+        if tags:
+            tags = self._fix_tags_and_scope(tag_ns, tags, _all=False)
+        elif tag_ns:
+            tags = [t for t in self.filters.autotaggers
+                    if t.endswith('@' + tag_ns)]
+        else:
+            tags = [t for t in self.filters.autotaggers]
+
+        results = {}
+        for tag in tags:
+            autotagger = self.filters.get_autotagger(tag)
+            if autotagger:
+                rank, clues = autotagger.classify(keywords, evidence=True)
+                results[tag] = (rank, dict(clues))
 
         self.reply_json(results)
 

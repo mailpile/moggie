@@ -150,7 +150,9 @@ class Moggie:
             self._app = None
             self._app_worker = None
             self._config = AppConfig(work_dir)
-            self._access = None
+
+        if access is True:
+            access = self._config.access_zero()
 
         self._async_tasks =  []
 
@@ -315,7 +317,8 @@ class Moggie:
                 await self.async_run('help')
                 result.append(False)
             elif hasattr(command_obj, 'Command'):
-                command_obj = command_obj(self.work_dir, list(args), access=True)
+                command_obj = command_obj(self.work_dir, list(args),
+                    access=self._access)
                 await command_obj.async_ready()
                 result.append(await command_obj.run())
             else:

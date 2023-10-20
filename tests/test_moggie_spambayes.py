@@ -38,6 +38,7 @@ class AutoTaggerTests(unittest.TestCase):
             "tag": "spam",
             "spam_ids": [1],
             "ham_ids": [2],
+            "min_trained": 0,
             "threshold": 0.9,
             "training_auto": true,
             "trained_version": 0,
@@ -61,8 +62,8 @@ class AutoTaggerTests(unittest.TestCase):
 
     def test_autotagger(self):
         class TestAutoTagger(moggie.search.filters.AutoTagger):
-            MIN_CORPUS = 0
-        at = TestAutoTagger().from_json(self.TEST_JSON)
+            pass
+        at = TestAutoTagger(salt=None).from_json(self.TEST_JSON)
         self.assertEquals(at.tag, 'spam')
         self.assertEquals(at.spam_ids, [1])
         self.assertEquals(at.ham_ids, [2])
@@ -73,12 +74,28 @@ class AutoTaggerTests(unittest.TestCase):
         self.assertLess(at.classify('hello world this is ham'.split()), 0.5)
         self.assertLess(at.classify('this is a great world'.split()), 0.5)
 
-        # Test the real thing, which will decline to classify because
-        # our test data is too small.
-        rt = moggie.search.filters.AutoTagger().from_json(self.TEST_JSON)
+        # Test JSON generation
+        self.maxDiff = None
+        our_json = self.TEST_JSON.replace(' ', '').replace('\n', '')
+        self.assertEquals(our_json, at.to_json())
+
+        # Make sure that the min_trained threshold is respected
+        rt = TestAutoTagger(salt=None).from_json(self.TEST_JSON)
+        rt.min_trained = 250
         self.assertEquals(rt.classify('this is great spam I like'.split()), 0.5)
         self.assertEquals(rt.classify('hello world this is ham'.split()), 0.5)
 
-        self.maxDiff = None
-        our_json = self.TEST_JSON.replace(' ', '').replace('\n', '')
-        self.assertEquals(our_json, rt.to_json())
+    def test_autotagger_evidence(self):
+        at = moggie.search.filters.AutoTagger(salt='Testing')
+        at.min_trained = 0
+
+        at.learn(1, 'hello world this is great'.split(), is_spam=False)
+        at.learn(2, 'I like spam and ham is good too'.split(), is_spam=True)
+
+        # Test the evidence function...
+        rank, clues =  at.classify('this is great spam'.split(), evidence=True)
+        clues = dict(clues)
+        self.assertLess(rank, 0.5)
+        self.assertLess(clues['this'], 0.5)
+        self.assertLess(clues['great'], 0.5)
+        self.assertLess(0.5, clues['spam'])

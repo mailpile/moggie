@@ -20,7 +20,7 @@ import time
 import traceback
 import threading
 
-from ..api.exceptions import NeedInfoException
+from ..api.exceptions import APIException, NeedInfoException
 from ..storage.files import FileStorage
 from ..storage.imap import ImapStorage
 from ..util.dumbcode import *
@@ -259,6 +259,8 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
         try:
             parsed = self.backend.parse_message(metadata,
                 username=username, password=password)
+        except KeyError as e:
+            raise APIException('%s' % e)
         except PleaseUnlockError as pue:
             raise self.pue_to_needinfo(pue)
 

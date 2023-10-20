@@ -2,6 +2,10 @@ def _lazy_admin(cls):
     import moggie.app.cli.admin as mod
     return getattr(mod, cls)
 
+def _lazy_autotag(cls):
+    import moggie.app.cli.autotag as mod
+    return getattr(mod, cls)
+
 def _lazy_email(cls):
     import moggie.app.cli.email as mod
     return getattr(mod, cls)
@@ -62,8 +66,10 @@ CLI_COMMANDS = LazyLoader({
     'browse':  (_lazy_admin, 'CommandBrowse'),
     'encrypt': (_lazy_admin, 'CommandEnableEncryption'),
     'config':  (_lazy_admin, 'CommandConfig'),
-    'autotag': (_lazy_admin, 'CommandAutotag'),
-    'autotagtrain': (_lazy_admin, 'CommandAutotagTrain'),
+
+    'autotag': (_lazy_autotag, 'CommandAutotag'),
+    'autotag-train': (_lazy_autotag, 'CommandAutotagTrain'),
+    'autotag-classify': (_lazy_autotag, 'CommandAutotagClassify'),
 
     'websocket': (_lazy_dev, 'CommandWebsocket'),
 

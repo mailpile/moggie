@@ -120,7 +120,7 @@ class MailboxStorageMixin:
                 except PleaseUnlockError:
                     raise
                 except (KeyError, OSError) as e:
-                    logging.exception('Loading e-mail failed')
+                    logging.info('Loading e-mail failed: %s' % e)
 
         raise KeyError('Not found: %s' % dumb_decode(ptr.ptr_path))
 

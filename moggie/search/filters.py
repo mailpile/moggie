@@ -2,9 +2,11 @@
 #
 # FIXME/TODO:
 #
+#   - Move autotag configuration out of the JSON, into the main config!
 #   - Support encrypted filter rules!
 #   - Make it possible for filters to key off the tag_namespace or other
 #     initial tags set at import time; currently this won't work?
+#
 #   - We want to make it super easy to create dedicated processing
 #     for 1) different attachments, 2) different senders. Examples:
 #     - Create calendar entries based on .ics files
@@ -26,6 +28,7 @@ import random
 import re
 import time
 import traceback
+import hashlib
 
 from ..util.dumbcode import from_json, to_json
 from ..util.spambayes import Classifier
@@ -151,7 +154,19 @@ class FilterEnv(dict):
 
 
 class AutoTagger:
-    MIN_CORPUS = 250
+    """
+    This class implements the auto-tagging backend.
+
+    FIXME:
+        - Use a secure salt for the hash
+        - Allow the user to specify custom rules to ignore certain keywords
+          or force negative or positive results.
+    """
+    DEF_MIN_TRAINED = 250
+    DEF_THRESHOLD = 0.6
+    DEF_CLASSIFIER = 'spambayes'
+    DEF_TRAINING_AUTO = True
+
     SKIP_RE = re.compile(
         '(^\d+$'
         '|^.{0,3}$'
@@ -160,13 +175,15 @@ class AutoTagger:
         '|.*@'
         ')')
 
-    def __init__(self, tag=None):
+    def __init__(self, tag=None, salt='FIXME: Better than nothing'):
         self.tag = tag
-        self.classifier_type = 'spambayes'  # Future proofing for other kinds!
+        self.salt = bytes(salt, 'utf-8') if isinstance(salt, str) else salt
+        self.classifier_type = self.DEF_CLASSIFIER  # Others? Maybe someday!
         self.classifier = Classifier()
-        self.training_auto = True
+        self.min_trained = self.DEF_MIN_TRAINED
+        self.threshold = self.DEF_THRESHOLD
+        self.training_auto = self.DEF_TRAINING_AUTO
         self.trained_version = 0
-        self.threshold = 0.90
         self.spam_ids = []
         self.ham_ids = []
         self.info = {}
@@ -176,10 +193,11 @@ class AutoTagger:
         self.tag = info.pop('tag')
         self.spam_ids = info.pop('spam_ids', [])
         self.ham_ids = info.pop('ham_ids', [])
-        self.threshold = float(info.pop('threshold', 0.9))
-        self.training_auto = bool(info.pop('training_auto', True))
+        self.min_trained = int(info.pop('min_trained', self.DEF_MIN_TRAINED))
+        self.threshold = float(info.pop('threshold', self.DEF_THRESHOLD))
+        self.training_auto = bool(info.pop('training_auto', self.DEF_TRAINING_AUTO))
         self.trained_version = info.pop('trained_version', 0)
-        self.classifier_type = info.pop('classifier', 'spambayes')
+        self.classifier_type = info.pop('classifier', self.DEF_CLASSIFIER)
         self.classifier.load(info.pop('data', []))
         return self
 
@@ -189,6 +207,7 @@ class AutoTagger:
             'tag': self.tag,
             'spam_ids': self.spam_ids,
             'ham_ids': self.ham_ids,
+            'min_trained': self.min_trained,
             'threshold': self.threshold,
             'training_auto': self.training_auto,
             'trained_version': self.trained_version,
@@ -211,39 +230,83 @@ class AutoTagger:
             raise ValueError('Auto-training is disabled for %s' % self.tag)
         return self.MakeSearchObject(
             context=ctx,
-            terms='%s +version:%d..' % (self.tag, self.trained_version + 1))
+            terms='version:%d..' % (self.trained_version + 1,))
 
     def is_trained(self):
-        return (len(self.ham_ids) >= (self.MIN_CORPUS // 2)
-            and len(self.spam_ids) >= (self.MIN_CORPUS // 2))
+        return (len(self.ham_ids) >= self.min_trained
+            and len(self.spam_ids) >= self.min_trained)
 
-    def classify(self, keywords):
+    def obfuscate(self, keywords):
+        if not self.salt:
+            return keywords
+        def _obfu(kw):
+            if (':' not in kw) or (kw[:8] == 'subject:'):
+                kw = hashlib.sha1(bytes(kw, 'utf-8') + self.salt)
+                kw = kw.hexdigest()[:12]
+            return kw
+        return [_obfu(kw) for kw in keywords]
+
+    def is_known(self, _id):
+        return (_id in self.spam_ids) or (_id in self.ham_ids)
+
+    def classify(self, keywords, evidence=False):
         if not self.is_trained():
-            return 0.5
-        return self.classifier.classify(keywords)
+            dbg = 'untrained/%d/%d' % (len(self.spam_ids), len(self.ham_ids))
+            return (
+                (0.5, [('%s:%s' % (self.classifier_type, dbg), 0.5)])
+                if evidence else 0.5)
+
+        special_keywords = [k for k in keywords if ':' in k]
+        for kws, minkw, confidence in (
+                (special_keywords, 5, 0.95),
+                (keywords, 0, 0)):
+            if len(kws) < minkw:
+                continue
+            obfuscated = self.obfuscate(kws)
+            delta = confidence / 2.0
+            if evidence:
+                kw_map = dict(zip(obfuscated, kws))
+                p, clues = self.classifier.classify(obfuscated, evidence=True)
+                if p <= (0.5 - delta) or p >= (0.5 + delta):
+                    return p, ((kw_map[k], v) for k, v in clues if k in kw_map)
+            else:
+                p = self.classifier.classify(obfuscated)
+                if p <= (0.5 - delta) or p >= (0.5 + delta):
+                    return p
 
     def learn(self, _id, keywords, is_spam=True):
         set_yes = self.spam_ids if is_spam else self.ham_ids
         set_no = self.ham_ids if is_spam else self.spam_ids
-        keywords = [k.lower() for k in keywords if not self.SKIP_RE.match(k)]
+        keywords = self.obfuscate(
+            [k.lower() for k in keywords if not self.SKIP_RE.match(k)])
         if _id in set_no:
             self.classifier.unlearn(keywords, not is_spam)
             set_no.remove(_id)
         self.classifier.learn(keywords, is_spam)
         set_yes.append(_id)
 
-    def prune(self, ratio=0.1):
-        prune_spam = int(len(self.spam_ids) * ratio)
-        prune_ham = int(len(self.ham_ids) * ratio)
-        if not (prune_spam and prune_ham):
-            return
+    def compact(self):
+        target_size = 100 * self.min_trained
+        current_size = len(self.spam_ids) + len(self.ham_ids)
+        ratio = 1 - (target_size / current_size)
 
-        # FIXME: Add a method to the spambayes classifier to decay the
-        #        counts in the word-list according to our ratio, and then
-        # prune any zeroes from the word count list. Prune our lists of
-        # message IDs according to the same ratio.
+        prune_spam = round(len(self.spam_ids) * ratio)
+        prune_ham = round(len(self.ham_ids) * ratio)
+        if ((ratio < 0.05)
+                or (current_size < target_size)
+                or not (prune_spam and prune_ham)):
+            logging.info(
+                '[autotag] Trained set is too small, compacting aborted.')
+            return False
 
-        return False
+        dropped = self.classifier.decay(ratio)
+        self.spam_ids = self.spam_ids[prune_spam:]
+        self.ham_ids = self.ham_ids[prune_ham:]
+        logging.info(
+            '[autotag] Decayed weights by %.2f%% (~%d emails), dropped %d terms'
+            % (100 * ratio, prune_spam + prune_ham, dropped))
+
+        return True
 
 
 class FilterRule:

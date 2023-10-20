@@ -82,8 +82,8 @@ def version_term_magic(term, max_version):
             beg += 1
 
         return tuple([IntSet.Or] + terms)
-    except (ValueError, KeyError, IndexError, TypeError, NameError):
-        logging.exception('Failed to parse version: %s' % term)
+    except (ValueError, KeyError, IndexError, TypeError, NameError) as e:
+        logging.debug('Failed to parse version %s: %s' % (term, e))
         return term
 
 

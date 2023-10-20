@@ -60,8 +60,15 @@ main app worker. Hints:
 # internal moggie API calls, shell commands, or python one-liners.
 # This file is automatically reloaded by moggie if changed.
 #
+### Checking for new mail:
+#
 */2  * * * *  moggie new --only-inboxes
 */30 * * * *  moggie new
+#
+### Retraining the autotaggers (spam filters)
+#
+*/15 * * * *  moggie autotag-train
+05  12 * * 1  moggie autotag-train --compact
 #
 # FIXME: This would be a good way to un-snooze snoozed mail...
 #
@@ -1020,7 +1027,19 @@ main app worker. Hints:
         loop = asyncio.get_event_loop()
         return await self.importer.with_caller(conn_id).async_call(
             loop, 'autotag_train',
-            tag_ns, api_request['tags'], api_request['search'])
+            tag_ns,
+            api_request['tags'],
+            api_request['search'],
+            api_request['compact'])
+
+    async def api_req_autotag_classify(self, conn_id, access, api_request):
+        # Will raise ValueError or NameError if access denied
+        ctx = api_request['context']
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
+        loop = asyncio.get_event_loop()
+        return await self.importer.with_caller(conn_id).async_call(
+            loop, 'autotag_classify',
+            tag_ns, api_request['tags'], api_request['keywords'])
 
     async def _route_api_request(self, conn_id, access, api_req):
         # FIXME: This needs refactoring
@@ -1061,6 +1080,8 @@ main app worker. Hints:
             result = await self.api_req_autotag(conn_id, access, api_req)
         elif type(api_req) == RequestAutotagTrain:
             result = await self.api_req_autotag_train(conn_id, access, api_req)
+        elif type(api_req) == RequestAutotagClassify:
+            result = await self.api_req_autotag_classify(conn_id, access, api_req)
         elif type(api_req) == RequestPing:
             result = ResponsePing(api_req)
         return result
@@ -1163,9 +1184,6 @@ main app worker. Hints:
             ResponseNotification(notification),
             only=only)
         self.worker.reply_json({'ok': 'thanks'}, **kwargs['reply_kwargs'])
-
-    async def rpc_check_result(self, request_id, **kwargs):
-        pass
 
     async def rpc_api(self, request, **kwargs):
         try:

@@ -82,12 +82,25 @@ class RequestAutotag(RequestBase):
 
 
 class RequestAutotagTrain(RequestBase):
-    def __init__(self, context='', tags=[], search=None, req_id=None):
+    def __init__(self,
+            context='', tags=[], search=None, compact=False, req_id=None):
         self.update({
             'req_type': 'autotag_train',
             'context': context,
             'tags': tags,
-            'search': search
+            'search': search,
+            'compact': compact
+        }, req_id=req_id)
+
+
+class RequestAutotagClassify(RequestBase):
+    def __init__(self,
+            context='', tags=[], keywords=None, compact=False, req_id=None):
+        self.update({
+            'req_type': 'autotag_classify',
+            'context': context,
+            'tags': tags,
+            'keywords': keywords
         }, req_id=req_id)
 
 
@@ -300,6 +313,7 @@ def to_api_request(_input):
          'tag': RequestTag,
          'autotag': RequestAutotag,
          'autotag_train': RequestAutotagTrain,
+         'autotag_classify': RequestAutotagClassify,
          'ping': RequestPing,
          'email': RequestEmail,
          'counts': RequestCounts,

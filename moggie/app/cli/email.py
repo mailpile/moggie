@@ -31,7 +31,7 @@ import time
 
 from .command import Nonsense, CLICommand, AccessConfig
 from .openpgp import CommandOpenPGP
-from ...api.requests import RequestMailbox, RequestSearch, RequestEmail
+from ...api.requests import *
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
@@ -105,6 +105,7 @@ class CommandParse(CLICommand):
         ('--with-data=',        ['N'], 'X=(Y|N*), include attachment data'),
         ('--with-headprints=',  ['N'], 'X=(Y|N*), include header fingerprints'),
         ('--with-keywords=',    ['N'], 'X=(Y|N*), include search-engine keywords'),
+        ('--with-autotags=',    ['N'], 'X=(Y|N*), include auto-tagging analysis'),
         ('--with-openpgp=',     ['N'], 'X=(Y|N*), process OpenPGP content'),
         ('--scan-moggie-zips=', ['Y'], 'X=(Y*|N), scan moggie-specific archives'),
         ('--scan-archives=',    ['N'], 'X=(Y|N*), scan all archives for attachments'),
@@ -410,7 +411,7 @@ class CommandParse(CLICommand):
             if settings.with_headers:
                 p['_RAW_HEADERS'] = str(
                     data[:header_end], 'utf-8', 'replace').rstrip()
-            if settings.with_openpgp:
+            if settings.with_openpgp and cli_obj:
                 p.with_structure().with_text()
                 await cls.parse_openpgp(cli_obj, settings, p)
             elif settings.with_structure:
@@ -428,7 +429,8 @@ class CommandParse(CLICommand):
                     zip_archives=settings.scan_archives,
                     zip_passwords=settings.zip_password)
 
-            if settings.with_text or html_magic or settings.with_keywords:
+            need_keywords = settings.with_keywords or settings.with_autotags
+            if settings.with_text or html_magic or need_keywords:
                 p.with_text()
             if settings.with_data:
                 p.with_data()
@@ -482,11 +484,18 @@ class CommandParse(CLICommand):
 
             # Important: This must come last, it checks for the output of
             #            the above sections!
-            if settings.with_keywords:
+            if need_keywords:
                 from moggie.search.extractor import KeywordExtractor
                 kwe = KeywordExtractor()
                 more, kws = kwe.extract_email_keywords(None, p)
                 p['_KEYWORDS'] = sorted(list(kws))
+
+            if settings.with_autotags and cli_obj:
+                res = await cli_obj.worker.async_api_request(cli_obj.access,
+                    RequestAutotagClassify(
+                        context=cli_obj.get_context(),
+                        keywords=p['_KEYWORDS']))
+                p['_AUTOTAGS'] = res
 
             # Cleanup phase; depending on our --with-... arguments, we may
             # want to remove some stuff from the output.

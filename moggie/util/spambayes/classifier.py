@@ -188,6 +188,20 @@ class Classifier:
         for word, info in self.wordinfo.items():
             yield word, info.spamcount, info.hamcount
 
+    def decay(self, ratio):
+        dropping = []
+        scale = 1.0 - ratio
+        for word, info in self.wordinfo.items():
+            info.spamcount = scale * info.spamcount
+            info.hamcount = scale * info.hamcount
+            if (info.spamcount < 0.5) and (info.hamcount < 0.5):
+                dropping.append(word)
+        self.nspam = int(scale * self.nspam)
+        self.nham = int(scale * self.nham)
+        for word in dropping:
+            del self.wordinfo[word]
+        return len(dropping)
+
     def load(self, iterator):
         self.wordinfo = {}
         self.probcache = {}
@@ -279,7 +293,7 @@ class Classifier:
 
         if evidence:
             clues = [(w, p) for p, w, _r in clues]
-            clues.sort(lambda a, b: cmp(a[1], b[1]))
+            clues.sort(key=lambda a: a[1])
             clues.insert(0, ('*S*', S))
             clues.insert(0, ('*H*', H))
             return prob, clues
