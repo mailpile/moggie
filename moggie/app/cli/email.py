@@ -915,6 +915,26 @@ These are the %d searchable keywords for this message:
                         _wrap(', '.join(special)),
                         _wrap(', '.join(others))))
 
+            if self.settings.with_autotags:
+                info = []
+                for tag, clues in parsed.get('_AUTOTAGS').items():
+                    rank, clues = clues
+                    info.append(
+                        'Tag: %s\n' % tag +
+                        'Probability: %.4f\n' % rank +
+                        'Keywords:\n' +
+                        '\n'.join(
+                            '  (p=%.6f)  %s' % (p, kw)
+                            for kw, p in clues.items()))
+
+                report.append("""## Auto-tagging results
+
+This is how the auto-tagging classifiers would rank this message today.
+Note this may differ from how the message was tagged on arrival, as the
+system should have learned new things since then.
+
+%s""" % ('\n\n'.join(info)))
+
             if self.settings.with_headers:
                 from moggie.email.headers import ADDRESS_HEADERS, SINGLETONS
 
