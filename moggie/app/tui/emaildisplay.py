@@ -279,6 +279,13 @@ However, Moggie has yet to receive a copy.
         if self.marked_read or self.metadata.get('missing'):
             return
 
+        # FIXME: If reading a mailbox directly, should we update it?
+        #        If reading indirectly, should we update that?
+
+        # FIXME: If we had the search context, we could use this as a signal
+        #        to import the message into the index. Do we want that?
+        # Tagging as read would do that.
+
         # FIXME: 100 million is a magic number to detect whether this is
         #        a real or synthetic internal ID. We should use something
         #        smarter!

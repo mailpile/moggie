@@ -32,7 +32,7 @@ def version_term_magic(term, max_version):
             end = max_version
         elif word == 'recent':
             end = max_version
-            beg = end - 200
+            beg = end - 200    # FIXME: magic number, may be a poor choice
         else:
             beg = end = word
 
