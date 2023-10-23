@@ -487,7 +487,7 @@ class CommandParse(CLICommand):
             if need_keywords:
                 from moggie.search.extractor import KeywordExtractor
                 kwe = KeywordExtractor()
-                more, kws = kwe.extract_email_keywords(None, p)
+                more, kws = kwe.extract_email_keywords(md, p)
                 p['_KEYWORDS'] = sorted(list(kws))
 
             if settings.with_autotags and cli_obj:

@@ -6,11 +6,13 @@ from .command import Nonsense, CLICommand
 
 
 class CommandAutotag(CLICommand):
-    """moggie autotag <op> <tag1> [<tag2> ...] -- <search terms>
+    """moggie autotag <tag1> [<tag2> ...] -- <search terms>
 
-    Run the autotagger(s) for the named tags, against the messages
-    matching the search terms. The default junk/trash suppression will
-    be disabled for the search.
+    Apply one or more auto-taggers to a set of messages.
+
+    For all messages matching the search terms, invoke the requested auto-
+    taggers and tag (or untag) the messages based on how similar they are
+    to other messages in the training set.
 
     ### Options
 
@@ -31,6 +33,8 @@ class CommandAutotag(CLICommand):
     def validate(self):
         if not self.tags:
             raise Nonsense('At least one tag is required.')
+        if not self.terms:
+            raise Nonsense('At least one search term is required.')
 
     def configure(self, args):
         try:
@@ -83,11 +87,12 @@ class CommandAutotagTrain(CommandAutotag):
     %(OPTIONS)s
 
     Training will take place using the messages matching the search terms.
-    Messages that match the search AND are already tagged, will be treated
+
+    Messages that match the search and are already tagged, will be treated
     as positive matches (similar mail should be tagged; "spam"), messages
-    that match the search but are not tagged, will be treated as examples
-    of what should not be tagged (negative matches; "ham"). The usual
-    suppression of junk/trash results will be disabled.
+    that match the search but are NOT tagged, will be treated as examples
+    of what should not be tagged in the future (negative matches; "ham").
+    The usual suppression of junk/trash results will be disabled.
 
     If no search terms are given, then for tags which have auto-training
     enabled, the training set will be chosen automatically. In this case,
@@ -95,6 +100,12 @@ class CommandAutotagTrain(CommandAutotag):
 
     If no tags are given, all configured autotaggers will be trained,
     either within the specified context or globally.
+
+    If `--compact` is requested, the size of the training set will be
+    reduced and an aging functioned applied: the oldest IDs will be dropped
+    from the sets of known messages and the statistical weights of known
+    keywords will be scaled down proportionately. Keywords which fall below
+    a minimum threshold of relevance will be deleted from the training set.
 
     ### Scheduling and Configuration
 
@@ -160,6 +171,8 @@ class CommandAutotagClassify(CommandAutotag):
     ### Options
 
     %(OPTIONS)s
+
+    ### About auto-tagging
 
     See also `moggie help autotagtrain` for information on how to train
     the classifier.

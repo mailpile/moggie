@@ -5,6 +5,11 @@ from dkim.asyncsupport import DKIM, get_txt_async
 import asyncio
 
 
+# FIXME: Wrap get_txt_async caching layer. If we keep local copies of the
+#        TXT records, we will be able to re-verify DKIM records after the
+# fact, even if the DNS rotates or we are offline.
+
+
 # This is adapted from the dkimpy async verification method, but it lets
 # us verify multiple signatures in one pass (which will hopefully be a
 # little more efficient).

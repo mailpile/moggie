@@ -48,11 +48,18 @@ if 'status:o' in keywords:
     add_tags('read')
 
 
-# Check if we think message is spam, unless already classified
-if ('in:junk' not in keywords) and ('in:notjunk' not in keywords):
-    run_autotagger('in:junk')
-if 'in:junk' in keywords:
-    remove_tag('inbox')
+# Auto-tag priority messages; this does not remove from the inbox
+run_autotaggers('priority', add_tags=['autotagged'])
+
+# Ignore auto-taggers we want to run by hand?
+#ignore_autotaggers('manual')
+
+# Run the rest of the autotaggers, removing from the inbox any matches,
+# unless they are tagged as priority, in which case they stay in the
+# inbox.
+if run_autotaggers(add_tags='autotagged'):
+    if 'in:priority' not in keywords:
+        remove_tags('inbox')
 """
 
 
@@ -80,7 +87,10 @@ class FilterEnv(dict):
             'add_keywords': self.add,
             'remove_keyword': self.remove,
             'remove_keywords': self.remove,
-            'run_autotagger': self.run_autotagger})
+            'ignore_autotagger': self.ignore_autotaggers,
+            'ignore_autotaggers': self.ignore_autotaggers,
+            'run_autotagger': self.run_autotaggers,
+            'run_autotaggers': self.run_autotaggers})
 
     def reset(self, keywords, tag_namespace):
         self.keywords = keywords
@@ -108,20 +118,61 @@ class FilterEnv(dict):
         self.py.settings = settings or {}
         self.called_filter_rule = True
 
-    def run_autotagger(self, tag):
-        tag = 'in:%s' % (tag.split(':')[-1])
-        if self.tag_namespace and ('@' not in tag):
-            tag += '@%s' % self.tag_namespace
-        at = self.py.engine.get_autotagger(tag, create=False)
-        if at is None:
-            self.py.engine.log_once(
-                logging.error, '[import] Failed to load autotagger: %s' % tag)
+    def _fix_tags(self, tags):
+        fixed = []
+        tags = [tags] if isinstance(tags, str) else tags
+        ns_suffix = '@%s' % self.tag_namespace
+        for tag in tags:
+            tag = 'in:%s' % (tag.split(':')[-1]).lower()
+            if self.tag_namespace:
+                if '@' in tag:
+                    if not tag.endswith(ns_suffix):
+                        continue
+                else:
+                    tag += '@%s' % self.tag_namespace
+            fixed.append(tag)
+        return set(fixed)
+
+    def ignore_autotaggers(self, *tags):
+        if not self.py or not self.py.engine:
+            return
+        if tags:
+            tags = self._fix_tags(tags)
         else:
-            rank = at.classify(self.keywords)
-            if rank > at.threshold:
-                self.keywords.add(tag)
-                logging.debug(
-                    '[import] Auto-tagged (rank=%.3f) with: %s' % (rank, tag))
+            tags = self._fix_tags(self.py.engine.autotaggers.keys())
+        self.autotag_done.add(tags)
+
+    def run_autotaggers(self, *tags, add_tags=None, remove_tags=None):
+        if not self.py or not self.py.engine:
+            return
+
+        if tags:
+            tags = self._fix_tags(tags)
+        else:
+            tags = self._fix_tags(self.py.engine.autotaggers.keys())
+        add_tags = self._fix_tags(add_tags or [])
+        del_tags = self._fix_tags(remove_tags or [])
+
+        tagged = False
+        for tag in tags:
+            if tag in self.autotag_done:
+                continue
+            at = self.py.engine.get_autotagger(tag, create=False)
+            if at is None:
+                self.py.engine.log_once(logging.error,
+                    '[import] Failed to load autotagger: %s' % tag)
+            else:
+                rank = at.classify(self.keywords)
+                if rank > at.threshold:
+                    tagged = True
+                    self.keywords.add(tag)
+                    self.keywords |= add_tags
+                    self.keywords -= del_tags
+                    logging.debug(
+                        '[import] Auto-tagged (rank=%.3f) with: %s' % (rank, tag))
+            self.autotag_done.add(tag)
+
+        return tagged
 
     def remove(self, *kwsets):
         for kws in kwsets:
@@ -134,23 +185,13 @@ class FilterEnv(dict):
 
     def add_tags(self, *tagsets):
         for ts in tagsets:
-            for tag in (ts if isinstance(ts, list) else [ts]):
-                if self.tag_namespace:
-                    self.keywords.add('in:%s@%s' % (tag, self.tag_namespace))
-                else:
-                    self.keywords.add('in:%s' % (tag,))
+            tags = self._fix_tags(ts)
+            self.keywords |= tags
 
     def remove_tags(self, *tagsets):
         for ts in tagsets:
-            for tag in (ts if isinstance(ts, list) else [ts]):
-                if self.tag_namespace:
-                    rm = 'in:%s@%s' % (tag, self.tag_namespace)
-                else:
-                    rm = 'in:%s' % (tag,)
-                try:
-                    self.keywords.remove(rm)
-                except KeyError:
-                    pass
+            tags = self._fix_tags(ts)
+            self.keywords -= tags
 
 
 class AutoTagger:
@@ -528,18 +569,19 @@ add_keywords('notreached')
         try:
             fe.filter(tns, kw, None, None)
             assert(not 'reached')
-        except FilterError:
+        except FilterError as e:
             pass
 
     assert('in:inbox' in kw)
     assert('in:inbox@testspace' in kw)
     assert('in:read' in kw)
     assert('in:read@testspace' in kw)
-    assert('none' in kw)
-    assert('flip' in kw)
     assert('fungible' in kw)
-    assert('notreached' not in kw)
+    assert('flip' in kw)
+    assert('flop' in kw)
+    assert('none' in kw)
     assert('bogon' not in kw)
+    assert('notreached' not in kw)
 
     # The FILTER_RULE directive is required
     try:

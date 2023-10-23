@@ -85,7 +85,7 @@ class ImportWorker(BaseWorker):
 
         self.parser_settings = CommandParse.Settings(with_keywords=True)
         self.parser_settings.with_openpgp = False
-        self.allow_network = False
+        self.allow_network = True  # FIXME: Make configurable?
 
         assert(self.app and self.search)
 
