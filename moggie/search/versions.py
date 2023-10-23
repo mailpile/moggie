@@ -30,6 +30,9 @@ def version_term_magic(term, max_version):
         elif word[-1:] == '+':
             beg = int(word[:-1]) + 1
             end = max_version
+        elif word == 'recent':
+            end = max_version
+            beg = end - 200
         else:
             beg = end = word
 

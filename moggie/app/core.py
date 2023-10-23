@@ -68,7 +68,8 @@ main app worker. Hints:
 ### Retraining the autotaggers (spam filters)
 #
 */15 * * * *  moggie autotag-train
-05  12 * * 1  moggie autotag-train --compact
+01   * * * *  moggie autotag-train in:junk -- in:read (version:recent OR dates:recent)
+07  12 * * 1  moggie autotag-train --compact
 #
 # FIXME: This would be a good way to un-snooze snoozed mail...
 #
