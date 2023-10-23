@@ -55,6 +55,7 @@ However, Moggie has yet to receive a copy.
         self.selected = selected
         self.email = parsed
         self.view = self.VIEW_EMAIL
+        self.marked_read = False
         self.has_attachments = None
         self.uuid = self.metadata['uuid']
         self.crumb = self.VIEW_CRUMBS[self.view]
@@ -274,6 +275,20 @@ However, Moggie has yet to receive a copy.
         else:
             return self.no_body('Empty message')
 
+    def mark_read(self):
+        if self.marked_read or self.metadata.get('missing'):
+            return
+
+        # FIXME: 100 million is a magic number to detect whether this is
+        #        a real or synthetic internal ID. We should use something
+        #        smarter!
+        idx = self.metadata['idx'] if self.metadata else None
+        if idx and (idx < 100000000):
+            if 'in:read' not in self.metadata.get('tags', []):
+                self.marked_read = RequestCommand(
+                    'tag', args=['+read', '--', 'id:%s' % idx])
+                self.tui.send_with_context(self.marked_read, self.ctx_src_id)
+
     def send_email_request(self):
         cached = RESULT_CACHE.get(self.search_id)
         if cached:
@@ -310,6 +325,7 @@ However, Moggie has yet to receive a copy.
             self.email_display = [self.no_body(
                 'Failed to load or parse message, sorry!')]
 
+        self.mark_read()
         self.crumb = self.VIEW_CRUMBS[self.view]
         self.tui.update_topbar()
         self.update_content()

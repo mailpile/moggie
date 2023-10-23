@@ -158,8 +158,10 @@ class TuiFrame(urwid.Frame):
                         logging.exception('Incoming message asploded')
 
             if 'error' in message and 'exception' in message:
-                # This only applies if we have a NeedInfo ?
-                self.show_modal(RetryDialog, message)
+                # If we need more info, pop a retry dialog
+                if message['exc_data'].get('need'):
+                    self.show_modal(RetryDialog, message)
+                # FIXME: Display other errors? Or no?
 
             elif message.get('req_type') in ('notification', 'unlocked'):
                 if message['req_type'] == 'unlocked':
