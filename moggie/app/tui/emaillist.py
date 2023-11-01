@@ -6,6 +6,7 @@
 #   - Make tagging/untagging work!
 #   - Experiment with a twitter-like people-centric view?
 #
+import copy
 import datetime
 import logging
 import re
@@ -46,6 +47,7 @@ class EmailListWalker(urwid.ListWalker):
         self.focus = focus
         if focus > len(self.visible) - 50:
             self.parent.load_more()
+        self.parent.scounter.walker_updated()
 
     def next_position(self, pos):
         if pos + 1 < len(self.visible):
@@ -66,6 +68,15 @@ class EmailListWalker(urwid.ListWalker):
     def expand(self, msg):
         self.expanded.add(msg['thread_id'])
         self.set_emails(self.emails)
+
+    def selected_ids(self):
+        _ids = set()
+        if self.visible:
+            _ids.add(self.visible[self.focus]['idx'])
+        if self.selected:
+            _ids |= set(i['idx']
+                for i in self.emails if i['uuid'] in self.selected)
+        return _ids
 
     def set_emails(self, emails, focus_uuid=None):
         self.emails[:] = [e for e in emails if isinstance(e, dict)]
@@ -139,7 +150,7 @@ class EmailListWalker(urwid.ListWalker):
             uuid = md['uuid']
             dt = md.get('ts') or md.get('_rank')
             dt = datetime.datetime.fromtimestamp(dt) if dt else 0
-            if self.selected_all or uuid in self.selected:
+            if self.selected_all or focused or uuid in self.selected:
                 prefix = 'check'
                 attrs = '>    <'
                 dt = dt.strftime('%Y-%m  ' + EMOJI.get('selected', 'X')) if dt else ''
@@ -226,6 +237,19 @@ class SuggestAddToIndex(Suggestion):
         return self._message
 
 
+class SelectionCounter(urwid.Text):
+    def __init__(self, walker):
+        self.walker = walker
+        self.fmt = '\nSelected %d messages'
+        super().__init__(
+            [('subtle', self.fmt % len(self.walker.selected_ids()))],
+            align='center')
+
+    def walker_updated(self):
+        self.set_text(
+            [('subtle', self.fmt % len(self.walker.selected_ids()))])
+
+
 class EmailList(urwid.Pile):
     COLUMN_NEEDS = 50
     COLUMN_WANTS = 70
@@ -234,6 +258,13 @@ class EmailList(urwid.Pile):
 
     VIEW_MESSAGES = 0
     VIEW_THREADS  = 1
+
+    TAG_OP_MAP = {
+        't': ('TAG',   'Tag selected messages', 'Tagged'),
+        'E': ('UNTAG', 'Remove tags: %s',       'Untagged'),
+        'I': ('+read', 'Mark messages read',    'Marked read'),
+        '!': ('+junk', 'Move to junk',          'Moved to junk'),
+        '#': ('+trash', 'Move to trash',        'Moved to trash')}
 
     def __init__(self, tui, ctx_src_id, terms, view=None):
         self.tui = tui
@@ -258,9 +289,11 @@ class EmailList(urwid.Pile):
         self.total_available = None
         self.search_obj = self.make_search_obj()
         self.count_obj = RequestCommand('count', args=[self.terms])
+        self.webui_state = {}
 
         self.walker = EmailListWalker(self)
         self.emails = self.walker.emails
+        self.scounter = SelectionCounter(self.walker)
 
         self.listbox = urwid.ListBox(self.walker)
         self.suggestions = SuggestionBox(self.tui,
@@ -307,7 +340,7 @@ class EmailList(urwid.Pile):
             self.listbox.keypress(size, 'up')
             self.listbox.keypress(size, 'enter')
             return None
-        if key == 'E':
+        if key == 'D':
             self.on_export()
             return None
         if key == 'V':
@@ -319,11 +352,15 @@ class EmailList(urwid.Pile):
         if key == 'X':
             self.on_select_all()
             return None
+        if key in self.get_tag_op_map():
+            self.on_tag_op(key)
+            return None
         return super().keypress(size, key)
 
     def make_search_obj(self):
         search_args = [
             '--q=%s' % self.terms,
+            '--json-ui-state',
             '--limit=%s' % self.want_emails]
 
         if self.view == self.VIEW_THREADS:
@@ -367,17 +404,29 @@ class EmailList(urwid.Pile):
         # Inject suggestions above the list of messages, if any are
         # present. This can change dynamically as the backend sends us
         # hints.
-        if self.walker.selected_all:
+        if self.walker.selected_all or self.walker.selected:
+            if self.walker.selected_all:
+                count = urwid.Text(
+                    [('subtle', '\nAll matching messages are selected.')],
+                    align='center')
+            else:
+                count = self.scounter
+            ops = []
+            for hotkey, (tagop, desc, _) in self.get_tag_op_map().items():
+                ops.extend([
+                    ('white', '%s:' % hotkey), ('subtle', desc),
+                    ('subtle', '\n')])
+            ops.pop(-1)
             self.widgets.append(urwid.Columns([
-                ('weight', 1, urwid.Text(('subtle',
-                        '\nAll matching messages are selected.\n'),
-                    align='center')),
-                ('fixed', 3, urwid.Text(' '))]))
+                ('weight', 1, count),
+                ('weight', 1, urwid.Text(ops, align='left'))]))
+            divide = True
         elif len(self.suggestions):
             self.widgets.append(self.suggestions)
+            divide = False
 
         rows -= sum(w.rows((60,)) for w in self.widgets)
-        if False and self.widgets:
+        if False and divide:  # FIXME
             self.widgets.append(urwid.Divider())
             rows -= 1
         self.widgets.append(urwid.BoxAdapter(self.listbox, rows))
@@ -423,7 +472,14 @@ class EmailList(urwid.Pile):
     def incoming_result(self, source, message):
         try:
             first = (0 == len(self.emails))
+            self.webui_state = message['data'].pop(0)
             self.walker.set_emails(message['data'])
+
+            # FIXME: Should the back-end make this easier for us?
+            terms = (self.webui_state['details']['terms']
+                .replace('+', '').replace('-', '')).split()
+            self.webui_state['query_tags'] = [
+                word for word in terms if word.startswith('in:')]
 
             #self.suggestions.incoming_message(message)
 
@@ -444,7 +500,7 @@ class EmailList(urwid.Pile):
         hks = []
         if self.emails:
             hks.extend([' ', ('col_hk', 'x:'), 'Select?'])
-            hks.extend([' ', ('col_hk', 'E:'), 'Export'])
+            hks.extend([' ', ('col_hk', 'D:'), 'Download'])
         if self.is_mailbox:
             hks.extend([' ', ('col_hk', 'A:'), 'Add to moggie'])
         else:
@@ -454,6 +510,63 @@ class EmailList(urwid.Pile):
         # FIXME: Saving searches!
 
         return hks
+
+    def get_tag_op_map(self):
+        # FIXME: Adapt to mailbox searches?
+        opmap = copy.copy(self.TAG_OP_MAP)
+        tags = self.webui_state.get('query_tags')
+        if tags:
+            untag = ' '.join('-%s' % t for t in tags)
+            tdesc = ', '.join(t[3:] for t in tags)
+            opmap['E'] = (untag, opmap['E'][1] % tdesc, opmap['E'][2])
+        else:
+            del opmap['E']
+        # FIXME: If no tags in the search result, omit E
+        #        If there are, update the description
+        return opmap
+
+    def on_tag_op(self, hotkey=None, tag_op=None, comment=None):
+        if tag_op is None:
+            tdc = self.get_tag_op_map().get(hotkey)
+            if tdc:
+                tag_op, desc, comment = tdc
+        if tag_op == 'TAG':
+            pass  # FIXME: Pop up tag dialog
+        else:
+            self.run_tag_op(tag_op, comment)
+
+    def run_tag_op(self, tag_op, comment):
+        if 'details' in self.webui_state:
+            search_terms = self.webui_state['details']['terms'].split()
+        else:
+            logging.debug('STATE: %s' % self.webui_state)
+            search_terms = []
+
+        if not self.walker.selected_all:
+            idlist = ('(%s)' % ' OR '.join('id:%s' % _id
+                for _id in self.walker.selected_ids()))
+            if search_terms and search_terms[0].startswith('mailbox:'):
+                search_terms.append(idlist)
+            else:
+                search_terms = [idlist]
+
+        args = tag_op.split()
+        if comment:
+            args.append('--comment=%s' % comment)
+        args.append('--')
+        args.extend(search_terms)
+        tag_req = RequestCommand('tag', args=args)
+        self.tui.send_with_context(tag_req, self.ctx_src_id,
+            on_reply=self.on_tagged,
+            on_error=self.on_tag_failed)
+
+        #logging.debug('FIXME: Should tag %s with %s' % (tag_op, search_terms))
+
+    def on_tagged(self, *args, **kwargs):
+        logging.debug('FIXME: on_tagged(%s, %s)' % (args, kwargs))
+
+    def on_tag_failed(self, *args, **kwargs):
+        logging.error('FIXME: on_tag_failed(%s, %s)' % (args, kwargs))
 
     def on_select_all(self):
         self.walker.selected = set()

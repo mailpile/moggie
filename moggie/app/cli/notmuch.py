@@ -159,6 +159,7 @@ FIXME: Document html and html formats!
         ('--entire-thread=',      [], 'X=(true|false)'),
         ('--username=',       [None], 'Username with which to access email'),
         ('--password=',       [None], 'Password with which to access email'),
+        ('--json-ui-state',       [], 'Include UI state in JSON result'),
     ],[
         (None, None, 'output'),
         ('--format=',       ['text'], 'X=(text*|text0|json|sexp|zip|maildir|mbox|..)'),
@@ -610,6 +611,8 @@ FIXME: Document html and html formats!
         result = self._json_sanitize(result)
         if first:
             self.print_json_list_start(nl='')
+            if self.options['--json-ui-state']:
+                self.print_json(self.webui_state)
         if result:
             self.print_json(result[1], nl='')
         if last:
