@@ -152,7 +152,7 @@ class CSSParser:
         return self
 
     def _pb(self, end_re, on_found, next_state):
-        next_block = end_re.search(self.data[self.pos:])
+        next_block = end_re.search(self.data[self.pos:]) if self.data else None
         if next_block:
             next_delim = next_block.group(0)
             next_pos = self.pos + next_block.span()[0]
