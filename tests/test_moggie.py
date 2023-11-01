@@ -4,7 +4,7 @@ import shlex
 import time
 import unittest
 
-from moggie import Moggie
+from moggie import Moggie, set_shared_moggie, get_shared_moggie
 
 
 class OfflineMoggieTest(unittest.TestCase):
@@ -13,6 +13,11 @@ class OfflineMoggieTest(unittest.TestCase):
     """
     def test_moggie_help(self):
         self.assertRegex(Moggie().help()[0]['text'], 'moggie search')
+
+    def test_moggie_help_callback(self):
+        results = []
+        Moggie().help(on_success=results.append)
+        self.assertRegex(results[0][0]['text'], 'moggie search')
 
     def test_moggie_email(self):
         moggie = Moggie()
@@ -62,13 +67,15 @@ class OnlineMoggieTest(unittest.TestCase):
         moggie = OnlineMoggieTest.moggie = Moggie(work_dir=wd)
         moggie.set_access(True)
         moggie.start()
+        set_shared_moggie(moggie)
+        set_shared_moggie(moggie, 'testing')
 
     def tearDownClass():
         OnlineMoggieTest.moggie.stop()
         os.system(shlex.join(['rm', '-rf', OnlineMoggieTest.work_dir]))
 
     def test_moggie_001_help(self):
-        self.assertRegex(self.moggie.help()[0]['text'], 'moggie search')
+        self.assertRegex(get_shared_moggie().help()[0]['text'], 'moggie search')
 
     def test_moggie_002_count(self):
         self.assertTrue('*' in self.moggie.count()[0])
@@ -97,3 +104,20 @@ class OnlineMoggieTest(unittest.TestCase):
         self.assertEquals(results[0]['tags'],          ['inbox'])
 
         # FIXME: Many, many more tests! Search has so many different modes
+
+    def test_moggie_005_websocket_help(self):
+        moggie = get_shared_moggie('testing')
+        results = []
+        ev_loop = asyncio.get_event_loop()
+        async def await_results():
+            await moggie.enable_websocket(ev_loop)
+            moggie.help(on_success=results.append)
+            for i in range(0, 20):
+                if results:
+                    return
+                await asyncio.sleep(0.1)
+        ev_loop.run_until_complete(await_results())
+
+        # Just verify that the callback received the same content as
+        # running without callbacks would have.
+        self.assertEquals(results[0], moggie.help())

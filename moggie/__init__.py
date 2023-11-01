@@ -1,8 +1,30 @@
 import asyncio
 import logging
 import sys
+import time
 
 from .app.cli.exceptions import NotRunning, Nonsense
+from .api.requests import RequestCommand
+from .util.dumbcode import from_json, to_json
+
+
+SHARED_MOGGIES = {}
+
+
+def set_shared_moggie(moggie, which='default'):
+    """
+    Configure a moggie object for access via `get_shared_moggie()`.
+    """
+    SHARED_MOGGIES[which] = moggie
+    return moggie
+
+
+def get_shared_moggie(which='default'):
+    """
+    Fetch a globally shared moggie object, either the default or
+    the one specified by the `which` argument.
+    """
+    return SHARED_MOGGIES.get(which)
 
 
 class Moggie:
@@ -27,13 +49,23 @@ class Moggie:
         moggie.set_access(access)  # An access token or URL
         await moggie.async_search('bjarni', limit=5)
 
+    Pub/sub example:
+
+        await moggie.enable_websocket(event_loop)
+        moggie.subscribe(..., callback_func)
+        moggie.search('bjarni', limit=5, on_success=callback_func)
+
+        # FIXME: Define a subscribe method, for handling misc. events.
+
     Moggie's API methods can be invoked either synchronously, or async.
     The async methods have a `async_` prefix to the method names.
 
-    API methods will simply return their output buffer on success,
-    raising exceptions for certain errors.
+    API methods will either return their output buffer on success
+    (raising exceptions for certain errors), or invoke the named
+    callback functions (`on_success=...` or `on_error=...`) when
+    completed.
 
-    NOTE: the synchronous methods use the async code behind the
+    NOTE: The synchronous methods use the async code behind the
           scenes, but cannot await completion if there is already an
     event loop running. This means the output buffer may get populated
     at an unexpected time, well after the synchronious method has
@@ -81,7 +113,12 @@ class Moggie:
 
         import base64
         def _kwas_to_args(kwa):
-            for k, v in kwa.items():
+            kwa_keys = list(kwa.keys())
+            for k in kwa_keys:
+                if k in ('on_success', 'on_error'):
+                    continue
+
+                v = kwa.pop(k)
                 if k[:1] == '_':
                     k = k[1:]
                 k = k.replace('_', '-')
@@ -100,14 +137,18 @@ class Moggie:
         def _fix_args(a, kwa):
             args = list(a)
             args.extend(_kwas_to_args(kwa))
-            return args
+            return args, kwa
 
         def _mk_method(cmd):
-            return lambda s, *a, **kwa: s.run(cmd, *_fix_args(a, kwa))
+            def _sync_runner(self, *a, **kwa):
+                a, kwa = _fix_args(a, kwa)
+                return self.run(cmd, *a, **kwa)
+            return _sync_runner
 
         def _mk_async_method(cmd):
             async def _async_runner(self, *a, **kwa):
-                return await self.async_run(cmd, *_fix_args(a, kwa))
+                a, kwa = _fix_args(a, kwa)
+                return await self.async_run(cmd, *a, **kwa)
             return _async_runner
 
         for command in cls._COMMANDS:
@@ -155,11 +196,57 @@ class Moggie:
             access = self._config.access_zero()
 
         self._async_tasks =  []
+        self._ws_callbacks = {}
+        self._ev_loop = None
+        self._bridge = None
+        self._name = 'moggie@%d' % int(time.time())
 
         self.loop = asyncio.get_event_loop()
         self.set_input()
         self.set_access(access)
         self.set_mode(mode or self.DEFAULT_MODE)
+
+    async def enable_websocket(self, ev_loop):
+        from moggie.util.rpc import AsyncRPCBridge
+        self._ev_loop = ev_loop
+        AsyncRPCBridge(ev_loop, self._name, self._app_worker, self)
+        sleeptime, deadline = 0, (time.time() + 10)
+        while time.time() < deadline:
+            sleeptime = min(sleeptime + 0.01, 0.1)
+            await asyncio.sleep(sleeptime)
+            if self._bridge is not None:
+                break
+
+    def link_bridge(self, bridge):
+        def _receive_message(bridge_name, raw_message):
+            message = from_json(raw_message)
+            if message.get('connected'):
+                self._bridge = bridge
+            else:
+                self._handle_ws_message(message)
+        return _receive_message
+
+    def _handle_ws_message(self, message):
+        call_spec = self._ws_callbacks.pop(message.get('req_id', None), None)
+        if call_spec:
+           command, args, on_success, on_error = call_spec
+           try:
+               on_success(message['data'])
+           except Exception as e:
+               logging.error('Error handling message: %s' % e)
+               if on_error:
+                   on_error(e, message)
+           # FIXME; Handle errors in the JSON itself
+
+    def _ws_send(self, message):
+        message = to_json(message)
+        self._bridge.send(message)
+
+    def _ws_command(self, command, args, on_success, on_error):
+        req = RequestCommand(command, args)
+        req_id = req['req_id']
+        self._ws_callbacks[req_id] = (command, args, on_success, on_error)
+        self._ws_send(req)
 
     def _pre_start(self):
         if self._app or self._app_worker:
@@ -264,6 +351,8 @@ class Moggie:
         we cannot easily predict when.
         """
         result = []
+        kwargs['result_buffer'] = result
+
         command_impl = self._COMMANDS.get(command)
         if not self._can_run_async(command_impl):
             if command in self._PRE_HOOKS:
@@ -280,7 +369,6 @@ class Moggie:
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
 
-        kwargs['result_buffer'] = result
         task = self.async_run(command, *args, **kwargs)
         if self.loop.is_running():
             self._async_tasks.append(self.loop.create_task(task))
@@ -305,12 +393,24 @@ class Moggie:
         if command in self._PRE_HOOKS:
             self._PRE_HOOKS[command](self)
 
-        if 'result_buffer' in kwargs:
-            result = kwargs.pop('result_buffer')
-        else:
-            result = []
-
+        result = kwargs.pop('result_buffer', [])
+        on_success = kwargs.pop('on_success', False)
+        on_error = kwargs.pop('on_error', None)
+        have_callbacks = (on_success is not False)
         args = list(args)
+
+        def finish(res):
+            nonlocal command, result, have_callbacks
+            if command in self._HOOKS:
+                self._HOOKS[command](self, res)
+
+            res = None if (res and res[0] is None) else res
+            if have_callbacks:
+                # Implement the callback API in an effectively synchronous way
+                # in the cases where we are running without a live websocket.
+                on_success(res)
+            else:
+                return res
 
         if self._mode == self.MODE_CLI:
             if command_obj is None:
@@ -325,20 +425,20 @@ class Moggie:
                 result.append(command_obj(self, list(args)))
 
         elif self._mode == self.MODE_PYTHON:
-            if hasattr(command_obj, 'MsgRunnable'):
+            if not hasattr(command_obj, 'MsgRunnable'):
+                raise Nonsense('Not usable from within Python, sorry')
+
+            if have_callbacks and self._bridge:
+                self._ws_command(command, args, finish, on_error)
+                return None
+            else:
                 rbuf_cmd = await command_obj.MsgRunnable(self, args)
                 if rbuf_cmd is None:
                     raise Nonsense('Not usable from within Python, sorry')
                 result, obj = rbuf_cmd
                 await obj.run()
-            else:
-                raise Nonsense('Not usable from within Python, sorry')
 
-        if command in self._HOOKS:
-            self._HOOKS[command](self, result)
-
-        return None if (result and result[0] is None) else result
-
+        return finish(result)
 
 class MoggieCLI(Moggie):
     """
