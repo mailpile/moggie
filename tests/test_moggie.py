@@ -4,7 +4,7 @@ import shlex
 import time
 import unittest
 
-from moggie import Moggie, set_shared_moggie, get_shared_moggie
+from moggie import Moggie, MoggieContext, set_shared_moggie, get_shared_moggie
 
 
 class OfflineMoggieTest(unittest.TestCase):
@@ -16,8 +16,19 @@ class OfflineMoggieTest(unittest.TestCase):
 
     def test_moggie_help_callback(self):
         results = []
-        Moggie().help(on_success=results.append)
+        Moggie().help(on_success=lambda moggie, res: results.append(res))
         self.assertRegex(results[0][0]['text'], 'moggie search')
+
+    def test_moggie_moggie_context(self):
+        mc = MoggieContext(Moggie(), info={'key': 'Context 0'})
+        results = []
+        mc.help(on_success=lambda moggie, res: results.append((moggie, res)))
+
+        # Make sure the MoggieContext was passed instead of the Moggie
+        self.assertEquals(results[0][0], mc)
+
+        # Make sure the help command actually worked
+        self.assertRegex(results[0][1][0]['text'], 'moggie search')
 
     def test_moggie_email(self):
         moggie = Moggie()
@@ -111,7 +122,7 @@ class OnlineMoggieTest(unittest.TestCase):
         ev_loop = asyncio.get_event_loop()
         async def await_results():
             await moggie.enable_websocket(ev_loop)
-            moggie.help(on_success=results.append)
+            moggie.help(on_success=lambda moggie, res: results.append(res))
             for i in range(0, 20):
                 if results:
                     return
@@ -121,3 +132,4 @@ class OnlineMoggieTest(unittest.TestCase):
         # Just verify that the callback received the same content as
         # running without callbacks would have.
         self.assertEquals(results[0], moggie.help())
+

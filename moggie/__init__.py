@@ -15,7 +15,7 @@ def set_shared_moggie(moggie, which='default'):
     """
     Configure a moggie object for access via `get_shared_moggie()`.
     """
-    SHARED_MOGGIES[which] = moggie
+    SHARED_MOGGIES[which if which else moggie.name] = moggie
     return moggie
 
 
@@ -115,7 +115,7 @@ class Moggie:
         def _kwas_to_args(kwa):
             kwa_keys = list(kwa.keys())
             for k in kwa_keys:
-                if k in ('on_success', 'on_error'):
+                if k in ('on_success', 'on_error', 'moggie_wrap'):
                     continue
 
                 v = kwa.pop(k)
@@ -172,10 +172,12 @@ class Moggie:
             app=None,
             app_worker=None,
             access=True,
-            mode=None):
+            mode=None,
+            name=None):
 
         from .config.paths import AppConfig, DEFAULT_WORKDIR
 
+        self.name = name or ('moggie-%x' % int(time.time()))
         if work_dir and app_worker:
             raise Nonsense('Specify work_dir or app_worker, not both')
         elif work_dir is None:
@@ -197,6 +199,7 @@ class Moggie:
 
         self._async_tasks =  []
         self._ws_callbacks = {}
+        self._ws_failed = []
         self._ev_loop = None
         self._bridge = None
         self._name = 'moggie@%d' % int(time.time())
@@ -227,26 +230,126 @@ class Moggie:
         return _receive_message
 
     def _handle_ws_message(self, message):
-        call_spec = self._ws_callbacks.pop(message.get('req_id', None), None)
-        if call_spec:
-           command, args, on_success, on_error = call_spec
-           try:
-               on_success(message['data'])
-           except Exception as e:
-               logging.error('Error handling message: %s' % e)
-               if on_error:
-                   on_error(e, message)
-           # FIXME; Handle errors in the JSON itself
+        req_id = message.get('req_id', None)
 
-    def _ws_send(self, message):
-        message = to_json(message)
-        self._bridge.send(message)
+        if req_id:
+            hooks = self._ws_callbacks.pop(req_id, [])
+        elif ('error' in message) and ('request' in message):
+            #
+            # If this is an error, we do not remove the request handlers
+            # from self._ws_callbacks - this allows the caller to retry
+            # using the same req_id and everything should work. We do add
+            # a record to self._ws_failed so things get cleaned up "later".
+            #
+            req_id = message['request'].get('req_id')
+            hooks = self._ws_callbacks.get(req_id, [])
+            self._ws_failed.append((time.time(), req_id))
+        else:
+            hooks = []
+
+        hooks.extend(self._ws_callbacks.get(message.get('req_type')) or [])
+        hooks.extend(self._ws_callbacks.get('*') or [])
+        handled = 0
+        for call_spec in hooks:
+           on_success, on_error = call_spec[-2:]
+           try:
+               if 'internal_websocket_error' in message:
+                   logging.error('FIXME: Handle internal error: %s' % message)
+                   handled += 1
+               elif 'error' in message:
+                   if on_error:
+                       on_error(self, message)
+                       handled += 1
+               elif on_success:
+                   if 'data' in message and ('_RAW_' not in call_spec):
+                       on_success(self, message['data'])
+                   else:
+                       on_success(self, message)
+                   handled += 1
+           except Exception as e:
+               try:
+                   if on_error:
+                       on_error(self, message, e)
+                       continue
+               except:
+                   pass
+               logging.exception(
+                   'Error handling message: %s <= %s' % (call_spec, message))
+        if not handled:
+            logging.debug('Unhandled message: %s' % message)
+
+    def _ws_subscribe(self, event, call_spec):
+        hooks = self._ws_callbacks.get(event, [])
+        hooks.append(call_spec)
+        self._ws_callbacks[event] = hooks
+
+    def unsubscribe(self, name):
+        """
+        Remove all callbacks labeled with the given name.
+        """
+        for event, hooks in self._ws_callbacks.items():
+            rm = [i for i in range(0, len(hooks)) if (hooks[i][0] == name)]
+            for i in reversed(rm):
+                hooks.pop(i)
+
+        # Opportunistically clean up any failed events as well
+        before = time.time() - 3600
+        for exp, req_id in self._ws_failed:
+            if exp < before:
+                self._ws_callbacks.pop(req_id, None)
+
+    def on_error(self, on_error, name=None):
+        """
+        Subscribe to error events.
+
+        The callback will be invoked with this moggie as its first argument,
+        the message object as as its second argument, and if an exception
+        was thrown processing, the exception will be the third.
+        """
+        self._ws_subscribe('*', (name, None, on_error))
+
+    def on_notification(self, callback, on_error=None, name=None):
+        """
+        Subscribe to notification events.
+
+        The callback will be invoked with this moggie as its first argument,
+        and the message object as as its second argument.
+        """
+        self._ws_subscribe('notification', (name, callback, on_error))
+
+    def on_result(self, command, callback, on_error=None, raw=False, name=None):
+        """
+        Subscribe to any results for a given command.
+
+        The callback will be invoked with this moggie as its first argument,
+        and he message object as as its second argument.
+
+        Setting `command='*'` will subscribe to all incoming events.
+        Setting `raw=True` will return full JSON messages as received.
+        """
+        req_type = ('cli:%s' % command) if (command != '*') else '*'
+        self._ws_subscribe(req_type,
+            (name, '_RAW_' if raw else '', callback, on_error))
+
+    def websocket_send(self, message,
+            on_success=None, on_error=None, name=None):
+        """
+        Send a message directly to the websocket.
+
+        If the message has a `req_id` field and `on_success` or `on_error`
+        are specified, a callback will be registered.
+        """
+        req_id = message.get('req_id')
+        if (on_success or on_error) and req_id:
+            if req_id in self._ws_callbacks:
+                self._ws_callbacks[req_id].append((name, on_success, on_error))
+            else:
+                self._ws_callbacks[req_id] = [(name, on_success, on_error)]
+        self._bridge.send(to_json(message))
 
     def _ws_command(self, command, args, on_success, on_error):
-        req = RequestCommand(command, args)
-        req_id = req['req_id']
-        self._ws_callbacks[req_id] = (command, args, on_success, on_error)
-        self._ws_send(req)
+        self.websocket_send(RequestCommand(command, args),
+            on_success=on_success, on_error=on_error)
 
     def _pre_start(self):
         if self._app or self._app_worker:
@@ -394,12 +497,13 @@ class Moggie:
             self._PRE_HOOKS[command](self)
 
         result = kwargs.pop('result_buffer', [])
+        moggie_wrap = kwargs.pop('moggie_wrap', lambda m: m)
         on_success = kwargs.pop('on_success', False)
         on_error = kwargs.pop('on_error', None)
         have_callbacks = (on_success is not False)
         args = list(args)
 
-        def finish(res):
+        def finish(moggie, res):
             nonlocal command, result, have_callbacks
             if command in self._HOOKS:
                 self._HOOKS[command](self, res)
@@ -408,7 +512,7 @@ class Moggie:
             if have_callbacks:
                 # Implement the callback API in an effectively synchronous way
                 # in the cases where we are running without a live websocket.
-                on_success(res)
+                on_success(moggie_wrap(moggie), res)
             else:
                 return res
 
@@ -438,7 +542,7 @@ class Moggie:
                 result, obj = rbuf_cmd
                 await obj.run()
 
-        return finish(result)
+        return finish(self, result)
 
 class MoggieCLI(Moggie):
     """
@@ -453,6 +557,72 @@ class MoggieAsync(Moggie):
     A Moggie object configured to use async methods by default when possible.
     """
     PREFER_ASYNC = True
+
+
+class MoggieContext:
+    """
+    A class representing a specific context within a running Moggie.
+
+    If a `context_id` is provided without any `info`, the Moggie will
+    be queried for the context's current settings (which are accessible
+    as properties of the object).
+
+    Method calls are proxied to the underlying Moggie object, with
+    the `--context=X` argument set appropriately. An example:
+
+        mog_ctx = MoggieContext(moggie, context='Context 1')
+
+        # These are equivalent:
+        moggie.search('bjarni', context='Context 1')
+        mog_ctx.search('bjarni')
+
+    Any `on_success` callbacks (in message passing mode) will be invoked
+    with the MoggieContext as their first argument, instead of the
+    underlying Moggie.
+    """
+    def __init__(self, moggie, context_id=None, info=None):
+        self.moggie = moggie
+        self._info = {
+            'key': context_id or '',
+            'name': context_id or '',
+            'description': '',
+            'tags': [],
+            'ui_tags': [],
+            'accounts': {},
+            'identities': {}}
+        if info is None:
+            if context_id is None:
+                context_id = 'Context 0'  # FIXME: Should load from Config
+            self._ctx_id = context_id
+            self._info.update(self.context(output='details')[0][context_id])
+        else:
+            self._ctx_id = info['key']
+            self._info.update(info)
+        self.update = self._info.update
+        self.get = self._info.get
+
+    key = property(lambda s: s._info['key'])
+    name = property(lambda s: s._info['name'])
+    tags = property(lambda s: s._info['tags'])
+    ui_tags = property(lambda s: s._info['ui_tags'])
+    accounts = property(lambda s: s._info['accounts'])
+    identities = property(lambda s: s._info['identities'])
+    description = property(lambda s: s._info['description'])
+
+    def __getattribute__(self, attr):
+        try:
+            return super().__getattribute__(attr)
+        except AttributeError:
+            pass
+
+        method = self.moggie.__getattribute__(attr)
+        if callable(method):
+            return lambda *a, **kwa: method(*a,
+                context=self._ctx_id,
+                moggie_wrap=lambda m: self,  # Replace Moggie w/ MoggieContext
+                **kwa)
+
+        raise AttributeError(attr)
 
 
 Moggie.Setup()
