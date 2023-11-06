@@ -330,8 +330,13 @@ class Classifier:
         a probability.
         """
 
-        spamcount = record.spamcount
-        hamcount = record.hamcount
+        nham = float(self.nham or 1)
+        nspam = float(self.nspam or 1)
+
+        # We may occasionally end up with spamcount > nspam, because of
+        # rounding errors in decay(). Taking the minimums compensates.
+        spamcount = min(nspam, record.spamcount)
+        hamcount = min(nham, record.hamcount)
 
         # Try the cache first
         try:
@@ -339,13 +344,7 @@ class Classifier:
         except KeyError:
             pass
 
-        nham = float(self.nham or 1)
-        nspam = float(self.nspam or 1)
-
-        assert hamcount <= nham, "Token seen in more ham than ham trained."
         hamratio = hamcount / nham
-
-        assert spamcount <= nspam, "Token seen in more spam than spam trained."
         spamratio = spamcount / nspam
 
         prob = spamratio / (hamratio + spamratio)
