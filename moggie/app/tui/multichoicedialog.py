@@ -18,6 +18,7 @@ class MultiChoiceDialog(MessageDialog):
         self.title = title
         self.multi = multi
         self.default = default
+        self.defaults = set(i.strip() for i in (default or '').split(','))
         self.choices = choices
         self.checkboxes = {}
         self.prompt = prompt
@@ -57,6 +58,7 @@ class MultiChoiceDialog(MessageDialog):
         padding = (self.WANTED_WIDTH - (columns * width) - 2) // 2
 
         widgets = []
+        has_cb = set()
         self.checkboxes = {}
         if self.choices:
             widgets.append(urwid.Divider())
@@ -71,8 +73,11 @@ class MultiChoiceDialog(MessageDialog):
                 if not choice:
                     return urwid.Text('')
                 elif self.multi:
+                    is_checked = choice in self.defaults
                     cb = self.checkboxes[choice] = urwid.CheckBox(
-                        ('popsubtle', choice), False)
+                        ('popsubtle', choice), is_checked)
+                    if is_checked:
+                        has_cb.add(choice)
                     return cb
                 else:
                     return Selectable(
@@ -84,6 +89,10 @@ class MultiChoiceDialog(MessageDialog):
                     ('fixed', width, elem(choice))
                     for choice in row]), left=padding)
                 for row in data])
+
+        if has_cb:
+            others = ','.join(sorted(list(self.defaults - has_cb)))
+            self.input.edit_text = others
 
         if self.create:
             if widgets:

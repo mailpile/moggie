@@ -109,10 +109,11 @@ class BrowserLegend(urwid.Pile):
             updates.append(update)
         if updates:
             # FIXME: Use moggie.set_input() ?
-            self.parent.moggie.import_(
+            self.parent.mog_ctx.import_(
                 batch=True,
                 config_only=True,
-                stdin=to_json(updates))
+                stdin=to_json(updates),
+                on_success=lambda m,r: True)  # Force websocket
             self._reset_ui()
 
 

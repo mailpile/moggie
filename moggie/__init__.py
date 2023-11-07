@@ -135,8 +135,8 @@ class Moggie:
                     yield '--%s=%s' % (k, v)
 
         def _fix_args(a, kwa):
-            args = list(a)
-            args.extend(_kwas_to_args(kwa))
+            args = list(_kwas_to_args(kwa))
+            args.extend(a)
             return args, kwa
 
         def _mk_method(cmd):

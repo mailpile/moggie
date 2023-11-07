@@ -60,6 +60,7 @@ class RequestCounts(RequestBase):
 class RequestTag(RequestBase):
     def __init__(self, context='',
             tag_ops=[], tag_undo_id=None, tag_redo_id=None, undoable=True,
+            username=None, password=None,
             req_id=None):
         self.update({
             'req_type': 'tag',
@@ -67,7 +68,9 @@ class RequestTag(RequestBase):
             'undoable': undoable,
             'tag_undo_id': tag_undo_id,
             'tag_redo_id': tag_redo_id,
-            'tag_ops': tag_ops
+            'tag_ops': tag_ops,
+            'username': username,
+            'password': password
         }, req_id=req_id)
 
 

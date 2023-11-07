@@ -17,6 +17,7 @@ import urwid
 from ...email.metadata import Metadata
 from ..suggestions import Suggestion
 
+from .choosetagdialog import ChooseTagDialog
 from .decorations import EMOJI
 from .emaildisplay import EmailDisplay
 from .messagedialog import MessageDialog
@@ -260,11 +261,12 @@ class EmailList(urwid.Pile):
         VIEW_THREADS: 'threads_metadata'}
 
     TAG_OP_MAP = {
-        't': ('TAG',   'Tag selected messages', 'Tagged'),
-        'E': ('UNTAG', 'Remove tags: %s',       'Untagged'),
-        'I': ('+read', 'Mark messages read',    'Marked read'),
-        '!': ('+junk', 'Move to junk',          'Moved to junk'),
-        '#': ('+trash', 'Move to trash',        'Moved to trash')}
+        't': ('TAG',    'Tag selected messages',   'Tagged'),
+        'u': ('UNTAG',  'Untag selected messages', 'Untagged'),
+        'E': ('REMOVE', 'Remove tags: %s',         'Untagged'),
+        'I': ('+read',  'Mark messages read',      'Marked read'),
+        '!': ('+junk',  'Move to junk',            'Moved to junk'),
+        '#': ('+trash', 'Move to trash',           'Moved to trash')}
 
     def __init__(self, mog_ctx, tui, terms, view=None):
         self.name = 'emaillist-%.5f' % time.time()
@@ -444,14 +446,21 @@ class EmailList(urwid.Pile):
         data = try_get(message, 'data', message)
         try:
             first = (0 == len(self.emails))
-            self.webui_state = data.pop(0)
-            self.walker.set_emails(data)
+            if isinstance(data, list):
+                if data:
+                    self.webui_state = data.pop(0)
+                    # FIXME: Should the back-end make this easier for us?
+                    # FIXME: Use shlex?
+                    terms = (self.webui_state['details'].get('terms', '')
+                        .replace('+', '').replace('-', '')).split()
+                    self.webui_state['query_tags'] = [
+                        word for word in terms if word.startswith('in:')]
 
-            # FIXME: Should the back-end make this easier for us?
-            terms = (self.webui_state['details'].get('terms', '')
-                .replace('+', '').replace('-', '')).split()
-            self.webui_state['query_tags'] = [
-                word for word in terms if word.startswith('in:')]
+                self.walker.set_emails(data)
+            else:
+                self.webui_state = {}
+
+            logging.debug('webui_state=%s' % self.webui_state)
 
             #self.suggestions.incoming_message(message)
 
@@ -498,22 +507,79 @@ class EmailList(urwid.Pile):
         #        If there are, update the description
         return opmap
 
+    def with_message_tags(self, with_tags):
+        def with_search_tags(mog_ctx, search_result):
+            tags = []
+            for tag in try_get(search_result, 'data', search_result):
+                tags.append(str(tag, 'utf-8').split(':', 1)[1])
+            with_tags(sorted(tags))
+
+        # Get the selection search terms, without the mailbox scoping
+        # as that prevents it from hitting the metadata index where the
+        # tags actually live. This should usually just be a list of IDs
+        # when we are in a mailbox view.
+        terms = self.selection_search_terms(mailboxes=False)
+
+        self.mog_ctx.search(*terms,
+            output='tags',
+            on_success=with_search_tags)
+
     def on_tag_op(self, hotkey=None, tag_op=None, comment=None):
         if tag_op is None:
             tdc = self.get_tag_op_map().get(hotkey)
             if tdc:
                 tag_op, desc, comment = tdc
-        if tag_op == 'TAG':
-            pass  # FIXME: Pop up tag dialog
+
+        def what():
+            if self.walker.selected_all:
+                return 'all matching messages'
+            else:
+                n = len(self.walker.selected_ids())
+                return ('%d message' if (n == 1) else '%d messages') % n
+
+        if tag_op == 'UNTAG':
+            def untag_tags_chosen(context, tags):
+                tag_op = ' '.join('-%s' % t.strip() for t in tags.split(','))
+                self.run_tag_op(tag_op, comment)
+
+            def untag_chooser(choices):
+                self.tui.show_modal(ChooseTagDialog,
+                    self.mog_ctx,
+                    title='Removing tags from %s' % what(),
+                    choices=choices,
+                    multi=True,
+                    create=False,
+                    action=untag_tags_chosen)
+            self.with_message_tags(untag_chooser)
+
+        elif tag_op == 'TAG':
+            def tag_tags_chosen(context, tags):
+                tag_op = ' '.join('+%s' % t.strip() for t in tags.split(','))
+                self.run_tag_op(tag_op, comment)
+
+            self.tui.show_modal(ChooseTagDialog,
+                self.mog_ctx,
+                title='Adding tags to %s' % what(),
+                multi=True,
+                create=True,
+                action=tag_tags_chosen)
+
         else:
             self.run_tag_op(tag_op, comment)
 
-    def run_tag_op(self, tag_op, comment):
-        if 'details' in self.webui_state:
+    def selection_search_terms(self, mailboxes=True):
+        if self.webui_state.get('details'):
+            # FIXME: Use shlex?
             search_terms = self.webui_state['details']['terms'].split()
         else:
-            logging.debug('STATE: %s' % self.webui_state)
-            search_terms = []
+            # FIXME: Use shlex?
+            search_terms = self.terms.split()
+
+        if not mailboxes and not self.walker.selected_all:
+            # We cannot safely remove the mailbox terms if all are selected,
+            # as that might leave us with all:mail and un/tag *everything*
+            search_terms = [
+                t for t in search_terms if not t.startswith('mailbox:')]
 
         if not self.walker.selected_all:
             idlist = ('(%s)' % ' OR '.join('id:%s' % _id
@@ -523,6 +589,10 @@ class EmailList(urwid.Pile):
             else:
                 search_terms = [idlist]
 
+        return search_terms
+
+    def run_tag_op(self, tag_op, comment):
+        search_terms = self.selection_search_terms()
         args = tag_op.split()
         if comment:
             args.append('--comment=%s' % comment)
@@ -532,9 +602,8 @@ class EmailList(urwid.Pile):
             on_success=self.on_tagged,
             on_error=self.on_tag_failed)
 
-        #logging.debug('FIXME: Should tag %s with %s' % (tag_op, search_terms))
-
     def on_tagged(self, *args, **kwargs):
+        # FIXME: Report success in UI (refresh search), make undo available
         logging.debug('FIXME: on_tagged(%s, %s)' % (args, kwargs))
 
     def on_tag_failed(self, *args, **kwargs):

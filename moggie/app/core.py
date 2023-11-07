@@ -974,7 +974,7 @@ main app worker. Hints:
         for k in ('username', 'password'):
             v = api_req.get(k)
             if v is not None:
-                args.append('--%s=%s' % (k, v))
+                args.insert(0, '--%s=%s' % (k, v))
 
         rbuf_cmd = await CLI_COMMANDS.get(api_req.command).MsgRunnable(
             Moggie(access=access, app=self, app_worker=self.worker), args)

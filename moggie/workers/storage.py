@@ -158,9 +158,11 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
         if not terms:
             return (lambda t: t, None)
 
-        terms = (terms or '').split()
+        # FIXME: This is very primitive and ignores most of the syntax
+        #        from the proper search engine. But it kinda works?
+        terms = (terms or '').replace('(', '').replace(')', '').split()
         ids = [int(i[3:]) for i in terms if i[:3] == 'id:']
-        terms = set([t.lower() for t in terms if t[:3] != 'id:'])
+        terms = set([t.lower() for t in terms if t[:3] not in ('id:', 'OR')])
 
         if not terms:
             return (lambda t: t, ids)

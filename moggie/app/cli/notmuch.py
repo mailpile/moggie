@@ -1449,6 +1449,8 @@ class CommandTag(CLICommand):
     OPTIONS = [[
         (None, None, 'tagging'),
         ('--context=', ['default'], 'The context for scope and settings'),
+        ('--username=',     [None], 'Username with which to access email'),
+        ('--password=',     [None], 'Password with which to access email'),
         ('--remove-all',    [],'First strip all tags from matching messages'),
         ('--or',       [False], 'Use OR instead of AND with search terms'),
         ('--big',           [],
@@ -1579,7 +1581,9 @@ class CommandTag(CLICommand):
                 and self.desc),
             tag_undo_id=self.options['--undo='][-1],
             tag_redo_id=self.options['--redo='][-1],
-            tag_ops=tagops)
+            tag_ops=tagops,
+            username=self.options['--username='][-1],
+            password=self.options['--password='][-1])
         msg = await self.worker.async_api_request(self.access, query)
 
         fmt = self.options['--format='][-1]

@@ -7,20 +7,23 @@ from .contextlist import ContextList
 class ChooseTagDialog(MultiChoiceDialog):
     def __init__(self, tui, mog_ctx, title,
             action=None, default=None, create=True,
-            multi=False, allow_none=False):
+            multi=False, choices=None, allow_none=False):
 
-        mog_ctx.search('all:mail', output='tags',
-            on_success=self.update_tag_list)
-            # FIXME: timeout=5)
+        if choices is None:
+            mog_ctx.search('all:mail', output='tags',
+                on_success=self.update_tag_list)
+                # FIXME: timeout=5)
+            tag_list = sorted([tag for (tag, info) in ContextList.TAG_ITEMS])
+        else:
+            tag_list = choices
 
-        tag_list = sorted([tag for (tag, info) in ContextList.TAG_ITEMS])
         def action_with_context(tag):
             return action(mog_ctx.key, tag)
 
         super().__init__(tui, tag_list,
             title=title,
             multi=multi,
-            prompt='Tag',
+            prompt='Other tags' if multi else 'Tag',
             action=action_with_context,
             create=(lambda t: t.lower()) if create else None,
             default=default,
