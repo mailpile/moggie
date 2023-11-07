@@ -36,7 +36,7 @@ class MoggieCronTests(unittest.TestCase):
 00    00  * * *  history.append(moggie.help())  # Moggie in Python
 """ % env)
 
-        for hour in range(0, 24):
+        for hour in range(0, 25):
             crond.run_scheduled(now=now + 300 + hour*3600)
 
         # Did help get rendered?
@@ -47,7 +47,7 @@ class MoggieCronTests(unittest.TestCase):
         self.assertEqual(2, sum(1 for e in history if e == 'hello'))
 
         # The every-five-minute even should run each time
-        self.assertEqual(24, sum(1 for e in history if e == 'world'))
+        self.assertEqual(25, sum(1 for e in history if e == 'world'))
 
         # Make sure that the expected files got created
         self.assertTrue(os.path.exists(testfile))
