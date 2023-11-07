@@ -1100,9 +1100,9 @@ main app worker. Hints:
             if type(api_req) == RequestPing:
                 pass
             else:
-                what = api_req['req_type'] + ('%s' % api_req.get('args', ''))
-                if len(what) > 120:
-                    what = what[:118] + '..'
+                what = api_req['req_type'] + ('%s' % (api_req.get('args', ''),))
+                if len(what) > 256:
+                    what = what[:254] + '..'
                 fmt = '[api] %s/%s requested %s'
                 logging.info(fmt % (who, (conn_id or 'internal'), what))
             result = await self._route_api_request(conn_id, access, api_req)
