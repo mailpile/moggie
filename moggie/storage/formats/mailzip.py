@@ -77,7 +77,7 @@ class FormatMailzip(FormatBytes):
             raise PleaseUnlockError('Need password to decrypt %s (in %s)'
                     % (os.path.basename(p), os.path.dirname(p)),
                 username=False,
-                resource=self.path)
+                resource=p)
 
     def __delitem__(self, key):
         raise IOError('FIXME: Cannot delete from mailzips yet')

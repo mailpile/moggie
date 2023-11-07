@@ -141,7 +141,7 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
         if pue.password:
             needs.append(
                 neo.Need('Password', 'password', datatype='password'))
-        return neo(str(pue), need=needs)
+        return neo(str(pue), need=needs, resource=pue.resource)
 
     def api_info(self,
             key, details, recurse, relpath, username, password,

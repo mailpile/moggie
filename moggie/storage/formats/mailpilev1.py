@@ -36,15 +36,20 @@ def get_master_key(fs, path, password):
     if not mailpile_dir:
         raise OSError('file not found: mailpile.key')
 
-    logging.debug('Loading Mailpile master key from %s' % mailpile_dir)
+    try:
+        mpd = str(mailpile_dir, 'utf-8')
+    except:
+        mpd = mailpile_dir
+
+    logging.debug('Loading Mailpile master key from %s' % mpd)
     if mailpile_dir in MASTER_KEY_CACHE:
         master_key = MASTER_KEY_CACHE[mailpile_dir]
 
     else:
         if not password:
             raise PleaseUnlockError(
-                'Need passphrase to unlock Mailpile at %s' % mailpile_dir,
-                resource=mailpile_dir, username=False)
+                'Need passphrase to unlock Mailpile at %s' % mpd,
+                resource=mpd, username=False)
 
         try:
             if not isinstance(password, bytes):
@@ -56,11 +61,11 @@ def get_master_key(fs, path, password):
             master_key = SecurePassphraseStorage(passphrase=master_key)
             MASTER_KEY_CACHE[mailpile_dir] = master_key
 
-            logging.debug('Loaded Mailpile master key from %s' % mailpile_dir)
+            logging.debug('Loaded Mailpile master key from %s' % mpd)
         except (PleaseUnlockError, ValueError) as e:
             raise PleaseUnlockError(
-                'Password incorrect for %s' % mailpile_dir,
-                resource=mailpile_dir, username=False)
+                'Password incorrect for %s' % mpd,
+                resource=mpd, username=False)
 
     return mailpile_dir, master_key
 
