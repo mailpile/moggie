@@ -825,7 +825,10 @@ FIXME: Document html and html formats!
 
         limit = None
         if self.options.get('--limit=', [None])[-1]:
-            limit = int(self.options['--limit='][-1])
+            try:
+                limit = int(self.options['--limit='][-1]) or None
+            except ValueError:
+                pass
 
         prev = None
         first = True
@@ -856,10 +859,11 @@ FIXME: Document html and html formats!
         if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
 
+        self.webui_state['details'] = {}
+        self.webui_state['preferences'] = self.preferences
+
         if 'results' in msg and not self.raw_results:
             self.raw_results = msg['results']
-            self.webui_state['details'] = {}
-            self.webui_state['preferences'] = self.preferences
             for k in self.raw_results:
                 if k not in ('hits', 'tags'):
                     self.webui_state['details'][k] = self.raw_results[k]

@@ -204,6 +204,7 @@ class CommandHelp(CLICommand):
     WEB_EXPOSE = True
     OPTIONS = [[
         ('--format=', [None], 'Output format; text*, json, html, sexp'),
+        ('--context=', [], None), # Ignored, for easier testing
     ]]
 
     def configure(self, args):
