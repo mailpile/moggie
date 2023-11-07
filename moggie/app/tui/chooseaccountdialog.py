@@ -1,23 +1,21 @@
-from ...api.requests import RequestCommand
-
 from .multichoicedialog import MultiChoiceDialog
+from .widgets import try_get
 
 
 class ChooseAccountDialog(MultiChoiceDialog):
-    def __init__(self, tui, context, title,
+    def __init__(self, tui, mog_ctx, title,
             action=None, default=None, create=True,
             multi=False, allow_none=False):
 
-        tui.send_with_context(
-            RequestCommand('context', args=['list', '--output=details']),
-            on_reply=self.update_account_list,
-            on_error=lambda e: False,  # Suppress errors
-            timeout=5)
+        mog_ctx.moggie.context('list',
+            output='details',
+            on_success=self.update_account_list)
+            # FIXME: timeout=5)
 
         # Grab accounts from context view, that might be faster?
         account_list = []
         def action_with_context(account):
-            return action(context, account)
+            return action(mog_ctx.key, account)
 
         super().__init__(tui, account_list,
             title=title,
@@ -28,8 +26,9 @@ class ChooseAccountDialog(MultiChoiceDialog):
             default=default,
             allow_none=allow_none)
 
-    def update_account_list(self, result):
-        for context, ctx_info in result['data'][0].items():
+    def update_account_list(self, moggie, result):
+        data = try_get(result, 'data', result)
+        for context, ctx_info in data[0].items():
             for account, acct_info in ctx_info.get('accounts', {}).items():
                 for addr in acct_info.get('addresses', []):
                     if addr not in self.choices:

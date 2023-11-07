@@ -16,8 +16,8 @@ browse, or an IMAP URI (imap://username@imap.example.org/).
 
     signals = ['close']
 
-    def __init__(self, tui):
-        super().__init__(tui, message=self.HELP_TEXT)
+    def __init__(self, moggie, tui):
+        super().__init__(moggie, tui, message=self.HELP_TEXT)
 
     def make_buttons(self):
         return [

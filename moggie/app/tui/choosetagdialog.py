@@ -1,28 +1,21 @@
 import logging
 
-from ...api.requests import RequestCommand
-
 from .multichoicedialog import MultiChoiceDialog
 from .contextlist import ContextList
 
 
 class ChooseTagDialog(MultiChoiceDialog):
-    def __init__(self, tui, context, title,
+    def __init__(self, tui, mog_ctx, title,
             action=None, default=None, create=True,
             multi=False, allow_none=False):
 
-        tui.send_with_context(
-            RequestCommand('search', args=[
-                '--output=tags',
-                '--context=%s' % context,
-                'all:mail']),
-            on_reply=self.update_tag_list,
-            on_error=lambda e: False,  # Suppress errors
-            timeout=5)
+        mog_ctx.search('all:mail', output='tags',
+            on_success=self.update_tag_list)
+            # FIXME: timeout=5)
 
         tag_list = sorted([tag for (tag, info) in ContextList.TAG_ITEMS])
         def action_with_context(tag):
-            return action(context, tag)
+            return action(mog_ctx.key, tag)
 
         super().__init__(tui, tag_list,
             title=title,
@@ -33,7 +26,7 @@ class ChooseTagDialog(MultiChoiceDialog):
             default=default,
             allow_none=allow_none)
 
-    def update_tag_list(self, search_result):
+    def update_tag_list(self, mog_ctx, search_result):
         for tag in search_result['data']:
             tag = str(tag, 'utf-8').split(':', 1)[1]
             if tag not in self.choices:

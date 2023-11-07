@@ -3,7 +3,6 @@ import logging
 import os
 import urwid
 
-from ...api.requests import RequestCommand
 from ...util.dumbcode import to_json
 from ...util.friendly import *
 from ..suggestions import Suggestion
@@ -109,12 +108,12 @@ class BrowserLegend(urwid.Pile):
             update['path'] = path
             updates.append(update)
         if updates:
-            cmd = RequestCommand('import', args=[
-                '--config-only',
-                '--batch',
-                '--stdin=%s' % to_json(updates)])
-        self.parent.tui.send_with_context(cmd, self.parent.ctx_src_id)
-        self._reset_ui()
+            # FIXME: Use moggie.set_input() ?
+            self.parent.moggie.import_(
+                batch=True,
+                config_only=True,
+                stdin=to_json(updates))
+            self._reset_ui()
 
 
 class BrowserListWalker(urwid.ListWalker):
@@ -319,7 +318,7 @@ class BrowserListWalker(urwid.ListWalker):
             self.parent.update_content()
             self._modified()
         self.parent.tui.show_modal(ChooseAccountDialog,
-            'Context 0',
+            self.parent.mog_ctx,
             title='Account for %s' % self.visible[pos][self.PATH],
             action=chose_account,
             default=path_info['policy'].get('account'),
@@ -335,7 +334,7 @@ class BrowserListWalker(urwid.ListWalker):
             self.parent.update_content()
             self._modified()
         self.parent.tui.show_modal(ChooseTagDialog,
-            'Context 0',
+            self.parent.mog_ctx,
             title='Tag for %s' % self.visible[pos][self.PATH],
             action=chose_tag,
             default=path_info['policy'].get('tags'),
@@ -365,7 +364,8 @@ class BrowserListWalker(urwid.ListWalker):
 
         if path_info.get('magic'):
             self.parent.tui.show_mailbox(
-                path_info['path'], keep=self.parent)
+                self.parent.mog_ctx, path_info['path'],
+                keep=self.parent)
 
     def on_check(self, pos, path_info):
         return
@@ -392,48 +392,27 @@ class Browser(urwid.Pile):
     COLUMN_FIT = 'weight'
     COLUMN_STYLE = 'content'
 
-    def __init__(self, tui, ctx_src_id, browse_path):
+    def __init__(self, mog_ctx, tui, browse_path):
+        self.mog_ctx = mog_ctx
         self.tui = tui
-        self.ctx_src_id = ctx_src_id
         self.browse_path = browse_path
         self.crumb = browse_path if isinstance(browse_path, str) else 'Browse'
 
         self.modified = set([])
         self.walker = BrowserListWalker(self)
         self.listbox = urwid.ListBox(self.walker)
-        self.browse_obj = self.get_browse_obj()
         self.suggestions = SuggestionBox(self.tui,
-            suggestions=[SuggestAddToMoggie(self, self.ctx_src_id)],
+            suggestions=[SuggestAddToMoggie(self, None)],
             update_parent=self.update_content,
             omit_actions=[Suggestion.UI_BROWSE])
         self.widgets = []
         self.paths = self.walker.paths
         self.loading = True
 
-        _ah = self.tui.conn_manager.add_handler
-        self.cm_handler_ids = [
-            _ah('browser', ctx_src_id, 'cli:browse', self.incoming_message)]
-        self.tui.send_with_context(self.browse_obj, self.ctx_src_id)
-
         urwid.Pile.__init__(self, [])
         self.update_content()
 
-    def cleanup(self):
-        self.tui.conn_manager.del_handler(*self.cm_handler_ids)
-        self.browse_obj = None
-        del self.tui
-        del self.walker.paths
-        del self.walker.visible
-        del self.walker
-        del self.paths
-        del self.listbox
-        del self.widgets
-
-    def get_browse_obj(self):
-        if isinstance(self.browse_path, str):
-            return RequestCommand('browse', args=[self.browse_path])
-        else:
-            return RequestCommand('browse', args=[])
+        self.browse()
 
     def column_hks(self):
         return [
@@ -444,12 +423,6 @@ class Browser(urwid.Pile):
             self.tui.show_modal(BrowsePathDialog)
             return None
         return super().keypress(size, key)
-
-    def browse(self, path_info):
-        self.browse_obj['args'] = [path_info['path']]
-        self.browse_obj['req_id'] = self.browse_obj['req_id'].split('=')[0]
-        self.browse_obj['req_id'] += ('=' + path_info['src'])
-        self.tui.send_with_context(self.browse_obj, self.ctx_src_id)
 
     def update_content(self, set_focus=False):
         rows = self.tui.max_child_rows()
@@ -473,19 +446,27 @@ class Browser(urwid.Pile):
         if set_focus:
             self.set_focus(len(self.contents) - 1)
 
-    def incoming_message(self, source, message):
-        req_id = message.get('req_id')
-        if (not self.browse_obj) or (req_id != self.browse_obj['req_id']):
-            return
+    def browse(self, path_info=None):
+        args = []
+        callback = self.incoming_message
 
+        if path_info:
+            callback = lambda m, r: self.incoming_message(m, r, path_info)
+            args.append(path_info['path'])
+        elif isinstance(self.browse_path, str):
+            args.append(self.browse_path)
+
+        self.mog_ctx.browse(*args, on_success=callback)
+
+    def incoming_message(self, mog_ctx, message, path_info=None):
+        if isinstance(message, list):
+            message = message[0]
+        result = try_get(message, 'data', message)
+
+        src = path_info['src'] if path_info else None
         first = len(self.walker.paths) == 0
-        for result in message.get('data', []):
-            if not isinstance(result, dict):
-                continue
+        if isinstance(result, dict):
             try:
-                src = None
-                if '=' in req_id:
-                    src = req_id.split('=')[-1]
                 for section, paths in result.items():
                     self.walker.add_paths(paths, force_src=src)
             except:

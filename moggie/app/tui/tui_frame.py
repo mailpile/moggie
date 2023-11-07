@@ -10,6 +10,8 @@ import os
 import time
 import urwid
 
+from moggie import MoggieContext
+
 from ...config import APPNAME, APPVER
 from ...api.requests import *
 from ..suggestions import Suggestion, SuggestionWelcome
@@ -34,13 +36,14 @@ class TuiFrame(urwid.Frame):
 
     current_context = property(lambda s: s.context_list.active['key'])
 
-    def __init__(self, screen, conn_manager):
+    def __init__(self, moggie, screen):
         self.screen = screen
         self.is_locked = True
         self.was_locked = True
         self.user_moved = False
         self.render_cols_rows = self.screen.get_cols_rows()
-        self.conn_manager = conn_manager
+        self.moggie = moggie
+        self.mog_ctx0 = MoggieContext(moggie)
 
         suggestions = SuggestionBox(self,
             fallbacks=[SuggestionWelcome],
@@ -52,7 +55,7 @@ class TuiFrame(urwid.Frame):
 
         self.hidden = 0
         self.crumbs = []
-        self.callbacks = {}
+        self.secrets = {}
         self.notifications = []
         self.columns = urwid.Columns([self.filler1], dividechars=1)
         self.context_list = ContextList(self,
@@ -70,7 +73,8 @@ class TuiFrame(urwid.Frame):
         loop = asyncio.get_event_loop()
         loop.create_task(self.topbar_clock())
 
-        conn_manager.add_handler('tui', '*', '*', self.handle_bridge_messages)
+        moggie.on_notification(self.handle_moggie_messages)
+        moggie.on_error(self.handle_moggie_messages)
 
     def set_initial_state(self, initial_state):
         self.is_locked = initial_state.get('app_is_locked')
@@ -86,10 +90,10 @@ class TuiFrame(urwid.Frame):
             pass  # FIXME
 
         elif show_browser:
-            self.show_browser(show_browser, history=False)
+            self.show_browser(self.mog_ctx0, show_browser, history=False)
 
         elif show_mailbox:
-            self.show_mailbox(show_mailbox)
+            self.show_mailbox(self.mog_ctx0, show_mailbox)
 
         else:
             # What the default view is, depends on what the context
@@ -105,14 +109,10 @@ class TuiFrame(urwid.Frame):
                 await asyncio.sleep(0.25)
             else:
                 await asyncio.sleep(1)
+
             now = time.time()
             self.notifications = [
                 n for n in self.notifications if n['ts'] > (now-20)]
-            for req_id, details in list(self.callbacks.items()):
-                if details['deadline'] < now:
-                    if details['on_error']:
-                        details['on_error']('Timed out')
-                    del self.callbacks[req_id]
 
     def show_modal(self, cls, *args, **kwargs):
         return self.topbar.open_with(cls, *args, **kwargs)
@@ -123,44 +123,41 @@ class TuiFrame(urwid.Frame):
     def request_failed_modal(self, error):
         pass
 
-    def send_with_context(self, message_obj,
-            context=None, on_reply=None, on_error=None, timeout=None):
-        if on_reply or on_error:
-            self.callbacks[message_obj['req_id']] = {
-                'message': message_obj,
-                'deadline': time.time() + (timeout or 24*3600),
-                'on_reply': on_reply,
-                'on_error': on_error}
+    def handle_exceptions(self, moggie, message):
+        needed = message['exc_data'].get('need')
+        if needed:
+            # If a password or other details are needed, we first check
+            # whether we have them cached; if so we try again right away using
+            # the cached values. If not, we show the user a RetryDialog.
+            #
+            # The Moggie object does not immediately delete handlers on error,
+            # so simply resending the request with new details will work and
+            # the response get routed to the right place. We add a callback
+            # to update our secret cache if (and only if) the call succeeds.
+            #
+            resource = message['exc_data'].get('resource')
+            retry = message.get('request')
 
-        return self.context_list.send_with_context(message_obj, context)
+            # Pop (remove) from the cache, in case it is no longer correct.
+            # On success we add it back.
+            cached = self.secrets.pop(resource, None) if resource else None
 
-    def handle_bridge_messages(self, bridge_name, message):
-        #logging.debug('Incoming(%s): %s' % (bridge_name, message))
+            def do_retry(update):
+                add_to_cache = self.secrets.__setitem__
+                retry.update(update)
+                moggie.websocket_send(retry,
+                    on_success=lambda m,r: add_to_cache(resource, update))
+
+            if cached:
+                do_retry(cached)
+            else:
+                self.show_modal(RetryDialog, moggie, message, do_retry)
+
+    def handle_moggie_messages(self, moggie, message):
         try:
-            callback_info = self.callbacks.get(message.get('req_id'))
-            if callback_info:
-                try:
-                    callback_info['on_reply'](message)
-                except Exception as e:
-                    logging.exception('Callback handler asploded')
-                    try:
-                        callback_info['on_error'](e)
-                    except:
-                        logging.exception('Callback error handler asploded')
-                finally:
-                    del self.callbacks[message['req_id']]
-
-            for widget in self.all_columns:
-                if hasattr(widget, 'handle_bridge_messages'):
-                    try:
-                        widget.handle_bridge_messages(bridge_name, message)
-                    except:
-                        logging.exception('Incoming message asploded')
-
             if 'error' in message and 'exception' in message:
-                # If we need more info, pop a retry dialog
-                if message['exc_data'].get('need'):
-                    self.show_modal(RetryDialog, message)
+                self.handle_exceptions(moggie, message)
+
                 # FIXME: Display other errors? Or no?
 
             elif message.get('req_type') in ('notification', 'unlocked'):
@@ -172,45 +169,43 @@ class TuiFrame(urwid.Frame):
         except:
             logging.exception('Exception handling message: %s' % (message,))
 
+    def active_mog_ctx(self):
+        return self.context_list.active
+
     def set_context(self, i):
         self.context_list.expand(i)
         self.update_columns()
 
-    def show_browser(self, which=True, context=None, history=True):
-        ctx_id, ctx_src_id = self.context_list.get_context_and_src_ids(context)
-        self.col_show(self.all_columns[0], Browser(self, ctx_src_id, which))
+    def show_browser(self, mog_ctx, which=True, history=True):
+        self.col_show(self.all_columns[0], Browser(mog_ctx, self, which))
         if history:
             label = 'Browse' if which is True else os.path.basename(which)
             self.context_list.add_history(
                 label,
-                lambda: self.show_browser(which, context),
+                lambda: self.show_browser(mog_ctx, which),
                 icon=EMOJI.get('browsing', '-'))
 
-    def show_mailbox(self, which, context=None, history=True, keep=None):
-        _, ctx_src_id = self.context_list.get_context_and_src_ids(context)
+    def show_mailbox(self, mog_ctx, which, history=True, keep=None):
         terms = 'mailbox:%s' % which
-        self.col_show(
-            keep or self.all_columns[0],
-            EmailList(self, ctx_src_id, terms))
-
+        column = keep or self.all_columns[0]
+        self.col_show(column, EmailList(mog_ctx, self, terms))
         if history:
             self.context_list.add_history(
                 os.path.basename(which),
-                lambda: self.show_mailbox(which, context),
+                lambda: self.show_mailbox(mog_ctx, which),
                 icon=EMOJI.get('mailbox', '-'))
 
-    def show_search_result(self, terms, context=None, history=True):
+    def show_search_result(self, mog_ctx, terms, history=True):
         # FIXME: The app should return an error and we retry
         if self.is_locked:
             self.show_modal(UnlockDialog)
             return
 
-        _, ctx_src_id = self.context_list.get_context_and_src_ids(context)
-        self.col_show(self.all_columns[0], EmailList(self, ctx_src_id, terms))
+        self.col_show(self.all_columns[0], EmailList(mog_ctx, self, terms))
         if history:
             self.context_list.add_history(
                 terms,
-                lambda: self.show_search_result(terms, context, True),
+                lambda: self.show_search_result(mog_ctx, terms, True),
                 icon=EMOJI.get('search', '-'))
 
     def ui_quit(self):
@@ -218,7 +213,8 @@ class TuiFrame(urwid.Frame):
 
     def unlock(self, passphrase):
         logging.info('Passphrase supplied, attempting unlock')
-        self.conn_manager.send(RequestUnlock(passphrase))
+        # FIXME: This should be in the high-level Moggie API
+        self.moggie.websocket_send(RequestUnlock(passphrase))
 
     def ui_change_passphrase(self):
         self.show_modal(ChangePassDialog)
@@ -228,7 +224,8 @@ class TuiFrame(urwid.Frame):
         logging.info(
             'New passphrase supplied, requesting change (disconnect=%s)'
             % (disconnect,))
-        self.conn_manager.send(RequestChangePassphrase(
+        # FIXME: This should be in the high-level Moggie API
+        self.moggie.websocket_send(RequestChangePassphrase(
             old_passphrase, new_passphrase,
             disconnect=disconnect))
 

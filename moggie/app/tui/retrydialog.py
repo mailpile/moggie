@@ -6,11 +6,13 @@ from .messagedialog import MessageDialog
 
 
 class RetryDialog(MessageDialog):
-    def __init__(self, tui, emsg):
+    def __init__(self, tui, moggie, emsg, do_retry):
+        self.moggie = moggie
         self.emsg = emsg
         self.doingit = False
         self.needed_info = emsg['exc_data'].get('need')
-        self.retry = emsg['request']
+        self.do_retry = do_retry
+        self.update = {}
 
         super().__init__(tui, emsg['error'])
 
@@ -39,20 +41,18 @@ class RetryDialog(MessageDialog):
     def validate(self):
         valid = 0
         for i, widget in enumerate(self.widgets):
-            logging.debug('Validating %d/%s' % (i, widget))
             if i >= len(self.needed_info):
                 break
             need = self.needed_info[i]
             info = widget.edit_text.replace('\n', '')
             # FIXME: Actual validation? Give user feedback?
             if info:
-                self.retry[need['field']] = info
+                self.update[need['field']] = info
                 valid += 1
-        logging.debug('Validated %d fields' % valid)
         return valid
 
     def on_ok(self):
         completed = self.validate()
         if completed == len(self.needed_info):
             self._emit('close')
-            self.tui.conn_manager.send(self.retry)
+            self.do_retry(self.update)

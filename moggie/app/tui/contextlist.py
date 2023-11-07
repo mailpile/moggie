@@ -2,7 +2,8 @@ import logging
 import time
 import urwid
 
-from ...api.requests import RequestCommand
+from moggie import MoggieContext
+
 from .decorations import EMOJI
 from .widgets import *
 
@@ -31,10 +32,15 @@ class ContextList(urwid.ListBox):
     TAG_KEYS = 'wertyu'
 
     def __init__(self, tui, update_parent=None, expanded=0, first=False):
-        self.expanded = expanded
+        self.name = 'contextlist-%.4f' % time.time()
+        self.moggie = tui.moggie
+        self.mog_ctx0 = tui.mog_ctx0
+        self.moggies = {tui.moggie.name: tui.moggie}
         self.tui = tui
         self.update_parent = update_parent or (lambda: None)
+        self.expanded = expanded
         self.first = first
+
         self.crumb = ''
         self.active = None
         self.default_action = None
@@ -50,25 +56,17 @@ class ContextList(urwid.ListBox):
         self.update_content()
         self.awaiting_counts = {}
 
-        self.search_obj = RequestCommand('context', args=['--output=details'])
-        self.counts_obj = RequestCommand('count')
-
         urwid.ListBox.__init__(self, self.walker)
 
-        # Configure event listeners, request a list of contexts.
-        me = 'contextlist'
-        cm = self.tui.conn_manager
-        cm.add_handler(me, '*', self.search_obj, self.incoming_contexts)
-        cm.add_handler(me, '*', self.counts_obj, self.incoming_counts)
-        cm.add_handler(me, '*', 'pong', self.incoming_pong)
-        cm.send(self.search_obj)
+        # FIXME: cm.add_handler(me, '*', 'pong', self.incoming_pong)
+        tui.moggie.context(output='details', on_success=self.incoming_contexts)
 
     def cleanup(self):
-        pass
+        self.moggie.unsubscribe(self.name)
 
     def keypress(self, size, key):
         if key == 'B':
-            self.tui.show_browser(history=False)
+            self.tui.show_browser(self.mog_ctx0, history=False)
             return None
         elif key in self.global_hks:
             hk = self.global_hks[key]
@@ -98,42 +96,6 @@ class ContextList(urwid.ListBox):
         self.first = True
         return False
 
-    def _get_context(self, context):
-        if context is None:
-            context = self.active
-        if isinstance(context, str):
-            if '/' not in context:
-                context = 'local_app/' + context
-            context = self.contexts[context]
-        return context
-
-    def get_context_and_src_ids(self, context=None):
-        try:
-            context = self._get_context(context)
-            return context['key'], context['ctx_src_id']
-        except (KeyError, TypeError):
-            return 'Context 0', 'local_app/Context 0'
-
-    def send_with_context(self, message_obj, context=None):
-        if self.contexts:
-            context = self._get_context(context)
-
-            if isinstance(message_obj, dict):
-                message_obj['context'] = context['key']
-            if isinstance(message_obj, RequestCommand):
-                # We are only setting a default context here, which could be
-                # overridden by a --context= arg appended later on. This
-                # is deliberate and is why we are not using .set_arg().
-                context_arg = ['--context=%s' % context['key']]
-                if message_obj['args'][:1] != context_arg:
-                    message_obj['args'][:0] = context_arg
-
-            bridge = context['source']
-        else:
-            bridge = None
-
-        self.tui.conn_manager.send(message_obj, bridge_name=bridge)
-
     def add_history(self, desc, recreate, icon='-'):
         self.v_history = [vh for vh in self.v_history if (vh[1] != desc)]
         self.v_history = self.v_history[-(self.v_history_max-1):]
@@ -146,7 +108,7 @@ class ContextList(urwid.ListBox):
 
     def show_overview(self, context):
         logging.debug('FIXME: Should show context %s' % context)
-        self.tui.show_browser(history=False)
+        self.tui.show_browser(self.mog_ctx0, history=False)
 
     def show_connections(self, context):
         logging.debug('FIXME: Should show context connections')
@@ -155,49 +117,26 @@ class ContextList(urwid.ListBox):
         logging.debug('FIXME: Should show account details: %s' % account)
 
     def show_search(self, terms, ctx_src_id):
-        return self.tui.show_search_result(
-            terms, ctx_src_id, history=False)
+        mog_ctx = self.contexts.get(ctx_src_id, self.mog_ctx0)
+        return self.tui.show_search_result(mog_ctx, terms, history=False)
 
-    def request_counts(self):
+    def request_counts(self, moggie):
         self.tag_counted = time.time()
         self.awaiting_counts = {}
-        for ctx_src_id, ctx in self.contexts.items():
+        prefix = '%s/' % moggie.name
+        for ctx_src_id, mog_ctx in self.contexts.items():
+            if not ctx_src_id.startswith(prefix):
+                continue
             args = ['--multi']
-            all_tags = ctx.get('tags', []) + ctx.get('ui_tags', [])
+            all_tags = mog_ctx.tags + mog_ctx.ui_tags
+            all_tags.extend(t for t,i in self.TAG_ITEMS if t not in all_tags)
             if all_tags:
                 for tag in set(all_tags):
                     tag = tag.lower()
                     args.append('--q=in:%s' % tag)
                     args.append('--q=in:%s -tag:read' % tag)
-                self.counts_obj.update({'args': args})
-                self.awaiting_counts[self.counts_obj['req_id']] = ctx_src_id
-                self.send_with_context(self.counts_obj, ctx)
-
-    def incoming_contexts(self, source, message):
-        for ctx, info in message['data'][0].items():
-            ctx_src_id = '%s/%s' % (source, ctx)
-            if ctx_src_id not in self.contexts:
-                info['source'] = source
-                info['ctx_src_id'] = ctx_src_id
-                self.order.append(ctx_src_id)
-                self.contexts[ctx_src_id] = info
-                self.tag_counts[ctx_src_id] = {}
-            else:
-                self.contexts[ctx_src_id].update(info)
-        self.update_content()
-        self.request_counts()
-        self.update_parent()
-        if self.first:
-            self.activate_default_view()
-
-    def incoming_counts(self, source, message):
-        ctx_src_id = self.awaiting_counts.get(message['req_id'])
-        if ctx_src_id and message.get('data'):
-            self.tag_counts[ctx_src_id] = counts = {}
-            for search, count in message['data'][0].items():
-                search = search[3:].replace(' -tag:read', '*')
-                counts[search] = count
-            self.update_content()
+                logging.debug('request count: %s => %s' % (args, mog_ctx))
+                mog_ctx.count(*args, on_success=self.incoming_counts)
 
     def incoming_pong(self, source, message):
         # FIXME: We should put in some better plumbing, so the backend
@@ -206,6 +145,33 @@ class ContextList(urwid.ListBox):
         #        be multiple front-ends, is bound to happen!
         if self.tag_counted < time.time() - self.COUNT_INTERVAL:
             self.request_counts()
+
+    def incoming_contexts(self, moggie, message):
+        data = try_get(message, 'data', message)
+        for ctx_id, info in data[0].items():
+            ctx_src_id = '%s/%s' % (moggie.name, ctx_id)
+            if ctx_src_id not in self.contexts:
+                info['ctx_src_id'] = ctx_src_id
+                self.order.append(ctx_src_id)
+                self.contexts[ctx_src_id] = MoggieContext(moggie, info=info)
+                self.tag_counts[ctx_src_id] = {}
+            else:
+                self.contexts[ctx_src_id].update(info)
+        self.update_content()
+        self.request_counts(moggie)
+        self.update_parent()
+        if self.first:
+            self.activate_default_view()
+
+    def incoming_counts(self, mog_ctx, message):
+        ctx_src_id = mog_ctx.get('ctx_src_id')
+        data = try_get(message, 'data', message)
+        if data and ctx_src_id:
+            self.tag_counts[ctx_src_id] = counts = {}
+            for search, count in data[0].items():
+                search = search[3:].replace(' -tag:read', '*')
+                counts[search] = count
+            self.update_content()
 
     def update_content(self):
         def _sel_ctx(which):
@@ -217,8 +183,9 @@ class ContextList(urwid.ListBox):
         def _sel_search(terms, ctx_src_id):
             return lambda *x: self.show_search(terms, ctx_src_id)
         def _sel_mailbox(path, ctx_src_id):
+            # FIXME: Wrong moggie?
             return lambda *x: self.tui.show_mailbox(
-                path, ctx_src_id, history=False)
+                self.moggie, path, ctx_src_id, history=False)
         def _sel_history(*args):
             return lambda *x: self.show_history(*args)
 
@@ -250,8 +217,8 @@ class ContextList(urwid.ListBox):
         self.order.sort(
             key=lambda c: (0 if (c == 'local_app/Context 0') else 1, c))
         for i, ctx_src_id in enumerate(self.order):
-            ctx = self.contexts[ctx_src_id]
-            name = ctx['name']
+            mog_ctx = self.contexts[ctx_src_id]
+            name = mog_ctx.name
             if name.startswith(last_ctx_name+' '):
                 name = ' - ' + name[len(last_ctx_name)+1:]
             else:
@@ -265,8 +232,8 @@ class ContextList(urwid.ListBox):
             if self.expanded in (i, ctx_src_id):
                 self.expanded = ctx_src_id
                 last_ctx_name = name
-                self.active = ctx
-                self.crumb = ctx['name']
+                self.active = mog_ctx
+                self.crumb = mog_ctx.name
                 widgets.append(Selectable(urwid.AttrMap(ctx_name,
                     {None: 'active', 'subtle': 'active', 'hotkey': 'act_hk'}),
                     on_select={'enter': self.show_overview}))
@@ -281,8 +248,7 @@ class ContextList(urwid.ListBox):
             def_act = None
             if self.expanded == ctx_src_id:
                 acount = 0
-                for ai, (a_id, acct) in enumerate(
-                        ctx.get('accounts', {}).items()):
+                for ai, (a_id, acct) in enumerate(mog_ctx.accounts.items()):
                     action = _sel_email(acct)
                     widgets.append(Selectable(urwid.Padding(
                             urwid.Text(('email', acct['name']), 'left', 'clip'),
@@ -311,7 +277,7 @@ class ContextList(urwid.ListBox):
                     widgets.append(urwid.Divider())
 
                 shown = []
-                all_tags = ctx.get('tags', []) + ctx.get('ui_tags', [])
+                all_tags = mog_ctx.tags + mog_ctx.ui_tags
                 for tag, items in self.TAG_ITEMS:
                     all_lc_tags = [t.lower() for t in all_tags]
                     if tag in all_lc_tags or not all_lc_tags:

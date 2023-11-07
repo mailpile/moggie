@@ -4,6 +4,15 @@ import urwid
 from .decorations import ENVELOPES, HELLO, HELLO_CREDITS, FOCUS_MAP
 
 
+# Not strictly a widget, but we use it all over
+def try_get(maybe_dict, key, default):
+    try:
+        return maybe_dict[key]
+    except (KeyError, TypeError):
+        return default
+
+
+# Not strictly a widget, but we use it all over
 def emit_soon(widget, signal, seconds=0.15):
     async def emitter(sec, sig):
         await asyncio.sleep(sec)

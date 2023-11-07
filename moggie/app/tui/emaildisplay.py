@@ -8,7 +8,6 @@ import urwid
 from ...email.addresses import AddressInfo
 from ...email.metadata import Metadata
 from ...email.parsemime import MessagePart
-from ...api.requests import RequestCommand
 from ...util.dumbcode import to_json
 from ...util.mailpile import sha1b64
 
@@ -45,10 +44,11 @@ because other e-mails referenced it.
 However, Moggie has yet to receive a copy.
 """
 
-    def __init__(self, tui, ctx_src_id, metadata,
+    def __init__(self, mog_ctx, tui, metadata,
             username=None, password=None, selected=False, parsed=None):
+        self.name = 'emaildisplay-%.4f' % time.time()
+        self.mog_ctx = mog_ctx
         self.tui = tui
-        self.ctx_src_id = ctx_src_id
         self.metadata = metadata
         self.username = username
         self.password = password
@@ -65,6 +65,7 @@ However, Moggie has yet to receive a copy.
 #           ('col_hk', 'F:'), 'Forward', ' ',
             ('col_hk', 'V:'), 'Change View']
 
+        self.search_id = None
         self.rendered_width = self.COLUMN_NEEDS
         self.widgets = urwid.SimpleListWalker([])
         self.header_lines = list(self.headers())
@@ -75,26 +76,16 @@ However, Moggie has yet to receive a copy.
         adjust = 3 if selected else 2
         self.set_focus(len(self.header_lines) - adjust)
 
-        me = 'emaildisplay'
-        _h = self.tui.conn_manager.add_handler
-        self.cm_handler_ids = [
-            _h(me, ctx_src_id, 'cli:show', self.incoming_parse),
-            _h(me, ctx_src_id, 'cli:parse', self.incoming_parse)]
-
         # Expire things from our result cache
         deadline = time.time() - 600
         expired = [k for k, (t, c) in RESULT_CACHE.items() if t < deadline]
         for k in expired:
             del RESULT_CACHE[k]
 
-        self.search_id, self.search_obj = self.get_search_obj()
         self.send_email_request()
 
     def cleanup(self):
-        self.tui.conn_manager.del_handler(*self.cm_handler_ids)
-        del self.tui
-        del self.metadata
-        del self.email
+        self.mog_ctx.moggie.unsubscribe(self.name)
 
     def keypress(self, size, key):
         # FIXME: Should probably be using CommandMap !
@@ -227,24 +218,23 @@ However, Moggie has yet to receive a copy.
     def toggle_view(self):
         next_view = (self.VIEWS.index(self.view) + 1)  % len(self.VIEWS)
         self.view = self.VIEWS[next_view]
-        self.search_id, self.search_obj = self.get_search_obj()
         self.send_email_request()
 
-    def get_search_obj(self):
+    def get_search_command(self):
         if self.view == self.VIEW_SOURCE:
-            command = 'show'
-            parse_args = ['--part=0']
+            command = self.mog_ctx.show
+            args = ['--part=0']
 
         elif self.view == self.VIEW_REPORT:
-            command = 'parse'
-            parse_args = [
+            command = self.mog_ctx.parse
+            args = [
                 '--allow-network',
                 '--with-everything=Y',
                 '--format=text']
 
         else:
-            command = 'parse'
-            parse_args = [
+            command = self.mog_ctx.parse
+            args = [
                 # Reset to the bare minimum, we can as for more if the user
                 # wants it (and as the app evolves).
                 '--with-nothing=Y',
@@ -259,12 +249,23 @@ However, Moggie has yet to receive a copy.
                 '--with-html-clean=N',
                 '--with-html=Y']
         if self.username:
-            parse_args.append('--username=%s' % self.username)
+            args.append('--username=%s' % self.username)
         if self.password:
-            parse_args.append('--password=%s' % self.password)
-        parse_args.append(to_json(self.metadata))
-        cache_id = sha1b64('%s' % parse_args)
-        return cache_id, RequestCommand(command, args=parse_args)
+            args.append('--password=%s' % self.password)
+        args.append(to_json(self.metadata))
+        cache_id = sha1b64('%s' % args)
+        return cache_id, command, args
+
+    def send_email_request(self):
+        self.search_id, command, args = self.get_search_command()
+        cached = RESULT_CACHE.get(self.search_id)
+        if cached:
+            self.incoming_parse(None, copy.deepcopy(cached[1]), cached=True)
+        else:
+            if self.metadata.get('missing'):
+                self.email_display = [self.no_body(self.MESSAGE_MISSING)]
+                self.update_content()
+            command(*args, on_success=self.incoming_parse)
 
     def empty_body(self):
         if self.metadata.get('missing'):
@@ -292,45 +293,34 @@ However, Moggie has yet to receive a copy.
         idx = self.metadata['idx'] if self.metadata else None
         if idx and (idx < 100000000):
             if 'in:read' not in self.metadata.get('tags', []):
-                self.marked_read = RequestCommand(
-                    'tag', args=['+read', '--', 'id:%s' % idx])
-                self.tui.send_with_context(self.marked_read, self.ctx_src_id)
+                self.mog_ctx.tag('+read', '--', 'id:%s' % idx)
 
-    def send_email_request(self):
-        cached = RESULT_CACHE.get(self.search_id)
-        if cached:
-            self.incoming_parse(None, copy.deepcopy(cached[1]), cached=True)
-        else:
-            if self.metadata.get('missing'):
-                self.email_display = [self.no_body(self.MESSAGE_MISSING)]
-                self.update_content()
-
-            self.tui.send_with_context(self.search_obj, self.ctx_src_id)
-
-    def incoming_parse(self, source, message, cached=False):
-        if message['req_id'] != self.search_obj['req_id'] and not cached:
-            return
+    def incoming_parse(self, mog_ctx, message, cached=False):
+        if message:
+            if isinstance(message, list):
+                message = message[0]
+            message = try_get(message, 'data', message)
 
         RESULT_CACHE[self.search_id] = (time.time(), copy.deepcopy(message))
         self.email_display = []
-        if message['mimetype'] == 'application/moggie-internal':
-            for data in message['data']:
-                if isinstance(data, dict):
-                    self.email = data['parsed']
-                    break
+
+        if isinstance(message, dict) and ('parsed' in message):
+            self.email = message['parsed']
             if self.email:
                 self.header_lines = list(self.headers())
                 self.email_display = self.parsed_email_to_widget_list()
 
-        elif message['mimetype'] in ('text/plain', 'message/rfc822'):
-            if message['data'].strip():
-                self.email_display = [urwid.Text(message['data'], wrap='any')]
+        elif isinstance(message, (str, bytes)):
+            message = message.strip()
+            if message:
+                self.email_display = [urwid.Text(message, wrap='any')]
             else:
                 self.email_display = [self.empty_body()]
 
         if not self.email_display:
             self.email_display = [self.no_body(
                 'Failed to load or parse message, sorry!')]
+            logging.debug('WAT: %s' % message)
 
         self.mark_read()
         self.crumb = self.VIEW_CRUMBS[self.view]

@@ -32,21 +32,8 @@ Use an asterisk (*) to search for word fragments.
 
     signals = ['close']
 
-    def search(self, terms):
-        terms = terms.replace('\n', '').strip()
-        if not self.exact.get_state():
-            def _fuzz(term):
-                if ':' in term or '*' in term or term[:1] in ('-', '+'):
-                    return term
-                if term[-1:] == 's':
-                    term = term[:-1]
-                return term + '*'
-            terms = ' '.join(_fuzz(w) for w in terms.split(' ') if w)
-        if terms:
-            self.tui.show_search_result(terms)
-        self._emit('close')
-
     def __init__(self, tui):
+        self.mog_ctx = tui.active_mog_ctx()
         self.tui = tui
         close_button = CloseButton(
             on_select=lambda b: self._emit('close'), style='popsubtle')
@@ -67,3 +54,17 @@ Use an asterisk (*) to search for word fragments.
             self.exact,
             urwid.Text(('popsubtle', self.HELP_TEXT))]))
         super().__init__(urwid.LineBox(urwid.AttrWrap(fill, 'popbg')))
+
+    def search(self, terms):
+        terms = terms.replace('\n', '').strip()
+        if not self.exact.get_state():
+            def _fuzz(term):
+                if ':' in term or '*' in term or term[:1] in ('-', '+'):
+                    return term
+                if term[-1:] == 's':
+                    term = term[:-1]
+                return term + '*'
+            terms = ' '.join(_fuzz(w) for w in terms.split(' ') if w)
+        if terms:
+            self.tui.show_search_result(self.mog_ctx, terms)
+        self._emit('close')

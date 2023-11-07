@@ -145,9 +145,10 @@ def CommandMuttalike(moggie, args):
 
 
 def Main(args):
-    from moggie import MoggieCLI
-    moggie = MoggieCLI()
+    from moggie import MoggieCLI, set_shared_moggie
+    moggie = MoggieCLI(name='cli')
     moggie.enable_default_logging()
+    set_shared_moggie(moggie)
 
     try:
         command = 'default'

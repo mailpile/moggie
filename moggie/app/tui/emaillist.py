@@ -15,7 +15,6 @@ import time
 import urwid
 
 from ...email.metadata import Metadata
-from ...api.requests import RequestCommand
 from ..suggestions import Suggestion
 
 from .decorations import EMOJI
@@ -216,17 +215,15 @@ class EmailListWalker(urwid.ListWalker):
 class SuggestAddToIndex(Suggestion):
     MESSAGE = 'Add these messages to the search index'
 
-    def __init__(self, parent, search_obj, ctx_src_id):
-        Suggestion.__init__(self, search_obj['context'], None)
+    def __init__(self, parent, search_obj):
+        Suggestion.__init__(self, parent.mog_ctx.key, None)
         self.parent = parent
         self.tui = parent.tui
-        self.ctx_src_id = ctx_src_id
-        self.request_add = None  # FIXME
-        self._message = self.MESSAGE
         self.adding = False
+        self._message = self.MESSAGE
 
     def action(self):
-        self.tui.send_with_context(self.request_add, self.ctx_src_id)
+        logging.error('FIXME: Add to index')
         self.adding = True
 
     def message(self):
@@ -258,6 +255,9 @@ class EmailList(urwid.Pile):
 
     VIEW_MESSAGES = 0
     VIEW_THREADS  = 1
+    VIEWS = {
+        VIEW_MESSAGES: 'metadata',
+        VIEW_THREADS: 'threads_metadata'}
 
     TAG_OP_MAP = {
         't': ('TAG',   'Tag selected messages', 'Tagged'),
@@ -266,13 +266,14 @@ class EmailList(urwid.Pile):
         '!': ('+junk', 'Move to junk',          'Moved to junk'),
         '#': ('+trash', 'Move to trash',        'Moved to trash')}
 
-    def __init__(self, tui, ctx_src_id, terms, view=None):
+    def __init__(self, mog_ctx, tui, terms, view=None):
+        self.name = 'emaillist-%.5f' % time.time()
+        self.mog_ctx = mog_ctx
         self.tui = tui
-        self.ctx_src_id = ctx_src_id
         self.terms = terms
         self.view = view
-        self.is_mailbox = False
 
+        self.is_mailbox = False
         if self.view is None:
             if self.terms.startswith('mailbox:'):
                 self.is_mailbox = self.terms[8:]
@@ -287,8 +288,6 @@ class EmailList(urwid.Pile):
         self.want_more = True
         self.want_emails = 0
         self.total_available = None
-        self.search_obj = self.make_search_obj()
-        self.count_obj = RequestCommand('count', args=[self.terms])
         self.webui_state = {}
 
         self.walker = EmailListWalker(self)
@@ -296,15 +295,8 @@ class EmailList(urwid.Pile):
         self.scounter = SelectionCounter(self.walker)
 
         self.listbox = urwid.ListBox(self.walker)
-        self.suggestions = SuggestionBox(self.tui,
-            update_parent=self.update_content)
+        self.suggestions = SuggestionBox(tui, update_parent=self.update_content)
         self.widgets = []
-
-        me = 'emaillist'
-        _h = self.tui.conn_manager.add_handler
-        self.cm_handler_ids = [
-            _h(me, ctx_src_id, 'cli:search', self.incoming_result),
-            _h(me, ctx_src_id, 'cli:count', self.incoming_count)]
 
         urwid.Pile.__init__(self, [])
         self.set_crumb()
@@ -312,15 +304,7 @@ class EmailList(urwid.Pile):
         self.update_content()
 
     def cleanup(self):
-        self.tui.conn_manager.del_handler(*self.cm_handler_ids)
-        self.search_obj = None
-        self.count_obj = None
-        del self.tui
-        del self.walker.emails
-        del self.emails
-        del self.listbox
-        del self.widgets
-        del self.suggestions
+        self.mog_ctx.moggie.unsubscribe(self.name)
 
     def keypress(self, size, key):
         # FIXME: Should probably be using CommandMap !
@@ -357,18 +341,13 @@ class EmailList(urwid.Pile):
             return None
         return super().keypress(size, key)
 
-    def make_search_obj(self):
-        search_args = [
-            '--q=%s' % self.terms,
-            '--json-ui-state',
-            '--limit=%s' % self.want_emails]
-
-        if self.view == self.VIEW_THREADS:
-            search_args.append('--output=threads_metadata')
-        else:
-            search_args.append('--output=metadata')
-
-        return RequestCommand('search', args=search_args)
+    def search(self, limit=False):
+        self.mog_ctx.search(
+            q=self.terms,
+            output=self.VIEWS.get(self.view, 'metadata'),
+            limit=self.want_emails if (limit is False) else (limit or '-'),
+            json_ui_state=True,
+            on_success=self.incoming_result)
 
     def set_crumb(self, update=False):
         self.crumb = self.is_mailbox
@@ -395,11 +374,6 @@ class EmailList(urwid.Pile):
             if set_focus:
                 self.set_focus(0)
             return
-
-        elif self.search_obj['req_type'] != 'search':
-            pass
-            #self.suggestions.set_suggestions([
-            #    SuggestAddToIndex(self, self.search_obj, self.ctx_src_id)])
 
         # Inject suggestions above the list of messages, if any are
         # present. This can change dynamically as the backend sends us
@@ -438,10 +412,11 @@ class EmailList(urwid.Pile):
     def show_email(self, metadata, selected=False):
         self.walker.expand(metadata)
         self.tui.col_show(self,
-            EmailDisplay(self.tui, self.ctx_src_id, metadata,
-                username=self.search_obj.get('username'),
-                password=self.search_obj.get('password'),
+            EmailDisplay(self.mog_ctx, self.tui, metadata,
                 selected=selected))
+                # FIXME:
+                #username=self.search_obj.get('username'),
+                #password=self.search_obj.get('password'),
 
     def load_more(self):
         now = time.time()
@@ -450,33 +425,30 @@ class EmailList(urwid.Pile):
         self.loading = time.time()
 
         self.want_emails += max(100, self.tui.max_child_rows() * 2)
-        if self.search_obj['req_type'] == 'cli:search':
-            self.search_obj.set_arg('--limit=', self.want_emails)
-            if self.total_available is None:
-                self.tui.send_with_context(
-                    self.count_obj, self.ctx_src_id)
-        elif self.search_obj['req_type'] == 'mailbox':
-            self.search_obj['limit'] = None
+
+        if self.is_mailbox:
+            self.search(limit=None)
         else:
-            self.search_obj['limit'] = self.want_emails
+            self.search(limit=self.want_emails)
+            if self.total_available is None:
+                self.mog_ctx.count(self.terms, on_success=self.incoming_count)
 
-        self.tui.send_with_context(self.search_obj, self.ctx_src_id)
-
-    def incoming_count(self, source, message):
-        if (message['req_id'] == self.count_obj['req_id']
-                and 'exception' not in message):
-            for val in message['data'][0].values():
+    def incoming_count(self, mog_ctx, message):
+        data = try_get(message, 'data', message)
+        if data:
+            for val in data[0].values():
                 self.total_available = val
             self.set_crumb(update=True)
 
-    def incoming_result(self, source, message):
+    def incoming_result(self, mog_ctx, message):
+        data = try_get(message, 'data', message)
         try:
             first = (0 == len(self.emails))
-            self.webui_state = message['data'].pop(0)
-            self.walker.set_emails(message['data'])
+            self.webui_state = data.pop(0)
+            self.walker.set_emails(data)
 
             # FIXME: Should the back-end make this easier for us?
-            terms = (self.webui_state['details']['terms']
+            terms = (self.webui_state['details'].get('terms', '')
                 .replace('+', '').replace('-', '')).split()
             self.webui_state['query_tags'] = [
                 word for word in terms if word.startswith('in:')]
@@ -486,12 +458,13 @@ class EmailList(urwid.Pile):
             if len(self.emails) < self.want_emails:
                 self.want_more = False
 
+            # FIXME: This is now broken!
             # This gets echoed back to us, if the request was retried
             # due to access controls. We may need to pass this back again
             # in order to read mail.
-            self.search_obj['username'] = message.get('username')
-            self.search_obj['password'] = message.get('password')
-            self.loading = 0
+            #self.search_obj['username'] = message.get('username')
+            #self.search_obj['password'] = message.get('password')
+            #self.loading = 0
         except:
             logging.exception('Failed to process message')
         self.update_content(set_focus=first)
@@ -555,9 +528,8 @@ class EmailList(urwid.Pile):
             args.append('--comment=%s' % comment)
         args.append('--')
         args.extend(search_terms)
-        tag_req = RequestCommand('tag', args=args)
-        self.tui.send_with_context(tag_req, self.ctx_src_id,
-            on_reply=self.on_tagged,
+        self.mog_ctx.tag(*args,
+            on_success=self.on_tagged,
             on_error=self.on_tag_failed)
 
         #logging.debug('FIXME: Should tag %s with %s' % (tag_op, search_terms))
