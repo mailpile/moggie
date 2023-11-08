@@ -30,7 +30,7 @@ class Metadata(list):
     # These are the headers we want extracted and stored in metadata.
     # Note the Received headers are omitted, too big and too much noise.
     HEADER_RE = re.compile(b'(?:^|\n)(' +
-            b'(?:Date|Message-ID|In-Reply-To|From|To|Cc|Subject):' +
+            b'(?:Date|Message-ID|In-Reply-To|From|To|Cc|Subject):\n?' +
             b'(?:[^\n]+\n\\s+)*[^\n]+' +
         b')',
         flags=(re.IGNORECASE + re.DOTALL))
@@ -39,13 +39,13 @@ class Metadata(list):
     IMAP_HEADERS = '(DATE MESSAGE-ID IN-REPLY-TO FROM TO CC SUBJECT)'
 
     FIND_RE = {
-        'in-reply-to': re.compile(r'(?:^|\n)in-reply-to:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL)),
-        'message-id': re.compile(r'(?:^|\n)message-id:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL)),
-        'subject': re.compile(r'(?:^|\n)subject:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL)),
-        'date': re.compile(r'(?:^|\n)date:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL)),
-        'from': re.compile(r'(?:^|\n)from:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL)),
-        'to': re.compile(r'(?:^|\n)to:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL)),
-        'cc': re.compile(r'(?:^|\n)cc:\s*([^\n]*)', flags=(re.IGNORECASE + re.DOTALL))}
+        'in-reply-to': re.compile(r'(?:^|\n)in-reply-to:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
+        'message-id': re.compile(r'(?:^|\n)message-id:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
+        'subject': re.compile(r'(?:^|\n)subject:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
+        'date': re.compile(r'(?:^|\n)date:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
+        'from': re.compile(r'(?:^|\n)from:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
+        'to': re.compile(r'(?:^|\n)to:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
+        'cc': re.compile(r'(?:^|\n)cc:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL))}
 
     FOLDING_QUOTED_RE = re.compile('=\\?\\s+=\\?', flags=re.DOTALL)
     FOLDING_RE = re.compile('\r?\n\\s+', flags=re.DOTALL)
@@ -225,27 +225,38 @@ if __name__ == "__main__":
     mbx_path = [b'/home/varmaicur.mbx', (b'mx', b'?0-100')]
     mdir_path = [b'/tmp', (b'md', b'/msgid')]
 
-    print('%s' % tag_path(*mbx_path))
-    print('%s' % tag_path(*mdir_path))
-
     md1 = Metadata(0, 0, Metadata.PTR(0, tag_path(*mbx_path), 200), """\
 From: Bjarni <bre@example.org>\r
 To: bre@example.org\r
-Subject: This is Great\r\n""", 0, 0, {'tags': 'inbox,read,sent'})
+Subject:\r
+ This is\r
+ Great\r
+Junk: blah\r\n""", 0, 0, {'tags': 'inbox,read,sent'})
 
-    md2 = Metadata(0, 0, [[0, dumb_encode_asc(tag_path(*mdir_path)), 200]], """\
+    md2 = Metadata(0, 0, [[0, dumb_encode_asc(tag_path(*mdir_path)), 200, 0]], """\
 To: bre@example.org
 From: Bjarni <bre@example.org>
-Subject: This is Great""")
+Subject:
+ This is
+ Great
+Junk: blah
+""")
 
-    for md in (md1, md2):
-        md_enc = dumb_encode_bin(md)
-        print('%s == [%d] %s' % (md.uuid_asc, len(md_enc), md_enc))
-        print('%s' % (md.parsed(),))
+    if False:
+        print('%s' % tag_path(*mbx_path))
+        print('%s' % tag_path(*mdir_path))
+        for md in (md1, md2):
+            md_enc = dumb_encode_bin(md)
+            print('%s == [%d] %s' % (md.uuid_asc, len(md_enc), md_enc))
+            print('%s' % (md.parsed(),))
+            print('%s' % md1.get_raw_header('subject'))
 
     assert(md1.uuid == md2.uuid)
     assert(md1.pointers[0].container == mbx_path[0])
     assert(md2.pointers[0].container == mdir_path[0])
+
+    assert(md1.get_raw_header('subject') == 'This is\n Great')
+    assert(md2.get_raw_header('subject') == 'This is\n Great')
 
     # Make sure that adding pointers works sanely; the first should
     # be added, the second should merely update the pointer list.

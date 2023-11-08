@@ -415,11 +415,12 @@ From: Bjarni R. Einarsson <bre@example.org>
 To: spamfun@example.org
 To: duplicate@example.org
 X-Junk: 123
-Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
+Subject:
+ =?utf-8?b?SGVsbG8gd29ybGQ=?= is
  =?utf-8?b?SGVsbG8gd29ybGQ=?=
 
 """)
-    print('%s' % json.dumps(parse, indent=1))
+    #print('%s' % json.dumps(parse, indent=1))
 
     assert(json.dumps(parse))
     assert(parse['received'][0]['from'] == 'foo')
@@ -496,7 +497,7 @@ Subject: =?utf-8?b?SGVsbG8gd29ybGQ=?= is
         }, eol='\n'),
         """\
 MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary=magic123
+Content-Type: multipart/mixed; boundary="magic123"
 Date: Thu, 01 Jan 1970 00:00:00 -0000
 Subject: =?utf-8?b?SGFsbMOzIGhlaW11cg==?=
 From: "Bjarni R. E." <bre@example.org>
