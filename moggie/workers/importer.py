@@ -94,13 +94,15 @@ class ImportWorker(BaseWorker):
             self.fs.forked()
         return super().run(*args, **kwargs)
 
-    def _get_email(self, metadata):
+    async def _async_get_email(self, metadata):
         try:
+            # FIXME: Passwords etc? Without them importing from IMAP or
+            #        or encrypted local mail stores will fail.
             if metadata.pointers[0].is_local_file:
-                email = self.fs.email(metadata, full_raw=True)
+                email = await self.fs.async_email(asyncio.get_event_loop(),
+                    metadata, full_raw=True)
             else:
-                # FIXME: Passwords etc? Without them importing from IMAP fails.
-                email = self.app.api_request(True,
+                email = await self.app.async_api_request(True,
                     RequestEmail(metadata=metadata, full_raw=True),
                     ).get('email', {})
             if email:
@@ -113,17 +115,29 @@ class ImportWorker(BaseWorker):
             % (metadata.idx, metadata,))
         return None
 
-    def _mk_parser(self):
+    def _async_loop(self):
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        def parse(email):
-            return loop.run_until_complete(CommandParse.Parse(None, email,
+        return loop
+
+    def _async_run(self, command):
+        return self._async_loop().run_until_complete(command)
+
+    def _get_email(self, metadata):
+        return self._async_run(self._async_get_email(metadata))
+
+    def _mk_parsers(self):
+        loop = self._async_loop()
+        async def async_parse(email):
+            return await CommandParse.Parse(None, email,
                 settings=self.parser_settings,
-                allow_network=self.allow_network))
-        return parse
+                allow_network=self.allow_network)
+        def sync_parse(email):
+            return loop.run_until_complete(async_parse(email))
+        return sync_parse, async_parse
 
     def _fix_tags_and_scope(self, tag_namespace, tags, _all=True):
         def _fix(tag):
@@ -209,7 +223,7 @@ class ImportWorker(BaseWorker):
         rm_tags = {}
         if autotaggers:
             unloadable = checked = tagged = untagged = 0
-            moggie_parse = self._mk_parser()
+            moggie_parse, moggie_parse_async = self._mk_parsers()
             res = self.metadata.metadata(hits, tags=None, threads=False)
             for md in res['metadata']:
                 try:
@@ -317,7 +331,7 @@ class ImportWorker(BaseWorker):
             wanted |= spam_ids
             wanted |= ham_ids
 
-        moggie_parse = self._mk_parser()
+        moggie_parse, moggie_parse_async = self._mk_parsers()
         unloadable = self.autotag_unloadable
         keywords = {}
         res = self.metadata.metadata(wanted, tags=None, threads=False)
@@ -567,7 +581,7 @@ class ImportWorker(BaseWorker):
 
         ntime, bc, ec = int(time.time()), 0, 0
 
-        moggie_parse = self._mk_parser()
+        moggie_parse, moggie_parse_async = self._mk_parsers()
         self.filters.load()
         message_batches = []
         for i in range(0, len(email_idxs), self.BATCH_SIZE):
@@ -580,26 +594,23 @@ class ImportWorker(BaseWorker):
                     i, i+len(idx_batch)-1, len(email_idxs), last_loop,
                     len(self.keywords)))
 
-            # 1. Submit a request to the main app to fetch the e-mail's
+            # 1. Submit a requests to the main app to fetch the e-mail's
             #    text parts and structure (not full attachments). Again,
             #    we don't know or care where the mail is coming from.
             all_metadata = list(self.metadata.metadata(idx_batch)['metadata'])
 
             # Start processing keywords in parallel after 1s (or less).
             self._start_keyword_loop(after=min(1, len(all_metadata) / 100))
-            added = []
-            for md in all_metadata:
-                if md.more.get('missing'):
-                    continue
 
-                email = self._get_email(md)
+            async def process_email(md):
+                email = await self._async_get_email(md)
                 if not email:
-                    logging.exception('[import] Failed to load %s' % (md,))
-                    continue
+                    logging.warning('[import] Failed to load %s' % (md,))
+                    return None, None
 
                 # Parse the e-mail and extract keywords.
                 # This uses the same logic as `moggie parse`.
-                email = moggie_parse(email)['parsed']
+                email = (await moggie_parse_async(email))['parsed']
                 kws = set(email['_KEYWORDS'])
 
                 # 3. Run the filtering logic to mutate keywords/tags
@@ -611,6 +622,28 @@ class ImportWorker(BaseWorker):
                             self.keywords[kw].append(md.idx)
                         else:
                             self.keywords[kw] = [md.idx]
+
+                return email, kws
+
+            async def await_completed(tasklist, max_left):
+                while len(tasklist) > max_left:
+                    done = [t for t in tasklist if t.done()]
+                    tasks[:] = [t for t in tasklist if t not in done]
+                    for t in done:
+                        await t
+                    if len(tasklist) > max_left:
+                        await asyncio.sleep(0.1)
+
+            loop = self._async_loop()
+            added = []
+            tasks = []
+            for md in all_metadata:
+                if md.more.get('missing'):
+                    continue
+
+                task = loop.create_task(process_email(md))
+                tasks.append(task)
+                self._async_run(await_completed(tasks, 10))
 
                 bc += 1
                 ec += 1
@@ -626,6 +659,8 @@ class ImportWorker(BaseWorker):
                 self.imported += 1
                 if not self.keep_running:
                     return
+
+            self._async_run(await_completed(tasks, 0))
 
             # This marks our set of messages as complete, after the *next*
             # batch of keywords is uploaded to the index.
