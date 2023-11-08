@@ -275,8 +275,10 @@ class Moggie:
                    pass
                logging.exception(
                    'Error handling message: %s <= %s' % (call_spec, message))
+
         if not handled:
-            logging.debug('Unhandled message: %s' % message)
+            if message.get('req_type') not in ('pong', ):
+                logging.debug('Unhandled message: %s' % message)
 
     def _ws_subscribe(self, event, call_spec):
         hooks = self._ws_callbacks.get(event, [])
@@ -315,7 +317,7 @@ class Moggie:
         The callback will be invoked with this moggie as its first argument,
         and the message object as as its second argument.
         """
-        self._ws_subscribe('notification', (name, callback, on_error))
+        self._ws_subscribe('notification', (name, '_RAW_', callback, on_error))
 
     def on_result(self, command, callback, on_error=None, raw=False, name=None):
         """

@@ -166,6 +166,9 @@ class TuiFrame(urwid.Frame):
                     self.context_list.activate_default_view()
                 self.notifications.append(message)
 
+            else:
+                logging.debug('Unhandled: %s' % message)
+
         except:
             logging.exception('Exception handling message: %s' % (message,))
 

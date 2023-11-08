@@ -343,6 +343,28 @@ main app worker. Hints:
                 break
         return section
 
+    def _remember_credentials(self, conn_id, access, api_req):
+        try:
+            ctx = api_req.get('context') or self.config.CONTEXT_ZERO
+            roles, _, _ = access.grants(ctx, AccessConfig.GRANT_ACCESS)
+        except (NameError, ValueError):
+            # FIXME: Generate a Notification so use sees something?
+            logging.error(
+                'Save credentials request denied for %s, %s, %s.'
+                % (conn_id, access, ctx))
+            return
+
+        context = self.config.get_context(ctx)
+        for res, keys in (api_req.get('remember_credentials') or {}).items():
+            creds = dict((k, api_req[k]) for k in keys)
+            context.set_secret(res, creds)
+            logging.info('Saved credentials in %s for %s' % (ctx, res))
+
+    def _get_saved_credentials(self, api_req, resource):
+        ctx = api_req.get('context') or self.config.CONTEXT_ZERO
+        context = self.config.get_context(ctx)
+        return context.get_secret(resource)
+
     # Public API
 
     async def api_webroot(self, req_env):
@@ -754,6 +776,7 @@ main app worker. Hints:
                 full_raw=api_request.get('full_raw', False),
                 username=api_request.get('username'),
                 password=api_request.get('password'))
+
         return ResponseEmail(api_request, await get_email())
 
     async def api_req_contexts(self, conn_id, access, api_request):
@@ -1105,7 +1128,25 @@ main app worker. Hints:
                     what = what[:254] + '..'
                 fmt = '[api] %s/%s requested %s'
                 logging.info(fmt % (who, (conn_id or 'internal'), what))
-            result = await self._route_api_request(conn_id, access, api_req)
+            try:
+                result = await self._route_api_request(conn_id, access, api_req)
+
+                # If we get this far, the method succeeded. Did it have access
+                # credentials it wants us to remember?
+                if 'remember_credentials' in api_req:
+                    self._remember_credentials(conn_id, access, api_req)
+
+            except NeedInfoException as e:
+                update, resource = None, e.exc_data.get('resource')
+                if resource:
+                    update = self._get_saved_credentials(api_req, resource)
+                if not update:
+                    raise
+                logging.debug(
+                    'Retrying with saved credentials for %s' % (resource,))
+                api_req.update(update)
+                result = await self._route_api_request(conn_id, access, api_req)
+
         except APIException as exc:
             result = error = exc.as_dict()
             error['error'] = str(exc)
