@@ -85,13 +85,16 @@ class CommandWebsocket(CLICommand):
     def link_bridge(self, bridge):
         return self.handle_message
 
-    def handle_message(self, bridge_name, message):
+    def print_message(self, message):
         if self.options['--friendly']:
             # Note: We don't use from_json() here, because we don't
             #       want to decode the binary data.
             print('<= ' + json.dumps(json.loads(message), indent=2))
         else:
             print('%s' % message)
+
+    def handle_message(self, bridge_name, message):
+        self.print_message(message)
         self.received += 1
         exit_after = self.options['--exit-after='][-1]
         if exit_after and self.received >= int(exit_after):
@@ -200,3 +203,47 @@ class CommandWebsocket(CLICommand):
         except (KeyboardInterrupt, asyncio.exceptions.CancelledError):
             if readline is not None:
                 sys.stderr.write('\n')
+
+
+class CommandNotifications(CommandWebsocket):
+    """moggie notifications [<URL>]
+
+    This establishes a websocket connection to a running moggie server,
+    repeating any notifications to STDOUT.
+
+    URLs for connecting as different users/roles can be obtained using:
+
+        moggie grant --output=urls
+
+    If no URL is specified, the tool connects to the user's default local
+    moggie (with unlimited access).
+
+    ### Options
+
+    %(OPTIONS)s
+
+    """
+    NAME = 'notifications'
+    ROLES = AccessConfig.GRANT_ACCESS  # FIXME: Is this right?
+    WEBSOCKET = False
+    AUTO_START = False
+    WEB_EXPOSE = False
+    OPTIONS = [[
+        ('--format=',   ['text'], 'X=(json|text*) Output text or JSON'),
+        ('--friendly',        [], None),
+        ('--exit-after=', [None], 'X=maximum number of received messages')]]
+
+    def print_message(self, message):
+        fmt = self.options['--format='][-1]
+        if fmt == 'json':
+            print(json.dumps(json.loads(message), indent=2))
+        else:
+            message = json.loads(message)
+            if 'message' in message:
+                print('%s' % message['message'])
+            elif message.get('connected') or message.get('req_type') == 'pong':
+                print('Connected!  Waiting for notifications... (CTRL+C quits)')
+
+    async def read_json_loop(self, reader, bridge):
+        while True:
+            await asyncio.sleep(1)

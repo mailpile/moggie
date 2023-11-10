@@ -72,6 +72,7 @@ CLI_COMMANDS = LazyLoader({
     'autotag-classify': (_lazy_autotag, 'CommandAutotagClassify'),
 
     'websocket': (_lazy_dev, 'CommandWebsocket'),
+    'notifications': (_lazy_dev, 'CommandNotifications'),
 
     'pgp-get-keys': (_lazy_openpgp, 'CommandPGPGetKeys'),
     'pgp-add-keys': (_lazy_openpgp, 'CommandPGPAddKeys'),
