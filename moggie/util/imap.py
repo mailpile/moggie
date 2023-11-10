@@ -126,6 +126,7 @@ def _try_wrap(conn, e_ctx, op, *args, **kwargs):
         return op(*args, **kwargs)
     except APIException as exc:
         _raising = exc
+        return
     except (ssl.CertificateError, ssl.SSLError) as exc:
         _raising = ConnectError(
             'Failed to make a secure TLS connection: %s' % exc, **e_ctx)
@@ -135,8 +136,11 @@ def _try_wrap(conn, e_ctx, op, *args, **kwargs):
         if '[AUTHENTICATIONFAILED]' in err:
             _raising = PleaseUnlockError(err)
         else:
+            _retryable = isinstance(exc, IMAP4.abort)
             _raising = IMAPError(
-                'An IMAP protocol error occurred: %s' % err, **e_ctx)
+                'A%s IMAP protocol error occurred: %s'
+                    % (' retryable' if _retryable else 'n', err),
+                **e_ctx)
             _raising.traceback = traceback.format_exc()
     except (IOError, AttributeError, socket.error) as exc:
         _raising = IMAPError(
@@ -148,6 +152,7 @@ def _try_wrap(conn, e_ctx, op, *args, **kwargs):
             # any timed-out operations out of a hung state.
             conn.socket().shutdown(socket.SHUT_RDWR)
             conn.file.close()
+            conn.file = None
     except (AttributeError, IOError, socket.error):
         pass
     if _raising is not None:
@@ -269,11 +274,15 @@ class ImapConn:
             password=True)
 
     def connect(self):
-        if not self.conn:
+        if not self.conn or not self.conn.file:
             conn, caps, info = connect_imap(self.host_port, debug=self.debug)
             self.conn = conn
             self.capabilities = caps
             self.conn_info = info
+            if self.authenticated:
+                self.authenticated = False
+                self.unlock(self.username, self.password)
+            self.selected = None
         return self
 
     def unlock(self, username=None, password=None, ask_key=None, set_key=None):
