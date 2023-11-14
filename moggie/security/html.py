@@ -642,7 +642,7 @@ def clean_email_html(metadata, email, part,
                     pass  # FIXME: Update URL to use our proxy
 
         for idx in reversed(dropping):
-            cleaner.dropped_attrs.append((tag, attrs[idx][0], attrs[idx][1]))
+            cleaner.dropped_attrs.add((tag, attrs[idx][0], attrs[idx][1]))
             attrs.pop(idx)
 
         return tag, attrs, data
