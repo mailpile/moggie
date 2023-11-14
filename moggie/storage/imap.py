@@ -1,4 +1,6 @@
+import imaplib
 import logging
+import socket
 import sys
 import time
 
@@ -112,12 +114,17 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
         if not (user and host_port):
             user, host_port, mailbox, message = self.key_to_uhmm(key)
 
-        _id = '%s@%s' % (user, host_port)
-        if _id not in self.conns:
-            conn = ImapConn(user, host_port)
+        def connect(user, host_port, password, auth):
+            logging.info('Connecting to imap://%s@%s%s'
+                % (user, host_port, ' (authenticated)' if auth else ''))
+            conn = ImapConn(user, host_port) # debug=1
             if auth:
                 conn = conn.unlock(user, password)
-            self.conns[_id] = conn
+            return conn
+
+        _id = '%s@%s' % (user, host_port)
+        if _id not in self.conns:
+            self.conns[_id] = connect(user, host_port, password, auth)
 
         return self.conns[_id].connect()
 
@@ -144,11 +151,17 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
     def get(self, *args, **kwargs):
         raise RuntimeError('FIXME: Unimplemented')
 
-    def __getitem__(self, key, **kwargs):
+    def __getitem__(self, key, *gi_args, **kwargs):
         try:
+            username = password = context = secret_ttl = None
+            if gi_args:
+                username, password, context, secret_ttl = gi_args
+
             key = dumb_decode(key)
             user, host_port, mailbox, message = self.key_to_uhmm(key)
-            conn = self.get_conn(user=user, host_port=host_port)
+            conn = self.get_conn(
+                host_port=host_port,
+                user=(username or user), password=password, auth=True)
             if not message or '.' not in message:
                 logging.debug('Invalid path, can only fetch messages')
                 raise KeyError
@@ -163,8 +176,10 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
  
             for uid, data in conn.fetch_messages(mailbox, [uid]):          
                 return data
+        except PleaseUnlockError:
+            raise
         except (KeyError, IOError):
-            logging.exception('Gettitem is failing')
+            logging.exception('Getitem is failing')
             pass
         raise KeyError(key)
 

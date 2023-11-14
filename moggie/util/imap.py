@@ -324,8 +324,12 @@ class ImapConn:
     def select(self, mailbox, readonly=False):
         if isinstance(mailbox, str):
             mailbox = codecs.encode(mailbox, 'imap4-utf-7')
-        if self.selected and self.selected.get('mailbox') == mailbox:
-            return self
+
+        # Caching this causes us to miss UIDVALIDITY changes, and mail
+        # gets badly mixed up. So, goodbye optimization!
+        #
+        # if self.selected and self.selected.get('mailbox') == mailbox:
+        #     return self
 
         ok, data = _try_wrap(
             self.conn, self.conn_info, _parsed_imap,
@@ -333,13 +337,12 @@ class ImapConn:
         if ok:
             self.selected = self._gather_responses()
             self.selected['mailbox'] = mailbox
-            logging.debug('Selected: %s' % self.selected)
             return self
         raise KeyError('Failed to select %s' % mailbox)
 
     def uids(self, mailbox, skip=0):
         ok, data = _try_wrap(self.conn, self.conn_info,
-            _parsed_imap, self.select(mailbox).conn.search, None, 'ALL')
+            _parsed_imap, self.select(mailbox).conn.uid, 'SEARCH', None, 'ALL')
         if ok:
             return [int(i) for i in data]
         return []
@@ -350,9 +353,9 @@ class ImapConn:
         imap_headers = (
             'BODY.PEEK[HEADER.FIELDS %s]' % (Metadata.IMAP_HEADERS,))
         ok, data = _try_wrap(self.conn, self.conn_info,
-            self.select(mailbox).conn.fetch,
+            self.select(mailbox).conn.uid, 'FETCH',
                 (','.join('%d' % i for i in uids)),
-                '(RFC822.SIZE FLAGS %s)' % (imap_headers,))
+                '(RFC822.SIZE FLAGS UID %s)' % (imap_headers,))
         if not ok:
             return
         hkey = bytes(imap_headers.replace('.PEEK', ''), 'utf-8')
@@ -370,7 +373,7 @@ class ImapConn:
                 data = _imap_dict(data)
                 if 'FLAGS' in data and 'RFC822.SIZE' in data:
                     yield (
-                        int(uid),
+                        int(data['UID']),
                         int(data['RFC822.SIZE']),
                         data['FLAGS'],
                         data.get('RFC822.HEADER', b''))
@@ -381,7 +384,7 @@ class ImapConn:
 
     def fetch_messages(self, mailbox, uids):
         ok, data = _try_wrap(self.conn, self.conn_info,
-            self.select(mailbox).conn.fetch,
+            self.select(mailbox).conn.uid, 'FETCH',
                 (','.join('%d' % i for i in uids)),
                 '(BODY[])')
         if not ok:
