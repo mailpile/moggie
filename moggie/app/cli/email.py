@@ -31,6 +31,7 @@ import time
 
 from .command import Nonsense, CLICommand, AccessConfig
 from .openpgp import CommandOpenPGP
+from ...api.exceptions import *
 from ...api.requests import *
 from ...email.metadata import Metadata
 from ...email.addresses import AddressInfo
@@ -95,6 +96,7 @@ class CommandParse(CLICommand):
     ],[
         (None, None, 'features'),
         ('--with-metadata=',    ['N'], 'X=(Y|N*), include moggie metadata'),
+        ('--with-missing=',     ['Y'], 'X=(Y*|N), partial results when message is missing'),
         ('--with-headers=',     ['Y'], 'X=(Y*|N), include parsed message headers'),
         ('--with-path-info=',   ['Y'], 'X=(Y*|N), include path through network'),
         ('--with-structure=',   ['Y'], 'X=(Y*|N), include message structure'),
@@ -520,11 +522,6 @@ class CommandParse(CLICommand):
                 if hdr in p:
                     del p[hdr]
 
-            if settings.with_metadata:
-                result['metadata'] = result['metadata'].parsed()
-            else:
-                del result['metadata']
-
             if not settings.with_structure and '_PARTS' in p:
                 parts = p['_PARTS']
                 for i in reversed(range(0, len(parts))):
@@ -544,6 +541,10 @@ class CommandParse(CLICommand):
                                 pass
                             else:
                                 del parts[i][key]
+        if settings.with_metadata:
+            result['metadata'] = result['metadata'].parsed()
+        else:
+            del result['metadata']
 
         if 'data' in result:
             del result['data']
@@ -704,7 +705,8 @@ class CommandParse(CLICommand):
                     dict((k, md[k]) for k in md['_MORE'])))
 
         if 'error' in parsed:
-            report.append('Error loading message: %s' % parsed['error'])
+            report.append(
+                '## Errors\n\nError loading message: %s' % parsed['error'])
 
         elif 'parsed' in parsed:
             parsed = parsed['parsed']
@@ -1035,8 +1037,14 @@ system should have learned new things since then.
                             full_raw=True,
                             username=self.options['--username='][-1],
                             password=self.options['--password='][-1])
-                    msg = await self.worker.async_api_request(self.access, req)
                     md = Metadata(*metadata)
+                    try:
+                        msg = await self.worker.async_api_request(
+                            self.access, req)
+                    except APIException:
+                        if not self.settings.with_missing:
+                            raise
+                        msg = None
                     if msg and 'email' in msg:
                         yield {
                             'data': base64.b64decode(msg['email']['_RAW']),
