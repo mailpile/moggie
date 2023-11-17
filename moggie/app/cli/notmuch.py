@@ -152,6 +152,7 @@ FIXME: Document html and html formats!
         (None, None, 'search'),
         ('--context=',   ['default'], 'The context for scope and settings'),
         ('--q=',                  [], 'Search terms (used by web API)'),
+        ('--qr=',                 [], 'Refining terms (used by web API)'),
         ('--or',             [False], 'Use OR instead of AND with search terms'),
         ('--offset=',          ['0'], 'Skip the first X results'),
         ('--limit=',            [''], 'Output at most X results'),
@@ -185,10 +186,12 @@ FIXME: Document html and html formats!
     def configure(self, args):
         self.batch = 10000
 
-        # Allow both --q=.. and unmarked query terms. The --q=
-        # option is mostly for use with the web-CLI.
+        # Allow --q=.., --qr= and unmarked query terms.
+        # Both --q= and --qr= are mostly for use with the web-CLI, and
+        # are reported separately in the webui_state.
         terms = self.strip_options(args)
         terms.extend(self.options['--q='])
+        terms.extend(self.options['--qr='])
 
         self.mailboxes, terms = self.remove_mailbox_terms(terms)
         self.terms = self.combine_terms(terms)  # Respects --or
@@ -613,6 +616,8 @@ FIXME: Document html and html formats!
             self.print_json_list_start(nl='')
             if self.options['--json-ui-state']:
                 self.print_json(self.webui_state)
+                if result:
+                    self.print_json_list_comma()
         if result:
             self.print_json(result[1], nl='')
         if last:
@@ -859,7 +864,9 @@ FIXME: Document html and html formats!
         if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
 
-        self.webui_state['details'] = {}
+        self.webui_state['details'] = {
+            'q': self.options['--q='],
+            'qr': self.options['--qr=']}
         self.webui_state['preferences'] = self.preferences
 
         if 'results' in msg and not self.raw_results:
@@ -1381,9 +1388,36 @@ class CommandTag(CLICommand):
         moggie tag +family -- 'META={"name": "My Family"}'
         moggie tag +family +school -- 'META={"parent": "personal"}'
 
+    FIXME: DELETE THIS FEATURE, CREATE tag-meta COMMAND INSTEAD.
+
     ### Tagging options
 
     %(tagging)s
+
+    ### Tag naming conventions
+
+    Tag names are short strings of UTF-8 characters, which should adhere
+    to a few rules:
+
+       * They should use lower-case only
+       * White-space is not allowed
+       * The following ASCII characters are not allowed: `@`
+       * Tags generated for internal use by moggie will have the fixed
+         prefix `_mp_`.
+
+    In addition, user interfaces may make the following assumptions:
+
+       * Tags beginning or ending with an underscore `_` should not
+         be displayed to the user unless specifically requested.
+       * Elsewhere in a tag-name the `_` may optionally be rendered as
+         a blank space.
+       * Automatically capitalizing certain letters or even entire tag
+         names for aesthetic or usability reasons is allowed.
+
+    Tags do not need to be explicitly created before use; they are
+    created (or destroyed) on demand.
+
+    FIXME: Further clarify what we mean by lower-case in a i18n context.
 
     ### Tag history
 
@@ -1402,10 +1436,10 @@ class CommandTag(CLICommand):
     ### Tagging within a mailbox
 
     If the search includes one or more `mailbox:/` terms, then moggie's
-    limited ability to search directly within mailboxes (local or remote) will
-    be used instead of the default global search index. Matching messages will
-    be tagged as usual, with the additional side effect of adding previously
-    unseen messages to the global metadata index.
+    limited ability to search directly within mailboxes (local or remote)
+    will be used instead of the default global search index. Matching
+    messages will be tagged as usual, with the additional side effect of
+    adding previously unseen messages to the global metadata index.
 
     This can be used to selectively import only certain messages from a
     larger mailbox into moggie's index. Assigning the special `incoming` tag
@@ -1428,11 +1462,11 @@ class CommandTag(CLICommand):
 
     This means a batch like this:
 
-        +inbox +read -incoming -- in:incoming
-        +potato -- in:incoming
+        +inbox +read -potatoes -- in:potatoes
+        +veggies -- in:potatoes
 
-    ... will tag all the messages as 'in:potato', even though the first
-    line strips the 'in:incoming' tag and the second would be a no-op if
+    ... will tag all the messages as 'in:veggies', even though the first
+    line strips the 'in:potatoes' tag and the second would be a no-op if
     they were done one after another.
 
     Batches can have in-line trailing comments using a '#' sign, but it

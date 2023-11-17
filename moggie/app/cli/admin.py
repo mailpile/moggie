@@ -10,6 +10,7 @@ import sys
 import time
 import traceback
 
+from ...api.exceptions import *
 from ...api.requests import *
 from ...config import AppConfig, AccessConfig
 from ...util.dumbcode import to_json, from_json
@@ -779,6 +780,7 @@ class CommandImport(CLICommand):
     OPTIONS = [[
         (None, None, 'general'),
         ('--context=', ['default'], 'X=<ctx>, import into a specific context'),
+        ('--format=',     ['text'], 'X=(text*|json|sexp)'),
         ('--config-only',  [False], 'Update configuration only, reads no mail'),
         ('--import-only',  [False], 'One-off import, do not save configuration'),
         ('--only-inboxes',      [], ''),  # Only check mailboxes tagged with inbox
@@ -1023,7 +1025,7 @@ class CommandImport(CLICommand):
                 path=path,
                 **policy))
 
-        self.print('%s' % await self.worker.async_api_request(self.access,
+        return await self.worker.async_api_request(self.access,
             RequestPathPolicies(
                 context=ctx_id,
                 config_only=self.options['--config-only'][-1],
@@ -1031,23 +1033,41 @@ class CommandImport(CLICommand):
                 import_full=bool(self.options['--full-scan']),
                 only_inboxes=bool(self.options['--only-inboxes']),
                 compact=bool(self.options['--compact']),
-                policies=requests)))
+                policies=requests))
 
     async def run_import_only(self, context_id=None):
         context_id = context_id or self.get_context()
-        self.print('%s' % await self.worker.async_api_request(self.access,
-            RequestPathImport(
-                context=context_id,
-                import_full=bool(self.options['--full-scan']),
-                only_inboxes=bool(self.options['--only-inboxes']),
-                compact=bool(self.options['--compact']),
-                paths=self.paths)))
+        try:
+            return await self.repeatable_async_api_request(self.access,
+                RequestPathImport(
+                    context=context_id,
+                    import_full=bool(self.options['--full-scan']),
+                    only_inboxes=bool(self.options['--only-inboxes']),
+                    compact=bool(self.options['--compact']),
+                    paths=self.paths))
+        except NeedInfoException:
+            return {'error': 'login_incorrect'}
+        except Exception as exc:
+            return {'error': str(exc)}
+
+    def show_as_text(self, results):
+        self.print('%s' % results)
+
+    def show_results(self, results):
+        fmt = self.options['--format='][-1]
+        if fmt == 'json':
+            self.print_json(results)
+        elif fmt == 'sexp':
+            self.print_sexp(results)
+        else:
+            self.show_as_text(results)
+        return True
 
     async def run(self):
         if self.default_policy is None:
-            return await self.run_import_only()
+            return self.show_results(await self.run_import_only())
         else:
-            return await self.run_path_policies()
+            return self.show_results(await self.run_path_policies())
 
 
 class CommandNew(CommandImport):
@@ -1076,6 +1096,7 @@ class CommandNew(CommandImport):
     OPTIONS = [[
         (None, None, 'general'),
         ('--context=',         [], 'X=<ctx>, check only a specific context'),
+        ('--format=',    ['text'], 'X=(text*|json|sexp)'),
         ('--full-scan',        [], 'Ignore modification times, scan everything'),
         ('--only-inboxes',     [], 'Only check mailboxes tagged with inbox'),
         ('--compact',          [], 'Compact the search engine after importing'),
@@ -1087,13 +1108,30 @@ class CommandNew(CommandImport):
         self.default_policy = None
         return []
 
+    def show_as_text(self, results):
+        max_len = 10
+        for ctx, ctx_results in results.items():
+            for path in ctx_results:
+                if len(path) > max_len:
+                    max_len = min(len(path), 80 - 12 - 10)
+        for ctx, ctx_results in results.items():
+            for path, status in sorted(list(ctx_results.items())):
+                if status.get('unchanged'):
+                    status = 'Unchanged'
+                elif status.get('running'):
+                    status = 'Checking for mail'
+                self.print(
+                    ('%-12s %-'+str(max_len)+'s  %s') % (ctx, path, status))
+
     async def run(self):
         results = {}
         if not self.options['--context=']:
             self.options['--context='] = list(self.get_all_contexts().keys())
         for ctx in self.options['--context=']:
-            results[ctx] = await self.run_import_only(context_id=ctx)
-        return results
+            result = await self.run_import_only(context_id=ctx)
+            if result.get('context'):
+                results[result['context']] = result['results']
+        return self.show_results(results)
 
 
 class CommandBrowse(CLICommand):

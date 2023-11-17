@@ -3,7 +3,7 @@
 #  - Make explicit on the search engine side when wordblobs get updated,
 #    instead of implictly on del_results.
 #  - Add some flags/args for skipping filters etc. This will have to be
-#    implemented using/consulting tags in addition to in:incoming.
+#    implemented using/consulting tags in addition to in:_mp_incoming.
 #  - Make it possible to set a cap on memory usage; we get more efficient
 #    (faster) imports by batching lots of mail together, but there need to
 #    be limits here when running on smaller devices. It appears using a
@@ -47,8 +47,8 @@ class ImportWorker(BaseWorker):
     IDLE_T = 15
 
     def __init__(self, status_dir,
-            app_worker=None,
             fs_worker=None,
+            app_worker=None,
             search_worker=None,
             metadata_worker=None,
             notify=None,
@@ -87,24 +87,35 @@ class ImportWorker(BaseWorker):
         self.parser_settings.with_openpgp = False
         self.allow_network = True  # FIXME: Make configurable?
 
-        assert(self.app and self.search)
+        assert(self.fs and self.search)
 
     def run(self, *args, **kwargs):
-        if hasattr(self.fs, 'forked'):
-            self.fs.forked()
+        for thing in (self.fs, self.app, self.search, self.metadata):
+            if hasattr(thing, 'forked'):
+                thing.forked()
+
         return super().run(*args, **kwargs)
 
-    async def _async_get_email(self, metadata):
+    def get_app(self):
+        if self.app is None:
+            logging.debug('Connecting back to app worker')
+            from .app import AppWorker
+            self.app = AppWorker(self.status_dir).connect(autostart=False)
+        return self.app
+
+    async def _async_get_email(self, metadata, username=None, password=None):
         try:
             # FIXME: Passwords etc? Without them importing from IMAP or
             #        or encrypted local mail stores will fail.
+            email = None
             if metadata.pointers[0].is_local_file:
-                email = await self.fs.async_email(asyncio.get_event_loop(),
-                    metadata, full_raw=True)
-            else:
-                email = await self.app.async_api_request(True,
-                    RequestEmail(metadata=metadata, full_raw=True),
-                    ).get('email', {})
+                email = await self.fs.async_email(
+                    asyncio.get_event_loop(), metadata,
+                    full_raw=True)
+            if not email:
+                req = RequestEmail(metadata=metadata, full_raw=True)
+                email = await self.get_app().async_api_request(True, req)
+                email = email.get('email', {})
             if email:
                 return base64.b64decode(email.get('_RAW', b''))
         except Exception as e:
@@ -457,7 +468,7 @@ class ImportWorker(BaseWorker):
         The mail readers take a note of which "batch" is currently being
         processed by the loop, and use that as a marker to tell this
         loop when to mark a set of messages as fully processed (by
-        untagging in:incoming or in:incoming-old).
+        untagging in:_mp_incoming or in:_mp_incoming_old).
         """
         if delay:
             time.sleep(delay)
@@ -563,7 +574,7 @@ class ImportWorker(BaseWorker):
         return self.keywords
 
     def _index_full_messages2(self, email_idxs, tag_namespace, progress, old):
-        in_queue = 'in:incoming-old' if old else 'in:incoming'
+        in_queue = 'in:_mp_incoming_old' if old else 'in:_mp_incoming'
         incoming = self._fix_tags_and_scope(tag_namespace, [in_queue],
             _all=False)[0]
         if email_idxs:
@@ -602,11 +613,11 @@ class ImportWorker(BaseWorker):
             # Start processing keywords in parallel after 1s (or less).
             self._start_keyword_loop(after=min(1, len(all_metadata) / 100))
 
-            async def process_email(md):
+            async def process_email(md, added):
                 email = await self._async_get_email(md)
                 if not email:
                     logging.warning('[import] Failed to load %s' % (md,))
-                    return None, None
+                    return
 
                 # Parse the e-mail and extract keywords.
                 # This uses the same logic as `moggie parse`.
@@ -623,7 +634,7 @@ class ImportWorker(BaseWorker):
                         else:
                             self.keywords[kw] = [md.idx]
 
-                return email, kws
+                added.append(md.idx)
 
             async def await_completed(tasklist, max_left):
                 while len(tasklist) > max_left:
@@ -641,9 +652,9 @@ class ImportWorker(BaseWorker):
                 if md.more.get('missing'):
                     continue
 
-                task = loop.create_task(process_email(md))
+                task = loop.create_task(process_email(md, added))
                 tasks.append(task)
-                self._async_run(await_completed(tasks, 10))
+                self._async_run(await_completed(tasks, 25))
 
                 bc += 1
                 ec += 1
@@ -655,7 +666,6 @@ class ImportWorker(BaseWorker):
                         ntime = int(time.time())
                         self._notify_progress(progress)
 
-                added.append(md.idx)
                 self.imported += 1
                 if not self.keep_running:
                     return
@@ -711,10 +721,10 @@ class ImportWorker(BaseWorker):
                     self.search.compact(full=True)
             return _full_index
 
-        work_queue = 'in:incoming-old'
-        for magic in ('incoming', 'in:incoming', 'inbox', 'in:inbox'):
+        work_queue = 'in:_mp_incoming_old'
+        for magic in ('_mp_incoming', 'in:_mp_incoming', 'inbox', 'in:inbox'):
             if magic in initial_tags:
-                work_queue = 'in:incoming'
+                work_queue = 'in:_mp_incoming'
                 initial_tags.remove(magic)
 
         tags = self._fix_tags_and_scope(tag_namespace, [work_queue] + initial_tags)
@@ -726,7 +736,7 @@ class ImportWorker(BaseWorker):
             #    (The app is responsible for selecting the right backend
             #    mail source to process the request, we don't need to know
             #    where things are coming from)
-            response = self.app.api_request(True, request_obj.update({
+            response = self.get_app().api_request(True, request_obj.update({
                 'skip': email_c,
                 'limit': self.BATCH_SIZE}))
             emails = response['emails'] or []
@@ -735,7 +745,7 @@ class ImportWorker(BaseWorker):
             done = (len(emails) < self.BATCH_SIZE)
 
             # 2. Add messages to metadata index, forward any new ones to the
-            #    search engine for initial tagging (in:incoming, namespaces).
+            #    search engine for initial tagging (in:_mp_incoming, namespaces).
             idx_ids = self.metadata.add_metadata(emails, update=True)
             new_msgs = idx_ids['added']
             progress['emails_new'] += len(new_msgs)

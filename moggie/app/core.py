@@ -18,7 +18,7 @@ from ..api.requests import *
 from ..api.responses import *
 from ..api.exceptions import *
 from ..util.asyncio import async_run_in_thread
-from ..util.dumbcode import dumb_decode, dumb_encode_bin, to_json, from_json
+from ..util.dumbcode import *
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorkers
@@ -29,6 +29,18 @@ from .cron import Cron
 
 def _b(p):
     return bytes(p, 'utf-8') if isinstance(p, str) else p
+
+def _u(p):
+    try:
+        return str(p, 'utf-8') if isinstance(p, bytes) else p
+    except UnicodeDecodeError:
+        return p
+
+def safe_str(p):
+    try:
+        return str(p, 'utf-8') if isinstance(p, bytes) else p
+    except UnicodeDecodeError:
+        return dumb_encode_asc(p)
 
 
 class AppCore:
@@ -73,7 +85,7 @@ main app worker. Hints:
 #
 # FIXME: This would be a good way to un-snooze snoozed mail...
 #
-#*    * * * *  moggie tag +inbox -zzz-%(yyyy_mm_dd)s -- in:zzz-%(yyyy_mm_dd)s
+#*    * * * *  moggie tag +inbox -_mp_z%(yyyy_mm_dd)s -- in:_mp_z%(yyyy_mm_dd)s
 """
 
     def __init__(self, app_worker):
@@ -361,9 +373,18 @@ main app worker. Hints:
             logging.info('Saved credentials in %s for %s' % (ctx, res))
 
     def _get_saved_credentials(self, api_req, resource):
+        resource = _u(resource)
         ctx = api_req.get('context') or self.config.CONTEXT_ZERO
         context = self.config.get_context(ctx)
-        return context.get_secret(resource)
+        sep = '/' if resource.startswith('imap:') else os.path.sep
+        parts = resource.split(sep)
+        while parts:
+            creds = context.get_secret(sep.join(parts))
+            if creds:
+                return creds
+            else:
+                parts.pop(-1)
+        return None
 
     # Public API
 
@@ -568,6 +589,8 @@ main app worker. Hints:
                 path = suggest['path']
                 if path.startswith('imap:'):
                     info = {'path': path}
+                    if len(path.split('/')) > 3:
+                        info['magic'] = ['imap']
                 else:
                     info = await self.storage.async_info(loop,
                         path, details=True, recurse=0, relpath=False,
@@ -920,19 +943,27 @@ main app worker. Hints:
         else:
             logging.debug('[api/import] Requested paths: %s' % paths)
 
+        req_creds = dict((k, api_request[k])
+            for k in ('username', 'password') if k in api_request)
+        if req_creds:
+            credmap = dict((_b(p), req_creds) for p in paths)
+        else:
+            credmap = dict(
+                (_b(p), self._get_saved_credentials(api_request, p) or {})
+                for p in paths)
+
+        results = {}
         to_import = {}
         recursed = set()
         while paths:
             path = _b(paths.pop(0))
+            creds = credmap[path]
             try:
                 policy = context.get_path_policies(path, slim=False)[path]
 
                 rec = 1 if policy['watch_policy'] in ('watch', 'sync') else 0
                 result = await self.storage.async_info(loop,
-                    dumb_encode_bin(path),
-                    details=True, recurse=rec, relpath=False,
-                    username=api_request.get('username'),
-                    password=api_request.get('password'))
+                    path, details=True, recurse=rec, relpath=False, **creds)
                 if not result:
                     logging.debug(
                         '[api/import] Failed to get info for %s' % path)
@@ -945,7 +976,7 @@ main app worker. Hints:
                 for r in [result] + contents:
                     rpath = _b(r['path'])
                     if (r is not result) and r.get('is_dir'):
-                        if rpath not in paths:
+                        if (rpath not in paths) and (rpath != path):
                             paths.append(rpath)
                     if r.get('magic'):
                         ppol = context.get_path_policies(rpath).get(rpath, {})
@@ -959,11 +990,12 @@ main app worker. Hints:
                             if int(ppol['updated'], 16) >= r['mtime']:
                                 logging.debug(
                                     '[api/import] Unchanged: %s' % (r['path'],))
+                                results[safe_str(rpath)] = {'unchanged': True}
                                 continue
-                        logging.debug(
-                            '[api/import] Should import: %s with %s'
-                            % (r['path'], ppol))
                         to_import[rpath] = ppol
+                        credmap[rpath] = creds
+            except NeedInfoException:
+                raise
             except:
                 logging.exception('[api/import] Failed to check path %s' % path)
 
@@ -974,23 +1006,22 @@ main app worker. Hints:
                     context=ctx,
                     mailbox=path,
                     limit=None,
-                    username=req.get('username'),
-                    password=req.get('password')),
+                    **credmap[path]),
                 policy_tags,
                 tag_namespace=context.tag_namespace,
                 compact=compact_now,
                 full=True)
 
-        results = []
         plan = sorted(list(to_import.items()))
         for i, (path, ppol) in enumerate(plan):
+            logging.debug('[api/import] Importing: %s with %s' % (path, ppol))
             update_time = int(time.time())
-            result[path] = await async_run_in_thread(
+            results[safe_str(path)] = await async_run_in_thread(
                 _import_path, context, api_request, path, ppol,
                 compact and (i+1 == len(plan)))
             context.set_path_updated(path, '%x' % update_time)
 
-        return ResponsePing(api_request)  # FIXME
+        return ResponsePathImport(api_request, ctx, results)
 
     async def api_req_cli(self, conn_id, access, api_req):
         args = copy.copy(api_req['args'])
@@ -1068,6 +1099,8 @@ main app worker. Hints:
     async def _route_api_request(self, conn_id, access, api_req):
         # FIXME: This needs refactoring
         result = None
+        if access is True:
+            access = self.config.access_zero()
         if type(api_req) == RequestCommand:
             result = await self.api_req_cli(conn_id, access, api_req)
         elif type(api_req) == RequestCounts:

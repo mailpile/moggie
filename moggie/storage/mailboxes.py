@@ -6,6 +6,13 @@ from ..util.mailpile import PleaseUnlockError
 from ..util.dumbcode import *
 
 
+def _u(txt):
+    try:
+        return txt if isinstance(txt, str) else str(txt, 'utf-8')
+    except UnicodeDecodeError:
+        return ('%s' % txt)
+
+
 class MailboxStorageMixin:
     """
     This mixin relies on the parent class implementing:
@@ -122,7 +129,7 @@ class MailboxStorageMixin:
                 except (KeyError, OSError) as e:
                     logging.info('Loading e-mail failed: %s' % e)
 
-        raise KeyError('Not found: %s' % dumb_decode(ptr.ptr_path))
+        raise KeyError('Not found: %s' % _u(dumb_decode(ptr.ptr_path)))
 
     def parse_message(self, metadata, **kwargs):
         msg = self.message(metadata, **kwargs)

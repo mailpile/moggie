@@ -396,6 +396,7 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
             'log_level': kwargs.get('log_level', logging.ERROR)}
         self.fs_worker_spec = ('read', StorageWorker, fs_args, fs_kwa)
 
+        self.name = 'storage-worker-pool'
         self.imap = ImapStorage(
             ask_secret=kwargs.get('ask_secret'),
             set_secret=kwargs.get('set_secret'),
@@ -431,6 +432,8 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
         if fn in ('set', 'append', 'delete'):
             caps = 'write'
         if args and isinstance(args[0], str) and args[0].startswith('imap:'):
+            caps = 'imap'
+        if args and isinstance(args[0], bytes) and args[0].startswith(b'imap:'):
             caps = 'imap'
         if fn == 'email' and isinstance(args[0], list):
             md = Metadata(*(args[0][:Metadata.OFS_HEADERS] + [b'']))

@@ -186,6 +186,41 @@ blown mail client.</p>
     """}
 
 
+def describe_selection(source=None, message_count=None, email=None):
+    """
+    Describe a selection of messages.
+    """
+    if message_count == 0:
+        return 'No messages'
+
+    if (message_count in (1, None)) and email:
+        subject = (
+            email.get('metadata', {}).get('subject') or
+            email.get('parsed', {}).get('subject'))
+        from_ = (
+            email.get('metadata', {}).get('from') or
+            email.get('parsed', {}).get('from', {}))
+        from_ = from_.get('fn') or from_.get('address')
+
+        if subject and (len(subject) > 30):
+            subject = subject[:27] + '...'
+
+        if subject:
+            return '"%s"' % subject
+        elif from_:
+            return 'e-mail from %s' % from_
+
+    if message_count and source in (None, 'all:mail'):
+        return '%d e-mails' % (message_count)
+
+    elif source:
+        return '%s e-mails in (%s)' % (
+            'all' if message_count is None else message_count,
+            source)
+
+    raise ValueError('Need source, message_count or email')
+
+
 class CommandHelp(CLICommand):
     """# moggie help [command]
 

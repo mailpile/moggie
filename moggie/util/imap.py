@@ -387,8 +387,8 @@ class ImapConn:
             self.select(mailbox).conn.uid, 'FETCH',
                 (','.join('%d' % i for i in uids)),
                 '(BODY[])')
-        if not ok:
-            return
+        if (not ok) or (not data) or (data[0] is None):
+            raise KeyError('Not found: %s' % uids)
         for lines in data:
             if lines and lines[0] == 41:  # This is an imaplib bug
                 continue

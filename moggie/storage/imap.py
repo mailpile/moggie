@@ -178,9 +178,10 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
                 return data
         except PleaseUnlockError:
             raise
-        except (KeyError, IOError):
-            logging.exception('Getitem is failing')
+        except KeyError:
             pass
+        except IOError as e:
+            logging.exception('Getitem is failing: %s' % e)
         raise KeyError(key)
 
     def info(self,

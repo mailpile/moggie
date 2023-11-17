@@ -348,6 +348,7 @@ class ContextConfig(ConfigSectionProxy):
         #ui_tags: [...],          # List of tags shown in the user interface
         # Optional...
         'default_identity': str,  # Default identity when composing mail
+        'default_ui_tags': bool,  # Show default app tags in UI?
         'scope_search': str,      # Access: Additional search scoping terms
         'tag_namespace': str,     # Access: Tag namespace for this context
         'remote_context_url': str,
@@ -464,6 +465,7 @@ class ContextConfig(ConfigSectionProxy):
                  (i, IdentityConfig(self.config, i).as_dict())
                  for i in self.identities if i),
             'tags': list(tags),
+            'default_ui_tags': self.default_ui_tags,
             'ui_tags': list(utags),
             'key': self.config_key}
 
@@ -823,7 +825,7 @@ class AppConfig(ConfigParser):
         with self:
             czero = self.CONTEXT_ZERO
             if czero not in self:
-                self[czero].update({'name': 'My Mail'})
+                self[czero].update({'name': 'My Mail', 'default_ui_tags': True})
             self.do_not_save()
             return ContextConfig(self, czero)
 

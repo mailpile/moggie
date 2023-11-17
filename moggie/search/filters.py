@@ -49,7 +49,7 @@ if 'status:o' in keywords:
 
 
 # Auto-tag priority messages; this does not remove from the inbox
-run_autotaggers('priority', add_tags=['autotagged'])
+run_autotaggers('priority', add_tags=['_mp_autotagged'])
 
 # Ignore auto-taggers we want to run by hand?
 #ignore_autotaggers('manual')
@@ -57,7 +57,7 @@ run_autotaggers('priority', add_tags=['autotagged'])
 # Run the rest of the autotaggers, removing from the inbox any matches,
 # unless they are tagged as priority, in which case they stay in the
 # inbox.
-if run_autotaggers(add_tags='autotagged'):
+if run_autotaggers(add_tags='_mp_autotagged'):
     if 'in:priority' not in keywords:
         remove_tags('inbox')
 """

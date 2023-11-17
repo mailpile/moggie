@@ -283,8 +283,9 @@ class AppWorker(PublicWorker):
 
     def connect(self, *args, **kwargs):
         conn = super().connect(*args, **kwargs)
-        self.auth_token = (self.url_parts[-1] or '/bogus')[1:]
-        self.set_rpc_authorization('Bearer %s' % self.auth_token)
+        if self.url_parts:
+            self.auth_token = (self.url_parts[-1] or '/bogus')[1:]
+            self.set_rpc_authorization('Bearer %s' % self.auth_token)
         return conn
 
     async def async_api_request(self, access, request_obj):

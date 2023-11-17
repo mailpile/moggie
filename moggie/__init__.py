@@ -606,6 +606,7 @@ class MoggieContext:
     key = property(lambda s: s._info['key'])
     name = property(lambda s: s._info['name'])
     tags = property(lambda s: s._info['tags'])
+    default_ui_tags = property(lambda s: s._info.get('default_ui_tags', False))
     ui_tags = property(lambda s: s._info['ui_tags'])
     accounts = property(lambda s: s._info['accounts'])
     identities = property(lambda s: s._info['identities'])

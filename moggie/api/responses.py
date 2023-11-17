@@ -141,6 +141,15 @@ class ResponseContexts(dict):
             'contexts': contexts})
 
 
+class ResponsePathImport(dict):
+    def __init__(self, request, ctx_id, results):
+        self.update({
+            'req_type': request['req_type'],
+            'req_id': request['req_id'],
+            'context': ctx_id,
+            'results': results})
+
+
 class ResponseCommand(dict):
     def __init__(self, request, mimetype, data):
         self.update({

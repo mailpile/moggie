@@ -21,6 +21,13 @@ from ..util.dumbcode import to_json
 from .base import BaseWorker
 
 
+# Logging monkey-patch
+import upagekite
+import upagekite.proto
+upagekite.proto.print_exc = lambda e: logging.exception('Error: %s' % e)
+upagekite.print_exc = upagekite.proto.print_exc
+
+
 class WorkerPageKiteSettings(uPageKiteDefaults):
     APPNAME = MAIN_APPNAME
     APPURL = MAIN_APPURL
@@ -106,7 +113,7 @@ class MoggiePageKiteManager(uPageKite):
         super().__init__(*args, **kwargs)
         self.app_worker = app_worker
 
-    def get_conn_pool(self, conns):
+    def unused_get_conn_pool(self, conns):
         return MoggieConnPool(conns, self)
 
     async def tick(self, **attrs):

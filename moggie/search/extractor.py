@@ -145,7 +145,7 @@ class KeywordExtractor:
                     keywords |= self.words(text, url_domains=ud)
                     text_chars += len(text)
                     url_count += len(ud)
-            elif 'attachment' in cdisp:
+            elif 'attachment' in cdisp or 'filename' in cdisp[1]:
                 keywords.add('has:attachment')
                 fn = ctype[1].get('name') or cdisp[1].get('filename') or ''
                 ext = fn.rsplit('.', 1)[-1]

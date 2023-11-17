@@ -893,7 +893,7 @@ class SearchEngine:
             # Certain search results are excluded by default, unless they
             # were specifically requested in the query itself.
             masking = [tag for tag in mask_tags if tag not in terms]
-            if masking:
+            if masking and len(masking) == len(mask_tags):
                 ops = tuple([IntSet.Sub, ops] + masking)
         with self.lock:
             rv = self._search(ops, tag_namespace)

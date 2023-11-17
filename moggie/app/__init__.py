@@ -39,13 +39,15 @@ def CommandStop(moggie, args, exit=True):
         if result and result.get('quitting'):
             moggie._tell_user('Shutting down %s.' % worker.KIND)
             return True
+        else:
+            return False
     moggie._tell_user('Not running? (%s)' % worker.KIND)
-    return False
+    return True
 
 
 def CommandRestart(moggie, args):
     try:
-        if not CommandStop(moggie, args, exit=False):
+        if not CommandStop(moggie, []):
             return False
         time.sleep(1)
     except:
@@ -146,6 +148,8 @@ def CommandMuttalike(moggie, args):
 
 def Main(args):
     from moggie import MoggieCLI, set_shared_moggie
+    from .cli.exceptions import NotRunning
+
     moggie = MoggieCLI(name='cli')
     moggie.enable_default_logging()
     set_shared_moggie(moggie)
@@ -162,6 +166,9 @@ def Main(args):
                 os._exit(0)
             else:
                 sys.exit(0)
+
+    except NotRunning as e:
+        moggie._tell_user('Error: %s' % e)
 
     except Nonsense as e:
         moggie._tell_user('Error: %s' % e)

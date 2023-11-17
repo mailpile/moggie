@@ -109,6 +109,7 @@ class BaseWorker(Process):
             self.SHUTDOWN_IDLE if (shutdown_idle is None) else shutdown_idle)
 
         self.log_level = log_level
+        self.status_dir = status_dir
         self._notify = notify
         self._secret = base64.b64encode(os.urandom(18), b'-_').strip()
         self._auth_header = ''
