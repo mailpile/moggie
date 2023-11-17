@@ -313,7 +313,7 @@ class BrowserListWalker(urwid.ListWalker):
     def set_account(self, pos, path_info):
         if 'policy.org' not in path_info:
             path_info['policy.org'] = copy.deepcopy(path_info['policy'])
-        def chose_account(context, account):
+        def chose_account(context, account, pressed=None):
             path_info['policy']['account'] = account
             self.parent.modified.add(path_info['path'])
             self.parent.update_content()
@@ -329,7 +329,7 @@ class BrowserListWalker(urwid.ListWalker):
     def set_tag(self, pos, path_info):
         if 'policy.org' not in path_info:
             path_info['policy.org'] = copy.deepcopy(path_info['policy'])
-        def chose_tag(context, tag):
+        def chose_tag(context, tag, pressed=None):
             path_info['policy']['tags'] = tag
             self.parent.modified.add(path_info['path'])
             self.parent.update_content()
@@ -421,7 +421,7 @@ class Browser(urwid.Pile):
 
     def keypress(self, size, key):
         if key == 'B':
-            self.tui.show_modal(BrowsePathDialog)
+            self.tui.show_modal(BrowsePathDialog, self.mog_ctx)
             return None
         return super().keypress(size, key)
 

@@ -49,7 +49,7 @@ class MessageDialog(urwid.WidgetWrap):
         button_bar.set_focus(1)
 
         widgets = [urwid.Columns([
-            ('weight', 1, urwid.Text(('status', message), 'center')),
+            ('weight', 1, urwid.Text(('status', '  %s  ' % message), 'center')),
             ('fixed',  3, self.close_button)])]
         widgets.extend(self.widgets)
         if self.message:

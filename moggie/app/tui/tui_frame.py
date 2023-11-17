@@ -21,9 +21,11 @@ from .browser import Browser
 from .changepassdialog import ChangePassDialog
 from .contextlist import ContextList
 from .emaillist import EmailList
+from .godialog import GoDialog
 from .retrydialog import RetryDialog
 from .searchdialog import SearchDialog
 from .suggestionbox import SuggestionBox
+from .undodialog import UndoDialog
 from .unlockdialog import UnlockDialog
 from .widgets import *
 
@@ -56,6 +58,7 @@ class TuiFrame(urwid.Frame):
         self.hidden = 0
         self.crumbs = []
         self.secrets = {}
+        self.undoable = []
         self.notifications = []
         self.columns = urwid.Columns([self.filler1], dividechars=1)
         self.context_list = ContextList(self,
@@ -211,6 +214,11 @@ class TuiFrame(urwid.Frame):
                 lambda: self.show_search_result(mog_ctx, terms, True),
                 icon=EMOJI.get('search', '-'))
 
+    def refresh_all(self):
+        for widget in self.all_columns:
+            if hasattr(widget, 'refresh'):
+                widget.refresh()
+
     def ui_quit(self):
         raise urwid.ExitMainLoop()
 
@@ -338,7 +346,8 @@ class TuiFrame(urwid.Frame):
                 ('fixed', 23+6*len(global_hks), urwid.Text(
                     global_hks + search + unlock + [
 #FIXME:                 ('top_hk', '?:'), 'Help ',
-                        ('top_hk', 'q:'), 'Exit'+pad],
+                        ('top_hk', 'g:'), 'Go ',
+                        ('top_hk', 'Q:'), 'Quit'+pad],
                     align='right', wrap='clip'))])
 
         mv = '%s%s v%s ' % (pad, APPNAME, APPVER)
@@ -429,7 +438,7 @@ class TuiFrame(urwid.Frame):
             try:
                 if focus_path:
                     self.set_focus_path(focus_path)
-            except IndexError:
+            except (IndexError, AttributeError):
                 pass
 
     def keypress(self, size, key):
@@ -471,23 +480,33 @@ class TuiFrame(urwid.Frame):
                     self.show_modal(UnlockDialog)
                 else:
                     self.show_modal(SearchDialog)
+                return None
+
+            elif key == 'g':
+                self.show_modal(GoDialog)
+
+            elif key == 'z':
+                if self.undoable:
+                    self.show_modal(UndoDialog)
 
             # FIXME: This definitely belongs elsewhere!
             elif key == 'C':
                 self.ui_change_passphrase()
+                return None
 
             # hjkl navigation
             elif key == 'h':
                 if len(self.all_columns) > 1 and self.hidden:
                     self.col_remove(self.all_columns[-1])
+                    return None
                 else:
-                    self.columns.keypress(cols_rows, 'left')
+                    return self.keypress(cols_rows, 'left')
             elif key == 'j':
-                self.columns.keypress(cols_rows, 'down')
+                return self.keypress(cols_rows, 'down')
             elif key == 'k':
-                self.columns.keypress(cols_rows, 'up')
+                return self.keypress(cols_rows, 'up')
             elif key == 'l':
-                self.columns.keypress(cols_rows, 'right')
+                return self.keypress(cols_rows, 'right')
 
             else:
                 for col in self.all_columns:

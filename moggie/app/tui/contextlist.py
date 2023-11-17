@@ -129,7 +129,9 @@ class ContextList(urwid.ListBox):
                 continue
             args = ['--multi']
             all_tags = mog_ctx.tags + mog_ctx.ui_tags
-            all_tags.extend(t for t,i in self.TAG_ITEMS if t not in all_tags)
+            if mog_ctx.default_ui_tags:
+                all_tags.extend(
+                    t for t,i in self.TAG_ITEMS if t not in all_tags)
             if all_tags:
                 for tag in set(all_tags):
                     tag = tag.lower()
@@ -278,8 +280,8 @@ class ContextList(urwid.ListBox):
 
                 shown = []
                 all_tags = mog_ctx.tags + mog_ctx.ui_tags
+                all_lc_tags = [t.lower() for t in all_tags]
                 for tag, items in self.TAG_ITEMS:
-                    all_lc_tags = [t.lower() for t in all_tags]
                     if tag in all_lc_tags or not all_lc_tags:
                         tc = self.tag_counts[ctx_src_id].get(tag.lower()+'*', 0)
                         for ti, (sc, name, search) in enumerate(items):
@@ -303,7 +305,8 @@ class ContextList(urwid.ListBox):
                 count = 1
                 unshown = [t for t in all_tags if t.lower() not in shown]
                 if unshown:
-                    widgets.append(urwid.Divider())
+                    if shown:
+                        widgets.append(urwid.Divider())
                     for ai, tag in enumerate(unshown):
                         action = _sel_search('in:%s' % tag, ctx_src_id)
                         sc = '   '

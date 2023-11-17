@@ -8,13 +8,15 @@ from .messagedialog import MessageDialog
 
 class MultiChoiceDialog(MessageDialog):
     WANTED_HEIGHT = 4
-    WANTED_WIDTH = 60
+    WANTED_WIDTH = 70
+
+    DEFAULT_OK = 'OK'
 
     signals = ['close']
 
     def __init__(self, tui, choices,
             title=None, multi=False, action=None, default=None,
-            prompt='Value', create=False, allow_none=False):
+            prompt='Value', create=False, ok_labels=None, allow_none=False):
         self.title = title
         self.multi = multi
         self.default = default
@@ -23,7 +25,8 @@ class MultiChoiceDialog(MessageDialog):
         self.checkboxes = {}
         self.prompt = prompt
         self.create = create
-        self.action = action or self.action
+        self.ok_labels = ok_labels or [self.DEFAULT_OK]
+        self.action = action
         self.allow_none = 'None' if (allow_none is True) else allow_none
         super().__init__(tui, title=title)
 
@@ -33,8 +36,15 @@ class MultiChoiceDialog(MessageDialog):
     def make_buttons(self):
         style = {'style': 'popsubtle'}
         buttons = [
-            CancelButton(lambda x: self._emit('close'), **style),
-            SimpleButton('OK', lambda x: self.ok(), **style)]
+            CancelButton(lambda x: self._emit('close'), **style)]
+        if (self.create or
+                self.multi or
+                self.allow_none or
+                (len(self.ok_labels) > 1)):
+            for ok in reversed(self.ok_labels):
+                def mk_cb(which):
+                    return lambda x: self.ok(which)
+                buttons.append(SimpleButton(ok, mk_cb(ok), **style))
         if self.allow_none:
             buttons[1:1] = [
                 SimpleButton(self.allow_none, lambda x: self.none(), **style)]
@@ -51,6 +61,7 @@ class MultiChoiceDialog(MessageDialog):
         madd = 4 if self.multi else 0
         for choice in self.choices:
             width = max(width, len(choice) + madd)
+        width = min(width, self.WANTED_WIDTH - 4)
         columns = max(1, (self.WANTED_WIDTH - 4) // width)
         rows = len(self.choices) // columns
         if rows * columns < len(self.choices):
@@ -81,7 +92,8 @@ class MultiChoiceDialog(MessageDialog):
                     return cb
                 else:
                     return Selectable(
-                        urwid.Text(('popsubtle', choice), align='left'),
+                        urwid.Text(('popsubtle', choice),
+                            align='left', wrap='clip'),
                         on_select={'enter': _sc(choice)})
 
             widgets.extend([
@@ -101,12 +113,18 @@ class MultiChoiceDialog(MessageDialog):
 
         return widgets
 
+    def normalize(self, value):
+        return value.strip().lower()
+
     def set_choice(self, tag):
-        self.input.edit_text = tag.lower()
-        self.focus_last()
+        self.input.edit_text = self.normalize(tag)
+        if not self.create and (len(self.ok_labels) == 1):
+            self.ok(self.ok_labels[0])
+        else:
+            self.focus_last()
 
     def validate(self, focus_next=False):
-        choice = self.input.edit_text.strip().lower()
+        choice = self.normalize(self.input.edit_text)
         choices = [choice] if choice else []
 
         for choice, checkbox in self.checkboxes.items():
@@ -124,10 +142,10 @@ class MultiChoiceDialog(MessageDialog):
 
     def none(self):
         self._emit('close')
-        self.action(None)
+        self.action(None, pressed=self.allow_none)
 
-    def ok(self):
+    def ok(self, ok):
         choice = self.validate()
         if choice or (choice is not False and self.allow_none):
             self._emit('close')
-            self.action(choice or None)
+            self.action(choice or None, pressed=ok)

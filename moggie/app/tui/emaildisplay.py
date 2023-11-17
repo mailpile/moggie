@@ -44,6 +44,17 @@ because other e-mails referenced it.
 However, Moggie has yet to receive a copy.
 """
 
+    MESSAGE_GONE = """\
+Message unavailable
+
+This may be a temporary network problem, or the
+message may have been moved or deleted.
+
+Technical details:
+%s
+"""
+
+
     def __init__(self, mog_ctx, tui, metadata,
             username=None, password=None, selected=False, parsed=None):
         self.name = 'emaildisplay-%.4f' % time.time()
@@ -194,10 +205,8 @@ However, Moggie has yet to receive a copy.
                 # Get crypto summary, if we have one
                 cstate = self.describe_crypto_state(part, short=True)
 
-                filename = None
                 disp = part.get('content-disposition', ['', {}])
-                if disp[0] == 'attachment':
-                    filename = ctype[1].get('name') or disp[1].get('filename')
+                filename = ctype[1].get('name') or disp[1].get('filename')
                 if filename:
                     yield line('att', att_label, filename, cstate,
                         action=_on_attachment(part, filename))
@@ -230,6 +239,7 @@ However, Moggie has yet to receive a copy.
             args = [
                 '--allow-network',
                 '--with-everything=Y',
+                '--with-missing=Y',
                 '--format=text']
 
         else:
@@ -238,6 +248,7 @@ However, Moggie has yet to receive a copy.
                 # Reset to the bare minimum, we can as for more if the user
                 # wants it (and as the app evolves).
                 '--with-nothing=Y',
+                '--with-missing=N',
                 '--with-headers=Y',
                 '--with-structure=Y',
                 '--with-text=Y',
@@ -252,7 +263,17 @@ However, Moggie has yet to receive a copy.
             args.append('--username=%s' % self.username)
         if self.password:
             args.append('--password=%s' % self.password)
-        args.append(to_json(self.metadata))
+
+        # This should be using the same logic as the emaillist tag search
+        # term generation
+        if self.metadata.get('idx'):
+            # FIXME: Sends gigantic ints if we view a mailbox, WRONG.
+            args.append('id:%d' % self.metadata['idx'])
+        else:
+            # FIXME: Sending the full metadata is silly. Also this is the
+            #        parsed metadata, now the raw stuff.
+            args.append(to_json(self.metadata))
+
         cache_id = sha1b64('%s' % args)
         return cache_id, command, args
 
@@ -265,7 +286,9 @@ However, Moggie has yet to receive a copy.
             if self.metadata.get('missing'):
                 self.email_display = [self.no_body(self.MESSAGE_MISSING)]
                 self.update_content()
-            command(*args, on_success=self.incoming_parse)
+            command(*args,
+                on_success=self.incoming_parse,
+                on_error=self.incoming_failed)
 
     def empty_body(self):
         if self.metadata.get('missing'):
@@ -294,6 +317,16 @@ However, Moggie has yet to receive a copy.
         if idx and (idx < 100000000):
             if 'in:read' not in self.metadata.get('tags', []):
                 self.mog_ctx.tag('+read', '--', 'id:%s' % idx)
+
+    def incoming_failed(self, mog_ctx, details):
+        logging.info('Load e-mail failed: %s' % (
+            details.get('error') or details.get('exc_args') or 'unknown error',))
+        if self.metadata.get('missing'):
+            self.email_display = [self.no_body(self.MESSAGE_MISSING)]
+        else:
+            error = details.get('error') or '(unknown error)'
+            self.email_display = [self.no_body(self.MESSAGE_GONE % error)]
+        self.update_content()
 
     def incoming_parse(self, mog_ctx, message, cached=False):
         if message:
@@ -334,6 +367,9 @@ However, Moggie has yet to receive a copy.
                 no_images=True,
                 wrap=min(self.COLUMN_WANTS, self.rendered_width-1))
 
+        def _on_att(att, filename):
+            return lambda e: self.on_attachment(att, filename)
+
         email_txts = {'text/plain': [], 'text/html': []}
         email_lens = {'text/plain': 0, 'text/html': 0}
         have_cstate = False
@@ -341,12 +377,25 @@ However, Moggie has yet to receive a copy.
                 ('text/plain', lambda t: t),
                 ('text/html',  _to_md)):
             for part in MessagePart.iter_parts(self.email):
+                try:
+                    filename = (
+                        part['content-type'][1].get('name') or
+                        part['content-disposition'][1].get('filename'))
+                except (KeyError, IndexError):
+                    filename = None
                 if part['content-type'][0] == ctype:
                     text = fmt(part.get('_TEXT', ''))
                     cstate = self.describe_crypto_state(part).strip()
                     have_cstate = have_cstate or cstate
-                    email_txts[ctype].append((cstate, text))
+                    email_txts[ctype].append((cstate, text, None))
                     email_lens[ctype] += len(text)
+                elif filename:
+                    cstate = self.describe_crypto_state(part).strip()
+                    email_txts[ctype].append((
+                        cstate,
+                        '%s %s' % (
+                            EMOJI.get('attachment', '- Attachment:'), filename),
+                        _on_att(part, filename)))
 
         # This is a heuristic to avoid the case where silly people
         # send a plain-text part that says "there is no text part".
@@ -358,7 +407,7 @@ However, Moggie has yet to receive a copy.
         dl = EMOJI.get('downleft', '') + ' '
         widgets = []
         last_cstate = ''
-        for cstate, text in email_text:
+        for cstate, text, callback in email_text:
             text = re.sub(
                 r'\n\s*\n', '\n\n', text.replace('\r', ''), flags=re.DOTALL
                 ).strip()
@@ -371,8 +420,13 @@ However, Moggie has yet to receive a copy.
                         ('email_cstate', dl + label + '   '), align='right'))
                     last_cstate = cstate
                 bg = '' if (cstate or not have_cstate) else '_bg'
-                widgets.append(urwid.Text(
-                    ('email_body' + bg, text + '\n\n')))
+                if callback:
+                    widgets.append(Selectable(urwid.Text(
+                            ('email_body' + bg, ' ' + text.strip())),
+                        on_select={'enter': callback}))
+                else:
+                    widgets.append(urwid.Text(
+                        ('email_body' + bg, text + '\n\n')))
 
         if widgets:
             return widgets
@@ -386,7 +440,6 @@ However, Moggie has yet to receive a copy.
             rows)
 
     def on_attachment(self, att, filename):
-        logging.debug('FIXME: User selected part %s' % att)
         self.tui.topbar.open_with(SaveOrOpenDialog,
             'Save or Open Attachment', self, att, filename)
 

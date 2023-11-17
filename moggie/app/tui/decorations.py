@@ -1,6 +1,13 @@
 from ...config import APPNAME, APPVER
 
 EMOJI = {
+    'unread':         '*',           # Star!
+    'in:inbox':       'I',           #
+    'in:drafts':      'D',           #
+    'in:junk':        'J',           #
+    'in:trash':       'T',           #
+    'in:outgoing':    'O',           #
+    'in:sent':        '✓',           # Checkmark
     'selected':       '✓',           # Checkmark
     'hint':           '\U0001F4A1',  # Lightbulb
     'browsing':       '\U0001F4BB',  # Laptop
@@ -73,6 +80,7 @@ DEFAULT_PALETTE = [
             ('crumbs',         'white',       'dark blue', ''),
             ('popbg',          'white',       'dark blue', ''),
             ('popsubtle',      'light gray',  'dark blue', ''),
+            ('selcount',       'black',       'dark green',''),
             ('header',         'light gray',  'black',     ''),
             ('top_hk',         'brown',       'black',     ''),
             ('col_hk',         'black',       'dark blue', ''),

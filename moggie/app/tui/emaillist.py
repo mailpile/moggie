@@ -30,15 +30,21 @@ class EmailListWalker(urwid.ListWalker):
     SUBJECT_RE = re.compile(
         r'^((antw|aw|odp|ref?|sv|vs):\s*)*', flags=re.I)
 
+    FOCUS_ITEM_EXTRA_ROWS = 1
+
     def __init__(self, parent):
         self.focus = 0
-        self.idx = {}
         self.emails = []
+        self.parent = parent
+        self.reset()
+
+    def reset(self):
+        self.idx = {}
+        self.emails[:] = []
         self.visible = []
         self.expanded = set()
         self.selected = set()
         self.selected_all = False
-        self.parent = parent
 
     def __len__(self):
         return len(self.visible)
@@ -77,6 +83,9 @@ class EmailListWalker(urwid.ListWalker):
             _ids |= set(i['idx']
                 for i in self.emails if i['uuid'] in self.selected)
         return _ids
+
+    def get_by_id(self, idx):
+        return [i for i in self.emails if i['idx'] == idx][0]
 
     def set_emails(self, emails, focus_uuid=None):
         self.emails[:] = [e for e in emails if isinstance(e, dict)]
@@ -131,6 +140,8 @@ class EmailListWalker(urwid.ListWalker):
                 if e['uuid'] == focus_uuid:
                     self.focus = i
 
+        if self.focus >= len(self.visible):
+            self.focus = len(self.visible) - 1
         self._modified()
 
     def __getitem__(self, pos):
@@ -148,32 +159,73 @@ class EmailListWalker(urwid.ListWalker):
                 md = Metadata(*md).parsed()
 
             uuid = md['uuid']
-            dt = md.get('ts') or md.get('_rank')
-            dt = datetime.datetime.fromtimestamp(dt) if dt else 0
+            fmt = '%Y-%m-%d'
+            attrs = list('()')
             if self.selected_all or focused or uuid in self.selected:
                 prefix = 'check'
-                attrs = '>    <'
-                dt = dt.strftime('%Y-%m  ' + EMOJI.get('selected', 'X')) if dt else ''
+                if not focused:
+                    fmt = '%Y-%m  ' + EMOJI.get('selected', 'X')
             else:
-                attrs = '(    )'
                 prefix = 'list' if md.get('is_hit', True) else 'more'
-                fmt = '%Y-%m-%d' if focused else '%Y-%m-%d'
-                dt = dt.strftime(fmt) if dt else ''
+            ts = md.get('ts') or md.get('_rank')
+            ts = datetime.datetime.fromtimestamp(ts) if ts else 0
+            dt = ts.strftime(fmt) if ts else ''
+
+            search_tags = self.parent.webui_state.get('query_tags') or []
+            tags = [t for t in md.get('tags', []) if t not in search_tags]
+            icons = list('    ') + [EMOJI[tag] for tag in tags if tag in EMOJI]
+            attrs[1:] = icons[-4:] + attrs[-1:]
+            if 'in:read' not in tags and 'in:read' not in search_tags:
+                attrs[1] = EMOJI['unread']
+
             frm = md.get('from', {})
-            frm = frm.get('fn') or frm.get('address') or ''
-            subj = _thread_subject(md, frm)
+            frm1 = frm.get('fn') or frm.get('address') or ''
+            subj = _thread_subject(md, frm1)
             wrap = 'clip'
             widget = cols = urwid.Columns([
-              ('weight', 15, urwid.Text((prefix+'_from', frm), wrap=wrap)),
-              (6,            urwid.Text((prefix+'_attrs', attrs))),
-              ('weight', 27, urwid.Text((prefix+'_subject', subj), wrap=wrap)),
-              (10,           urwid.Text((prefix+'_date', dt), align='right'))],
+                ('weight', 15, urwid.Text((prefix+'_from', frm1), wrap=wrap)),
+                (len(attrs),   urwid.Text((prefix+'_attrs', attrs))),
+                ('weight', 27, urwid.Text((prefix+'_subject', subj), wrap=wrap)),
+                (10,           urwid.Text((prefix+'_date', dt), align='right'))],
               dividechars=1)
-            return Selectable(widget, on_select={
+
+            widget = Selectable(widget, on_select={
                 'enter': lambda x: self.parent.show_email(
                     self.visible[pos], selected=(uuid in self.selected)),
                 'x': lambda x: self.check(uuid),
                 ' ': lambda x: self.check(uuid, display=True)})
+
+            if focused:
+                # Note: If this is adjusted to make the focused item
+                #       even taller (or smaller), be sure to update
+                #       the FOCUS_ITEM_EXTRA_ROWS attribute.
+                ppl = []
+                for which in ('to', 'cc'):
+                    ppl.extend(
+                        (a.get('fn') or a.get('address') or '')
+                        for a in md.get(which, []))
+                if ppl:
+                    to = ppl.pop(0)
+                    if len(to) > 35:
+                        to = ppl[0].split(' ')[0].split('@')[0]
+                    if ppl:
+                        to += ' +%d' % len(ppl)
+                    ppl = '-> ' + to
+                else:
+                    ppl = ''
+
+                tm = ts.strftime('%H:%M:%S') if ts else ''
+                tags = [(t[3:] if t[:3] == 'in:' else t) for t in tags]
+                tags = [t for t in tags if '_' not in (t[:1], t[-1:])]
+                tags = ('(%s)' % ' '.join(tags)) if tags else ''
+                kwa = {'wrap': wrap, 'align': 'right'}
+                widget = urwid.Pile([widget, urwid.Columns([
+                    ('weight', 50, urwid.Text(('more_from', ppl), wrap=wrap)),
+                    (len(tags),    urwid.Text(('more_subject', tags), **kwa)),
+                    (10,           urwid.Text(('more_date', tm), **kwa))],
+                    dividechars=1)])
+
+            return widget
         except IndexError:
             logging.exception('Failed to load message')
             pass
@@ -203,7 +255,7 @@ class EmailListWalker(urwid.ListWalker):
 
         # Warn the container that our selection state has changed.
         if had_any != have_any:
-            self.parent.update_content()
+            self.parent.update_content(set_focus=True)
 
         # FIXME: There must be a better way to do this?
         self._modified()
@@ -236,16 +288,39 @@ class SuggestAddToIndex(Suggestion):
 
 
 class SelectionCounter(urwid.Text):
-    def __init__(self, walker):
+    def __init__(self, emaillist, walker):
+        self.emaillist = emaillist
         self.walker = walker
-        self.fmt = '\nSelected %d messages'
+        self.fmt = '  %s  ' % 'Selected %d messages'
         super().__init__(
-            [('subtle', self.fmt % len(self.walker.selected_ids()))],
+            [('selcount', self.fmt % len(self.walker.selected_ids()))],
             align='center')
 
     def walker_updated(self):
         self.set_text(
-            [('subtle', self.fmt % len(self.walker.selected_ids()))])
+            [('selcount', self.fmt % len(self.walker.selected_ids()))])
+
+    def keypress(self, size, key):
+        return key
+
+
+class EmailListBox(urwid.ListBox):
+    def change_focus(self, size, position,
+            offset_inset=0, coming_from=None,
+            cursor_coords=None, snap_rows=None):
+
+        # Urwid default algorithms are confused by the fact that our focus
+        # element is larger than the others, shrinking again when it loses
+        # focus. This compensates!
+        if coming_from == 'above':
+            try:
+                offset_inset -= self._body.FOCUS_ITEM_EXTRA_ROWS
+            except AttributeError:
+                pass
+
+        return super().change_focus(size, position,
+            offset_inset=offset_inset, coming_from=coming_from,
+            cursor_coords=cursor_coords, snap_rows=snap_rows)
 
 
 class EmailList(urwid.Pile):
@@ -261,12 +336,12 @@ class EmailList(urwid.Pile):
         VIEW_THREADS: 'threads_metadata'}
 
     TAG_OP_MAP = {
-        't': ('TAG',    'Tag selected messages',   'Tagged'),
-        'u': ('UNTAG',  'Untag selected messages', 'Untagged'),
-        'E': ('REMOVE', 'Remove tags: %s',         'Untagged'),
-        'I': ('+read',  'Mark messages read',      'Marked read'),
-        '!': ('+junk',  'Move to junk',            'Moved to junk'),
-        '#': ('+trash', 'Move to trash',           'Moved to trash')}
+        't': ('TAG',    'Tag selected messages'),
+        'u': ('UNTAG',  'Untag selected messages'),
+        'E': ('REMOVE', 'Remove tags: %s'),
+        'I': ('+read',  'Mark messages read'),
+        '!': ('+junk',  'Move to junk'),
+        '#': ('+trash', 'Move to trash')}
 
     def __init__(self, mog_ctx, tui, terms, view=None):
         self.name = 'emaillist-%.5f' % time.time()
@@ -294,9 +369,9 @@ class EmailList(urwid.Pile):
 
         self.walker = EmailListWalker(self)
         self.emails = self.walker.emails
-        self.scounter = SelectionCounter(self.walker)
+        self.scounter = SelectionCounter(self, self.walker)
 
-        self.listbox = urwid.ListBox(self.walker)
+        self.listbox = EmailListBox(self.walker)
         self.suggestions = SuggestionBox(tui, update_parent=self.update_content)
         self.widgets = []
 
@@ -349,7 +424,8 @@ class EmailList(urwid.Pile):
             output=self.VIEWS.get(self.view, 'metadata'),
             limit=self.want_emails if (limit is False) else (limit or '-'),
             json_ui_state=True,
-            on_success=self.incoming_result)
+            on_success=self.incoming_result,
+            on_error=self.incoming_error)
 
     def set_crumb(self, update=False):
         self.crumb = self.is_mailbox
@@ -383,19 +459,23 @@ class EmailList(urwid.Pile):
         if self.walker.selected_all or self.walker.selected:
             if self.walker.selected_all:
                 count = urwid.Text(
-                    [('subtle', '\nAll matching messages are selected.')],
+                    [('selcount', '  All matching messages are selected.  ')],
                     align='center')
             else:
                 count = self.scounter
+
             ops = []
-            for hotkey, (tagop, desc, _) in self.get_tag_op_map().items():
+            for hotkey, (tagop, desc) in self.get_tag_op_map().items():
                 ops.extend([
-                    ('white', '%s:' % hotkey), ('subtle', desc),
+                    ('white', '%s:' % hotkey),
+                    ('subtle', desc),
                     ('subtle', '\n')])
-            ops.pop(-1)
+
+            half = (len(ops) // 6) * 3
             self.widgets.append(urwid.Columns([
-                ('weight', 1, count),
-                ('weight', 1, urwid.Text(ops, align='left'))]))
+                ('weight', 1, urwid.Text(ops[:half-1], align='left')),
+                ('weight', 1, urwid.Text(ops[half:-1], align='left'))]))
+            self.widgets.append(count)
             divide = True
         elif len(self.suggestions):
             self.widgets.append(self.suggestions)
@@ -414,11 +494,14 @@ class EmailList(urwid.Pile):
     def show_email(self, metadata, selected=False):
         self.walker.expand(metadata)
         self.tui.col_show(self,
-            EmailDisplay(self.mog_ctx, self.tui, metadata,
+            EmailDisplay(self.mog_ctx, self.tui, copy.deepcopy(metadata),
                 selected=selected))
                 # FIXME:
                 #username=self.search_obj.get('username'),
                 #password=self.search_obj.get('password'),
+        tags = metadata.get('tags')
+        if tags and 'in:read' not in tags:
+            tags.append('in:read')
 
     def load_more(self):
         now = time.time()
@@ -435,6 +518,14 @@ class EmailList(urwid.Pile):
             if self.total_available is None:
                 self.mog_ctx.count(self.terms, on_success=self.incoming_count)
 
+    def refresh(self):
+        self.loading = 0
+        self.walker.reset()
+        self.want_more = True
+        self.want_emails = 0
+        self.webui_state = {}
+        self.load_more()
+
     def incoming_count(self, mog_ctx, message):
         data = try_get(message, 'data', message)
         if data:
@@ -442,7 +533,11 @@ class EmailList(urwid.Pile):
                 self.total_available = val
             self.set_crumb(update=True)
 
+    def incoming_error(self, mog_ctx, message):
+        self.loading = 0
+
     def incoming_result(self, mog_ctx, message):
+        self.loading = 0
         data = try_get(message, 'data', message)
         try:
             first = (0 == len(self.emails))
@@ -452,7 +547,8 @@ class EmailList(urwid.Pile):
                     # FIXME: Should the back-end make this easier for us?
                     # FIXME: Use shlex?
                     terms = (self.webui_state['details'].get('terms', '')
-                        .replace('+', '').replace('-', '')).split()
+                        .replace('+', '')).split()
+                        #.replace('+', '').replace('-', '')).split()
                     self.webui_state['query_tags'] = [
                         word for word in terms if word.startswith('in:')]
 
@@ -460,7 +556,7 @@ class EmailList(urwid.Pile):
             else:
                 self.webui_state = {}
 
-            logging.debug('webui_state=%s' % self.webui_state)
+            #logging.debug('webui_state=%s' % self.webui_state)
 
             #self.suggestions.incoming_message(message)
 
@@ -480,6 +576,8 @@ class EmailList(urwid.Pile):
 
     def column_hks(self):
         hks = []
+        if self.tui.undoable:
+            hks.extend([' ', ('col_hk', 'z:'), 'Undo'])
         if self.emails:
             hks.extend([' ', ('col_hk', 'x:'), 'Select?'])
             hks.extend([' ', ('col_hk', 'D:'), 'Download'])
@@ -500,7 +598,7 @@ class EmailList(urwid.Pile):
         if tags:
             untag = ' '.join('-%s' % t for t in tags)
             tdesc = ', '.join(t[3:] for t in tags)
-            opmap['E'] = (untag, opmap['E'][1] % tdesc, opmap['E'][2])
+            opmap['E'] = (untag, opmap['E'][1] % tdesc)
         else:
             del opmap['E']
         # FIXME: If no tags in the search result, omit E
@@ -524,47 +622,59 @@ class EmailList(urwid.Pile):
             output='tags',
             on_success=with_search_tags)
 
-    def on_tag_op(self, hotkey=None, tag_op=None, comment=None):
+    def on_tag_op(self, hotkey=None, tag_op=None):
+        tag_op_map = self.get_tag_op_map()
         if tag_op is None:
-            tdc = self.get_tag_op_map().get(hotkey)
+            tdc = tag_op_map.get(hotkey)
             if tdc:
-                tag_op, desc, comment = tdc
+                tag_op, desc = tdc
 
-        def what():
-            if self.walker.selected_all:
-                return 'all matching messages'
-            else:
-                n = len(self.walker.selected_ids())
-                return ('%d message' if (n == 1) else '%d messages') % n
+        from moggie.app.cli.help import describe_selection
+        selected = list(self.walker.selected_ids())
+        count = None if self.walker.selected_all else len(selected)
+        what = describe_selection(
+            source=self.terms,
+            message_count=count,
+            email=(
+                {'metadata': self.walker.get_by_id(selected[0])}
+                if (count == 1) else None))
 
         if tag_op == 'UNTAG':
-            def untag_tags_chosen(context, tags):
-                tag_op = ' '.join('-%s' % t.strip() for t in tags.split(','))
+            def untag_tags_chosen(context, tags, pressed=None):
+                tags = [t.strip() for t in tags.split(',')]
+                tag_op = ' '.join('-%s' % t for t in tags)
+                comment = 'tag %s: %s' % (tag_op, what)
                 self.run_tag_op(tag_op, comment)
 
             def untag_chooser(choices):
                 self.tui.show_modal(ChooseTagDialog,
                     self.mog_ctx,
-                    title='Removing tags from %s' % what(),
+                    title='Remove tags from %s' % what,
                     choices=choices,
                     multi=True,
                     create=False,
+                    ok_labels=['Untag'],
                     action=untag_tags_chosen)
             self.with_message_tags(untag_chooser)
 
         elif tag_op == 'TAG':
-            def tag_tags_chosen(context, tags):
+            def tag_tags_chosen(context, tags, pressed=None):
                 tag_op = ' '.join('+%s' % t.strip() for t in tags.split(','))
+                if pressed == 'Move':
+                    tag_op = '%s %s' % (tag_op_map['E'][0], tag_op)
+                comment = 'tag %s: %s' % (tag_op, what)
                 self.run_tag_op(tag_op, comment)
 
             self.tui.show_modal(ChooseTagDialog,
                 self.mog_ctx,
-                title='Adding tags to %s' % what(),
+                title='Add tags to %s' % what,
                 multi=True,
                 create=True,
+                allow_move=('E' in tag_op_map),
                 action=tag_tags_chosen)
 
         else:
+            comment = 'tag %s: %s' % (tag_op, what)
             self.run_tag_op(tag_op, comment)
 
     def selection_search_terms(self, mailboxes=True):
@@ -602,9 +712,12 @@ class EmailList(urwid.Pile):
             on_success=self.on_tagged,
             on_error=self.on_tag_failed)
 
-    def on_tagged(self, *args, **kwargs):
-        # FIXME: Report success in UI (refresh search), make undo available
-        logging.debug('FIXME: on_tagged(%s, %s)' % (args, kwargs))
+    def on_tagged(self, mog_ctx, results, **kwargs):
+        for result in results:
+            if isinstance(result, dict) and 'history' in result:
+                self.tui.undoable.append((self.mog_ctx.tag, result['history']))
+                logging.debug('Undoable: %s' % (result['history'],))
+        self.tui.refresh_all()
 
     def on_tag_failed(self, *args, **kwargs):
         logging.error('FIXME: on_tag_failed(%s, %s)' % (args, kwargs))
@@ -613,7 +726,7 @@ class EmailList(urwid.Pile):
         self.walker.selected = set()
         self.walker.selected_all = not self.walker.selected_all
         self.walker._modified()
-        self.update_content()
+        self.update_content(set_focus=True)
 
     def on_toggle_view(self):
         self.tui.topbar.open_with(
