@@ -21,6 +21,7 @@ from .choosetagdialog import ChooseTagDialog
 from .decorations import EMOJI
 from .emaildisplay import EmailDisplay
 from .messagedialog import MessageDialog
+from .searchdialog import SearchDialog
 from .suggestionbox import SuggestionBox
 from .widgets import *
 
@@ -412,6 +413,9 @@ class EmailList(urwid.Pile):
             return None
         if key == 'X':
             self.on_select_all()
+            return None
+        if key == '/' and not self.is_mailbox:
+            self.tui.show_modal(SearchDialog, self.terms)
             return None
         if key in self.get_tag_op_map():
             self.on_tag_op(key)

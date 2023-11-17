@@ -32,13 +32,14 @@ Use an asterisk (*) to search for word fragments.
 
     signals = ['close']
 
-    def __init__(self, tui):
+    def __init__(self, tui, initial_terms=''):
         self.mog_ctx = tui.active_mog_ctx()
         self.tui = tui
         close_button = CloseButton(
             on_select=lambda b: self._emit('close'), style='popsubtle')
 
         self.exact = urwid.CheckBox('Exact matches only', False)
+
         self.search_box = EditSearch('Search: ',
             multiline=False, allow_tab=False, wrap='ellipsis')
         #urwid.connect_signal(
@@ -47,6 +48,7 @@ Use an asterisk (*) to search for word fragments.
             lambda e: self.search(self.search_box.edit_text))
         urwid.connect_signal(self.search_box, 'close',
             lambda e: self._emit('close'))
+        self.search_box.insert_text(initial_terms + ' ')
 
         fill = urwid.Filler(urwid.Pile([
             self.search_box,
