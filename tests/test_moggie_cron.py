@@ -30,7 +30,7 @@ class MoggieCronTests(unittest.TestCase):
             # crontab worth of events in the schedule.
             crond.parse_crontab("""\
 # This is a test, comment
-45  6,18  * * *  history.append('hello')        # Test Python code
+45  6,18  * * *  flag: history.append('hello')  # Test Python code
 */5    *  * * *  history.append('world')        # More Python, diff schedule
 00    00  * * *  /usr/bin/touch "%(testfile)s"  # Test shell commands
 00    00  * * *  history.append(moggie.help())  # Moggie in Python

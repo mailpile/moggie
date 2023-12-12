@@ -16,6 +16,7 @@ import copy
 import datetime
 import logging
 import os
+import re
 import shlex
 import time
 import threading
@@ -29,6 +30,8 @@ class Cron:
     """
     An SQL-backed scheduler that supports crontab(5)-like rules and syntax.
     """
+
+    FLAGS_RE = re.compile('^([^\s:]*):\s+')
 
     def __init__(self, moggie, encryption_keys, eval_env=None):
         ext = 'sqz' if encryption_keys else 'sq3'
@@ -75,6 +78,7 @@ class Cron:
                 months               TEXT,
                 weekdays             TEXT,
                 action               TEXT,
+                flags                TEXT,
                 context              TEXT,
                 source               TEXT)""")
 
@@ -152,8 +156,8 @@ class Cron:
         """
         from datetime import timedelta
 
-        if isinstance(now, int):
-            now = datetime.datetime.fromtimestamp(now)
+        if isinstance(now, (int, float)):
+            now = datetime.datetime.fromtimestamp(int(now))
         else:
             now = now or datetime.datetime.now()
 
@@ -193,14 +197,17 @@ class Cron:
         return self.db.execute(sql, args)
 
     def _log_schedule(self,
-            _id, action, next_run, mins, hrs, mdays, mnths, wkdays):
-        logging.debug('[cron] Scheduled %s for %d [%s %s %s %s %s] %s' % (
+            _id, action, flags, next_run, mins, hrs, mdays, mnths, wkdays):
+        if isinstance(flags, list):
+            flags = ':'.join(flags)
+        logging.debug('[cron] Scheduled %s for %d [%s %s %s %s %s %s] %s' % (
             _id, next_run,
-            mins or '*', hrs or '*', mdays or '*', mnths or '*', wkdays or '*',
+            mins or '*', hrs or '*', mdays or '*', mnths or '*',
+            wkdays or '*', flags or '-',
             action))
 
-    def _eval_env(self):
-        now_ts = int(time.time())
+    def _eval_env(self, ts):
+        now_ts = int(ts)
         now = datetime.datetime.now()
         env = {
             'yyyy_mm_dd': friendly_date(now_ts),
@@ -212,19 +219,19 @@ class Cron:
             env['moggie'] = self._external_moggie.connect()
         return env
 
-    def _action_runner(self, _id, action, prefer_async=False):
+    def _action_runner(self, _id, action, ts, prefer_async=False):
         if action[:7] == 'moggie ':
             if prefer_async:
                 async def _async_runner():
                     nonlocal _id, action, action
-                    args = shlex.split(action % self._eval_env())[1:]
+                    args = shlex.split(action % self._eval_env(ts))[1:]
                     logging.info('[cron] %s/moggie: %s' % (_id, args))
                     await self._moggie.connect().async_run(*args)
                 return (True, _async_runner)
             else:
                 def _runner():
                     nonlocal _id, action, action
-                    args = shlex.split(action % self._eval_env())[1:]
+                    args = shlex.split(action % self._eval_env(ts))[1:]
                     logging.info('[cron] %s/moggie: %s' % (_id, args))
                     self._external_moggie.connect().run(*args)
 
@@ -232,7 +239,7 @@ class Cron:
             action = action.lstrip('!')
             def _runner():
                 nonlocal _id, action
-                action = action % self._eval_env()
+                action = action % self._eval_env(ts)
                 logging.info('[cron] %s/sh: %s' % (_id, action))
                 os.system(action)
 
@@ -240,15 +247,15 @@ class Cron:
             def _runner():
                 nonlocal _id, action
                 logging.info('[cron] %s/py: %s' % (_id, action))
-                eval(action, self._eval_env())
+                eval(action, self._eval_env(ts))
 
         if prefer_async:
             return (False, _runner)
         return _runner
 
-    def _run_action(self, _id, action, runner=None):
+    def _run_action(self, _id, action, ts, runner=None):
         if runner is None:
-            runner = self._action_runner(_id, action)
+            runner = self._action_runner(_id, action, ts)
         def _thread_runner():
             nonlocal _id, runner
             try:
@@ -263,18 +270,19 @@ class Cron:
         at.start()
         return at
 
-    async def _async_run_action(self, _id, action):
-        is_async, _runner = self._action_runner(_id, action, prefer_async=True)
+    async def _async_run_action(self, _id, action, ts):
+        is_async, job = self._action_runner(_id, action, ts, prefer_async=True)
         if is_async:
-            await _runner()
+            await job()
         else:
-            return self._run_action(_id, action, runner=_runner)
+            return self._run_action(_id, action, ts, runner=job)
 
     def _yield_due_and_reschedule(self, context, now):
         now = int(now or time.time())
 
         sql = """
-            SELECT id, action, minutes, hours, month_days, months, weekdays
+            SELECT id, action, next_run, flags,
+                   minutes, hours, month_days, months, weekdays
               FROM crontab
              WHERE next_run <= ?"""
         if context:
@@ -283,29 +291,47 @@ class Cron:
         else:
             args = (now,)
 
+        # Put an upper bound on how many times we will "rerun" a job; this
+        # only happens with jobs that are flagged 'no-skip' where the app
+        # has been sleeping long enough to miss multiple deadlines.
+        reruns = 50
+
         for due in self.db.execute(sql, args):
-            _id, action, mins, hrs, mdays, mnths, wkdays = due
-            yield _id, action
+            _id, action, ts, flags, mins, hrs, mdays, mnths, wkdays = due
+            flags = flags.lower().split(':')
+            if 'no-skip' not in flags:
+                ts = now
+            else:
+                ts = int(ts)
+
+            yield _id, action, ts
 
             # Deleting or rescheduling the event happens AFTER it has been
             # yielded; if our caller crashes while handling the event and
             # never comes back, the current event stays scheduled.
             if mins or hrs or mdays or mnths or wkdays:
-                next_run = self.calculate_next(
-                    mins, hrs, mdays, mnths, wkdays, now=now).timestamp()
+                next_run = int(self.calculate_next(
+                    mins, hrs, mdays, mnths, wkdays, now=ts).timestamp())
+                while (next_run <= now) and reruns > 0:
+                    yield _id, action, next_run
+                    next_run = int(self.calculate_next(
+                        mins, hrs, mdays, mnths, wkdays, now=next_run).timestamp())
+                    reruns -= 1
+
                 self.db.execute("""
                     UPDATE crontab
                        SET next_run = ?
                      WHERE id = ?""", (next_run, _id))
                 self._log_schedule(
-                    _id, action, next_run, mins, hrs, mdays, mnths, wkdays)
+                    _id, action, flags,
+                    next_run, mins, hrs, mdays, mnths, wkdays)
             else:
                 self._delete_where(_id=_id)
 
     def run_scheduled(self, context=None, join=True, now=None):
         threads = []
-        for _id, action in self._yield_due_and_reschedule(context, now):
-            threads.append(self._run_action(_id, action))
+        for _id, action, ts in self._yield_due_and_reschedule(context, now):
+            threads.append(self._run_action(_id, action, ts))
         if join:
             for at in threads:
                 at.join()
@@ -313,8 +339,8 @@ class Cron:
 
     async def async_run_scheduled(self, context=None, join=True, now=None):
         threads = []
-        for _id, action in self._yield_due_and_reschedule(context, now):
-            threads.append(await self._async_run_action(_id, action))
+        for _id, action, ts in self._yield_due_and_reschedule(context, now):
+            threads.append(await self._async_run_action(_id, action, ts))
         if join:
             for at in threads:
                 if at is not None:
@@ -324,7 +350,7 @@ class Cron:
     def schedule_action(self, action,
             minutes=None, hours=None, month_days=None, months=None,
             weekdays=None, context=None, source=None,
-            _id=None, next_run=None,
+            _id=None, next_run=None, flags=None,
             save=True):
         if next_run:
             if minutes or hours or month_days or months or weekdays:
@@ -340,19 +366,20 @@ class Cron:
         if hasattr(next_run, 'timestamp'):
             next_run = next_run.timestamp()
         self.db.execute("""\
-            INSERT INTO crontab(id, action, next_run,
+            INSERT INTO crontab(id, action, flags, next_run,
                                 minutes, hours, month_days, months, weekdays,
                                 context, source)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
-            _id, action, int(next_run),
+            _id, action, flags, int(next_run),
             minutes, hours, month_days, months, weekdays,
             context, source))
 
         if save:
             self.db.save()
         self._log_schedule(
-            _id, action, next_run, minutes, hours, month_days, months, weekdays)
+            _id, action, flags,
+            next_run, minutes, hours, month_days, months, weekdays)
 
     def parse_crontab(self, crontext, source='crontab'):
         self._delete_where(source=source)
@@ -361,9 +388,13 @@ class Cron:
             if not line:
                 continue
             mm, hh, d, m, wd, action = line.split(None, 5)
+            flags = []
+            while self.FLAGS_RE.match(action):
+                flags.append(action.split(':', 1)[0])
+                action = re.sub(self.FLAGS_RE, '', action, count=1)
             self.schedule_action(action,
                 minutes=mm, hours=hh, month_days=d, months=m, weekdays=wd,
-                source=source,
+                source=source, flags=':'.join(flags),
                 save=False)
         self.db.save()
 

@@ -83,9 +83,9 @@ main app worker. Hints:
 01   * * * *  moggie autotag-train in:junk -- in:read (version:recent OR dates:recent)
 07  12 * * 1  moggie autotag-train --compact
 #
-# FIXME: This would be a good way to un-snooze snoozed mail...
+### Un-hide snoozed e-mails, mark as urgent
 #
-#*    * * * *  moggie tag +inbox -_mp_z%(yyyy_mm_dd)s -- in:_mp_z%(yyyy_mm_dd)s
+00  8 * * *   no-skip: moggie tag +urgent -hidden -_mp_z%(yyyy_mm_dd)s -- in:hidden in:_mp_z%(yyyy_mm_dd)s
 """
 
     def __init__(self, app_worker):
@@ -149,7 +149,8 @@ main app worker. Hints:
         logging.info('[app] Still alive! '
             + '; '.join('%s=%s' % pair for pair in log_attrs.items()))
 
-        await self.cron.async_run_scheduled()
+        if self.cron:
+            await self.cron.async_run_scheduled()
 
     def _get_openpgp_worker(self, ctx):
         from moggie.workers.openpgp import OpenPGPWorker
