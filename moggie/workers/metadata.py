@@ -168,9 +168,15 @@ class MetadataWorker(BaseWorker):
                 mthread['messages'][0].parent_id = mds_by_msgid[parid].idx
                 for md in mthread['messages']:
                     md.thread_id = pthread_head.thread_id
-                    pthread_head.more['thread'].append(md.idx)
+                    try:
+                        pthread_head.more['thread'].append(md.idx)
+                    except KeyError:
+                        pthread_head.more['thread'] = [md.idx]
                 pthread['hits'] = [md.idx for md in pthread['messages'] if _wanted(md)]
-                threads.remove(mthread)
+                try:
+                    threads.remove(mthread)
+                except ValueError:
+                    pass
 
         # Step 3: Sort our threads in the order they appeared in the mailbox
         def _get_thread_rank(thread):

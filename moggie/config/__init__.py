@@ -745,7 +745,8 @@ class AppConfig(ConfigParser):
             if 'passphrase' in self[self.SECRETS]:
                 # This is the insecure self-auto-unlock mode: start this way?
                 try:
-                    self.provide_passphrase(self[self.SECRETS]['passphrase'])
+                    self.provide_passphrase(
+                        self[self.SECRETS]['passphrase'], fast=True)
                     if 'master_key' not in self[self.SECRETS]:
                         self.generate_master_key()
                 except PermissionError:
@@ -943,13 +944,15 @@ class AppConfig(ConfigParser):
     def key_desc(self, section, option):
         return re.sub(self.DIGIT_RE, 'N', section+'/'+option)
 
-    def provide_passphrase(self, passphrase, contacts=None):
+    def provide_passphrase(self, passphrase, fast=False, contacts=None):
         # FIXME: We want to start encrypting from the start and we will
         #        incrementally ask the user to ratchet up their security
         #        posture, rotating keys as we do so. So this needs to
         #        change! Also, we have Passcrow now.
         pass_key = make_aes_key(
-            stretch_with_scrypt(bytes(passphrase, 'utf-8'), b'config'))
+            stretch_with_scrypt(
+                bytes(passphrase, 'utf-8'), b'config',
+                params=('scrypt-fast' if fast else None)))
 
         is_new = False
         config_key = None

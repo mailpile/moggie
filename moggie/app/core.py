@@ -242,7 +242,7 @@ main app worker. Hints:
                     '[app] Generating initial (unlocked) encryption keys.')
                 passphrase = generate_passcode(groups=5)
                 self.config[self.config.SECRETS]['passphrase'] = passphrase
-                self.config.provide_passphrase(passphrase)
+                self.config.provide_passphrase(passphrase, fast=True)
                 self.config.generate_master_key()
 
             if not self.start_encrypting_workers():

@@ -979,7 +979,7 @@ class WorkerPool:
                     return worker
 
             # Busy waits are bad...?
-            time.sleep(0.05)
+            time.sleep(min(0.25, 0.01 * tries))
 
     def choose_worker(self, pop, wait, fn, args, kwargs):
         """

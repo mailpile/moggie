@@ -11,22 +11,6 @@ from .util.dumbcode import from_json, to_json
 SHARED_MOGGIES = {}
 
 
-def set_shared_moggie(moggie, which='default'):
-    """
-    Configure a moggie object for access via `get_shared_moggie()`.
-    """
-    SHARED_MOGGIES[which if which else moggie.name] = moggie
-    return moggie
-
-
-def get_shared_moggie(which='default'):
-    """
-    Fetch a globally shared moggie object, either the default or
-    the one specified by the `which` argument.
-    """
-    return SHARED_MOGGIES.get(which)
-
-
 class Moggie:
     """
     This is the public Moggie API, in its Pythonic form.
@@ -626,6 +610,24 @@ class MoggieContext:
                 **kwa)
 
         raise AttributeError(attr)
+
+
+def set_shared_moggie(moggie, which='default'):
+    """
+    Configure a moggie object for access via `get_shared_moggie()`.
+    """
+    SHARED_MOGGIES[which if which else moggie.name] = moggie
+    return moggie
+
+
+def get_shared_moggie(*args, create=True, which='default', **kwargs):
+    """
+    Fetch a globally shared moggie object, either the default or
+    the one specified by the `which` argument.
+    """
+    if which not in SHARED_MOGGIES and create:
+        SHARED_MOGGIES[which] = Moggie(*args, **kwargs)
+    return SHARED_MOGGIES.get(which)
 
 
 Moggie.Setup()

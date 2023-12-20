@@ -23,6 +23,11 @@ KDF_PARAMS = {
         'n': 2**17,
         'r': 8,
         'p': 1
+    },
+    'scrypt-fast': {
+        'n': 8,
+        'r': 8,
+        'p': 1
     }
 }
 
@@ -52,6 +57,8 @@ def stretch_with_pbkdf2(password, salt, params=KDF_PARAMS['pbkdf2']):
     >>> stretch_with_pbkdf2(b'hello', b'world')
     b'qntYDMyKJRmkllu6OjJUcsQ0i9gkGhzDeBfSNOSnEQs='
     """
+    if not isinstance(params, dict):
+        params = KDF_PARAMS[params or 'pbkdf2']
     return binascii.b2a_base64(PBKDF2HMAC(
         backend=cryptography.hazmat.backends.default_backend(),
         algorithm=cryptography.hazmat.primitives.hashes.SHA256(),
@@ -67,6 +74,8 @@ def stretch_with_scrypt(password, salt, params=KDF_PARAMS['scrypt']):
     >>> stretch_with_scrypt(b'hello', b'world')
     b'siQFKgwjVWKV5MzgXCJSKqbxe2IMDhc8Ro5/EwKhe4Q='
     """
+    if not isinstance(params, dict):
+        params = KDF_PARAMS[params or 'scrypt']
     return binascii.b2a_base64(Scrypt(
         backend=cryptography.hazmat.backends.default_backend(),
         salt=salt,
