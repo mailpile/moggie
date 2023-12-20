@@ -19,7 +19,7 @@ class SearchWorker(BaseWorker):
         '/etc/dictionaries-common/words',
         '/usr/share/dict/words']
 
-    MASK_TAGS = ('in:trash', 'in:junk')
+    MASK_TAGS = ('in:trash', 'in:junk', 'in:hidden')
 
     EXACT_SEARCHES = ('msgid', 'message-id', 'id', 'mid')
 

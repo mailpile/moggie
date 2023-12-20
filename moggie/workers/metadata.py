@@ -254,7 +254,7 @@ class MetadataWorker(BaseWorker):
                     updated.append(idx)
         self.reply_json({'added': added, 'updated': updated})
 
-    def _md_threaded(self, hits, only_ids, sort_order):
+    def _md_threaded(self, hits, only_ids, sort_order, urgent):
         hits = [self._metadata.thread_sorting_keyfunc(h) for h in hits]
         hits.sort()
         if sort_order == self.SORT_DATE_DEC:
@@ -275,13 +275,23 @@ class MetadataWorker(BaseWorker):
         if sort_order == self.SORT_DATE_DEC:
             groups.reverse()
 
+        if urgent and (sort_order != self.SORT_NONE):
+            return (
+                [g for g in groups if g['thread'] in urgent] +
+                [g for g in groups if g['thread'] not in urgent])
+
         return groups
 
-    def _md_messages(self, hits, only_ids, sort_order):
+    def _md_messages(self, hits, only_ids, sort_order, urgent):
         if sort_order != self.SORT_NONE:
             hits.sort(key=self._metadata.date_sorting_keyfunc)
         if sort_order == self.SORT_DATE_DEC:
             hits.reverse()
+
+        if urgent and (sort_order != self.SORT_NONE):
+            return (
+                [h for h in hits if h in urgent] +
+                [h for h in hits if h not in urgent])
 
         return hits
 
@@ -303,10 +313,16 @@ class MetadataWorker(BaseWorker):
         if not hits:
             return self.reply_json({'total': 0, 'metadata': []})
 
-        if threads:
-            result = self._md_threaded(hits, only_ids, sort_order)
+        urgent = (tags or {}).get('in:urgent')
+        if urgent:
+            urgent = dumb_decode(urgent[1])
         else:
-            result = self._md_messages(hits, only_ids, sort_order)
+            urgent = set()
+
+        if threads:
+            result = self._md_threaded(hits, only_ids, sort_order, urgent)
+        else:
+            result = self._md_messages(hits, only_ids, sort_order, urgent)
 
         total = len(result)
         if not limit:

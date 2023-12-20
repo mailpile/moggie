@@ -191,7 +191,7 @@ FIXME: Document html and html formats!
         # are reported separately in the webui_state.
         terms = self.strip_options(args)
         terms.extend(self.options['--q='])
-        terms.extend(self.options['--qr='])
+        terms.extend(self.options.get('--qr=', []))
 
         self.mailboxes, terms = self.remove_mailbox_terms(terms)
         self.terms = self.combine_terms(terms)  # Respects --or
@@ -815,6 +815,7 @@ FIXME: Document html and html formats!
                 query['threads'] = True
         elif output in ('tags', 'tag_info'):
             query['uncooked'] = True
+            query['mask_tags'] = []
             if ((query['skip'] or self.options.get('--limit=', [None])[-1])
                     and (fmt not in ('html', 'jhtml'))):
                 raise Nonsense('Offset and limit do not apply to tag searches')
@@ -866,7 +867,7 @@ FIXME: Document html and html formats!
 
         self.webui_state['details'] = {
             'q': self.options['--q='],
-            'qr': self.options['--qr=']}
+            'qr': self.options.get('--qr=', [])}
         self.webui_state['preferences'] = self.preferences
 
         if 'results' in msg and not self.raw_results:

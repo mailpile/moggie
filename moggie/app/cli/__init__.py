@@ -31,6 +31,7 @@ class LazyLoader(dict):
     @classmethod
     def LoadAll(cls):
         import moggie.app.cli.admin
+        import moggie.app.cli.autotag
         import moggie.app.cli.help
         import moggie.app.cli.email
         import moggie.app.cli.notmuch

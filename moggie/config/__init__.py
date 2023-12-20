@@ -347,10 +347,10 @@ class ContextConfig(ConfigSectionProxy):
         #tags: [...],             # List of tags this context has access to
         #ui_tags: [...],          # List of tags shown in the user interface
         # Optional...
-        'default_identity': str,  # Default identity when composing mail
-        'default_ui_tags': bool,  # Show default app tags in UI?
-        'scope_search': str,      # Access: Additional search scoping terms
-        'tag_namespace': str,     # Access: Tag namespace for this context
+        'default_identity': str,     # Default identity when composing mail
+        'default_ui_tags': cfg_bool, # Show default app tags in UI?
+        'scope_search': str,         # Access: Additional search scoping terms
+        'tag_namespace': str,        # Access: Tag namespace for this context
         'remote_context_url': str,
         'openpgp_sop_client': str,
         'openpgp_key_sources': str}
@@ -733,6 +733,7 @@ class AppConfig(ConfigParser):
                 if opt not in self._sections[sec]:
                     self.set(sec, opt, val, save=False)
                     initialized += 1
+
             if initialized == len(self.INITIAL_SETTINGS):
                 self.detect_local_accounts()
 
@@ -826,7 +827,10 @@ class AppConfig(ConfigParser):
         with self:
             czero = self.CONTEXT_ZERO
             if czero not in self:
-                self[czero].update({'name': 'My Mail', 'default_ui_tags': True})
+                #self[czero] = {}
+                c0 = ContextConfig(self, czero)
+                c0.name = 'My Mail'
+                c0.default_ui_tags = True
             self.do_not_save()
             return ContextConfig(self, czero)
 
