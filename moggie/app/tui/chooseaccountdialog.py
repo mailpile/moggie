@@ -14,7 +14,7 @@ class ChooseAccountDialog(MultiChoiceDialog):
 
         # Grab accounts from context view, that might be faster?
         account_list = []
-        def action_with_context(account):
+        def action_with_context(account, pressed=None):
             return action(mog_ctx.key, account)
 
         super().__init__(tui, account_list,

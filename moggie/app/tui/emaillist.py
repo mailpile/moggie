@@ -15,6 +15,7 @@ import time
 import urwid
 
 from ...email.metadata import Metadata
+from ...util.friendly import friendly_date
 from ..suggestions import Suggestion
 
 from .choosetagdialog import ChooseTagDialog
@@ -78,11 +79,11 @@ class EmailListWalker(urwid.ListWalker):
 
     def selected_ids(self):
         _ids = set()
-        if self.visible:
-            _ids.add(self.visible[self.focus]['idx'])
         if self.selected:
             _ids |= set(i['idx']
                 for i in self.emails if i['uuid'] in self.selected)
+        elif self.visible:
+            _ids.add(self.visible[self.focus]['idx'])
         return _ids
 
     def get_by_id(self, idx):
@@ -117,11 +118,12 @@ class EmailListWalker(urwid.ListWalker):
         # to show the relative position.
         for msg in self.visible:
             tf = _thread_first(msg)
+            boost = 365*24*3600 if ('in:urgent' in msg.get('tags', [])) else 1
             if msg.get('is_hit', True):
                 if self.parent.is_mailbox:
                     tf['_rank'] = -max(tf.get('_rank') or 10000000, msg['ptrs'][0][-1])
                 else:
-                    tf['_rank'] = max(tf.get('_rank') or 0, msg['ts'])
+                    tf['_rank'] = max(tf.get('_rank') or 0, msg['ts']) + boost
             depth = _depth(msg)
             if depth > 8:
                 prefix = '  %d> ' % depth
@@ -162,10 +164,9 @@ class EmailListWalker(urwid.ListWalker):
             uuid = md['uuid']
             fmt = '%Y-%m-%d'
             attrs = list('()')
-            if self.selected_all or focused or uuid in self.selected:
+            if self.selected_all or uuid in self.selected:
                 prefix = 'check'
-                if not focused:
-                    fmt = '%Y-%m  ' + EMOJI.get('selected', 'X')
+                fmt = '%Y-%m  ' + EMOJI.get('selected', 'X')
             else:
                 prefix = 'list' if md.get('is_hit', True) else 'more'
             ts = md.get('ts') or md.get('_rank')
@@ -208,7 +209,7 @@ class EmailListWalker(urwid.ListWalker):
                 if ppl:
                     to = ppl.pop(0)
                     if len(to) > 35:
-                        to = ppl[0].split(' ')[0].split('@')[0]
+                        to = to.split(' ')[0].split('@')[0]
                     if ppl:
                         to += ' +%d' % len(ppl)
                     ppl = '-> ' + to
@@ -221,9 +222,9 @@ class EmailListWalker(urwid.ListWalker):
                 tags = ('(%s)' % ' '.join(tags)) if tags else ''
                 kwa = {'wrap': wrap, 'align': 'right'}
                 widget = urwid.Pile([widget, urwid.Columns([
-                    ('weight', 50, urwid.Text(('more_from', ppl), wrap=wrap)),
-                    (len(tags),    urwid.Text(('more_subject', tags), **kwa)),
-                    (10,           urwid.Text(('more_date', tm), **kwa))],
+                    ('weight', 50, urwid.Text((prefix+'_to', ppl), wrap=wrap)),
+                    (len(tags),    urwid.Text((prefix+'_tags', tags), **kwa)),
+                    (10,           urwid.Text((prefix+'_time', tm), **kwa))],
                     dividechars=1)])
 
             return widget
@@ -341,8 +342,11 @@ class EmailList(urwid.Pile):
         'u': ('UNTAG',  'Untag selected messages'),
         'E': ('REMOVE', 'Remove tags: %s'),
         'I': ('+read',  'Mark messages read'),
+        'f': ('+urgent','Flag as urgent'),
+        'F': ('-urgent','Unflag, not urgent'),
         '!': ('+junk',  'Move to junk'),
-        '#': ('+trash', 'Move to trash')}
+        '#': ('+trash', 'Move to trash'),
+        'Z': ('SNOOZE', 'Snooze messages')}
 
     def __init__(self, mog_ctx, tui, terms, view=None):
         self.name = 'emaillist-%.5f' % time.time()
@@ -378,7 +382,7 @@ class EmailList(urwid.Pile):
 
         urwid.Pile.__init__(self, [])
         self.set_crumb()
-        self.load_more()
+        self.load_more(first=True)
         self.update_content()
 
     def cleanup(self):
@@ -498,7 +502,9 @@ class EmailList(urwid.Pile):
     def show_email(self, metadata, selected=False):
         self.walker.expand(metadata)
         self.tui.col_show(self,
-            EmailDisplay(self.mog_ctx, self.tui, copy.deepcopy(metadata),
+            EmailDisplay(self.mog_ctx, self.tui,
+                copy.deepcopy(metadata),
+                mailbox=self.is_mailbox,
                 selected=selected))
                 # FIXME:
                 #username=self.search_obj.get('username'),
@@ -507,16 +513,16 @@ class EmailList(urwid.Pile):
         if tags and 'in:read' not in tags:
             tags.append('in:read')
 
-    def load_more(self):
+    def load_more(self, first=False):
         now = time.time()
         if (self.loading > now - 5) or not self.want_more:
             return
         self.loading = time.time()
 
-        self.want_emails += max(100, self.tui.max_child_rows() * 2)
+        self.want_emails += max(500, self.tui.max_child_rows() * 2)
 
         if self.is_mailbox:
-            self.search(limit=None)
+            self.search(limit=self.want_emails)
         else:
             self.search(limit=self.want_emails)
             if self.total_available is None:
@@ -584,7 +590,7 @@ class EmailList(urwid.Pile):
             hks.extend([' ', ('col_hk', 'z:'), 'Undo'])
         if self.emails:
             hks.extend([' ', ('col_hk', 'x:'), 'Select?'])
-            hks.extend([' ', ('col_hk', 'D:'), 'Download'])
+            #FIXME: hks.extend([' ', ('col_hk', 'D:'), 'Download'])
         if self.is_mailbox:
             hks.extend([' ', ('col_hk', 'A:'), 'Add to moggie'])
         else:
@@ -597,6 +603,7 @@ class EmailList(urwid.Pile):
 
     def get_tag_op_map(self):
         # FIXME: Adapt to mailbox searches?
+
         opmap = copy.copy(self.TAG_OP_MAP)
         tags = self.webui_state.get('query_tags')
         if tags:
@@ -605,8 +612,10 @@ class EmailList(urwid.Pile):
             opmap['E'] = (untag, opmap['E'][1] % tdesc)
         else:
             del opmap['E']
-        # FIXME: If no tags in the search result, omit E
-        #        If there are, update the description
+
+        next_week = friendly_date(time.time() + 7*24*3600)
+        opmap['Z'] = ('+hidden +_mp_z' + next_week, opmap['Z'][1])
+
         return opmap
 
     def with_message_tags(self, with_tags):
@@ -682,10 +691,9 @@ class EmailList(urwid.Pile):
             self.run_tag_op(tag_op, comment)
 
     def selection_search_terms(self, mailboxes=True):
-        if self.webui_state.get('details'):
-            # FIXME: Use shlex?
+        try:
             search_terms = self.webui_state['details']['terms'].split()
-        else:
+        except KeyError:
             # FIXME: Use shlex?
             search_terms = self.terms.split()
 
@@ -708,6 +716,8 @@ class EmailList(urwid.Pile):
     def run_tag_op(self, tag_op, comment):
         search_terms = self.selection_search_terms()
         args = tag_op.split()
+        if self.is_mailbox:
+            args.append('+_mp_incoming_old')  # Add to search index
         if comment:
             args.append('--comment=%s' % comment)
         args.append('--')

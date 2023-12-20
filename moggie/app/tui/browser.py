@@ -36,16 +36,14 @@ Click here to show configuration tools."""
 class BrowserLegend(urwid.Pile):
     BLANK = '    '
     LEGEND = [
-        ['a', ('subtle', 'ccount  ('), '-', ('subtle', ': ignores parents)')],
+        ['a', ('subtle', 'ccount   ('), '-', ('subtle', ': ignores parents)')],
         ['c', ('subtle', 'opy, '), 'm', ('subtle', 'ove mail')],
         ['w', ('subtle', 'atch, '), 's', ('subtle', 'ynchronize state')],
         ['t', ('subtle', 'ag: '),
             'I', ('subtle', 'nbox, '),  # Actually, INCOMING ?
-            'D', ('subtle', 'rafts, '),
             'S', ('subtle', 'ent, '),
             'J', ('subtle', 'unk, '),
-            'T', ('subtle', 'rash, '),
-            'A', ('subtle', 'rchive, ... ')]]
+            'T', ('subtle', 'rash')]]
 
     def __init__(self, parent):
         self.parent = parent
@@ -54,7 +52,15 @@ class BrowserLegend(urwid.Pile):
         urwid.Pile.__init__(self, self.widgets)
 
     def make_widgets(self):
-        widgets = []
+        if self.parent.modified:
+            widgets = [
+                urwid.Text([
+                    ('selcount', ' Policy changed, press W to save. ')],
+                    align='center')]
+        else:
+            widgets = [
+                urwid.Text([
+                    ('subtle', 'Import policies:')])]
 
         for i, text in enumerate(self.LEGEND):
             wrap = 'space'
@@ -62,22 +68,11 @@ class BrowserLegend(urwid.Pile):
                 text = ('subtle', text)
                 wrap = 'clip'
             status = [(' ' * i), '.' * (len(self.BLANK) - i)]
-            widgets.append(
-                urwid.Columns([
-                    ('fixed', len(self.BLANK)+1, urwid.Text(status)),
-                    ('weight', 1, urwid.Text(text, wrap=wrap))]))
-
-        if self.parent.modified:
-            widgets.extend([
-                urwid.Divider(),
-                urwid.Columns([
-                    ('weight', 100, urwid.Text('')),
-                    ('fixed', 8, SimpleButton(
-                        label='Reset',
-                        on_select=lambda c: self._on_reset(c))),
-                    ('fixed', 6, SimpleButton(
-                        label='Save',
-                        on_select=lambda c: self._on_save(c)))])])
+            if text:
+                widgets.append(
+                    urwid.Columns([
+                        ('fixed', len(self.BLANK)+1, urwid.Text(status)),
+                        ('weight', 1, urwid.Text(text, wrap=wrap))]))
 
         widgets.append(urwid.Divider())
         return widgets
@@ -211,11 +206,9 @@ class BrowserListWalker(urwid.ListWalker):
             ' ']
         cfg[3] = {
             'inbox': 'I',
-            'drafts': 'D',
             'sent': 'S',
             'junk': 'J',
             'trash': 'T',
-            'archive': 'A',
             '-': '-',
             None: ' '}.get(pol.get('tags'), 't')
         if ' ' in cfg:
@@ -263,16 +256,14 @@ class BrowserListWalker(urwid.ListWalker):
             sel = Selectable(cols, on_select={
                 'enter': _cb(self.on_browse, pos, info),
                 'w': _cb(self.toggle, pos, info, 'watch_policy', 'watch'),
-                's': _cb(self.toggle, pos, info, 'watch_policy', 'sync'),
-                'c': _cb(self.toggle, pos, info, 'copy_policy', 'copy'),
-                'm': _cb(self.toggle, pos, info, 'copy_policy', 'move'),
+                's': _cb(self._fixme, pos, info, 'watch_policy', 'sync'),
+                'c': _cb(self._fixme, pos, info, 'copy_policy', 'copy'),
+                'm': _cb(self._fixme, pos, info, 'copy_policy', 'move'),
                 'a': _cb(self.set_account, pos, info),
                 'I': _cb(self.toggle, pos, info, 'tags', 'inbox'),
-                'D': _cb(self.toggle, pos, info, 'tags', 'drafts'),
                 'S': _cb(self.toggle, pos, info, 'tags', 'sent'),
                 'J': _cb(self.toggle, pos, info, 'tags', 'junk'),
                 'T': _cb(self.toggle, pos, info, 'tags', 'trash'),
-                'A': _cb(self.toggle, pos, info, 'tags', 'archive'),
                 't': _cb(self.set_tag, pos, info)})
             if first:
                 prefix = '\n' if (pos > 0) else ''
@@ -289,6 +280,11 @@ class BrowserListWalker(urwid.ListWalker):
         except:
             logging.exception('Failed to load message')
         raise IndexError
+
+    def _fixme(self, *args):
+        self.parent.tui.show_modal(MessageDialog,
+            'Sorry, this import policy does not work yet!',
+            title='Under Construction')
 
     def toggle(self, pos, path_info, field, value):
         if 'policy.org' not in path_info:
@@ -336,7 +332,7 @@ class BrowserListWalker(urwid.ListWalker):
             self._modified()
         self.parent.tui.show_modal(ChooseTagDialog,
             self.parent.mog_ctx,
-            title='Tag for %s' % self.visible[pos][self.PATH],
+            title='Tag(s) for %s' % friendly_path(self.visible[pos][self.PATH]),
             action=chose_tag,
             default=path_info['policy'].get('tags'),
             create=True,
@@ -401,6 +397,7 @@ class Browser(urwid.Pile):
 
         self.modified = set([])
         self.walker = BrowserListWalker(self)
+        self.legend = None
         self.listbox = urwid.ListBox(self.walker)
         self.suggestions = SuggestionBox(self.tui,
             suggestions=[SuggestAddToMoggie(self, None)],
@@ -416,13 +413,38 @@ class Browser(urwid.Pile):
         self.browse()
 
     def column_hks(self):
-        return [
-            ' ', ('col_hk', 'B:'), 'Browse path']
+        hks = []
+        if self.modified:
+            hks.extend([
+                ' ', ('col_hk', 'R:'), 'Reset',
+                ' ', ('col_hk', 'W:'), 'Save'])
+        return hks + [
+            ' ', ('col_hk', 'N:'), 'New mail?',
+            ' ', ('col_hk', 'O:'), 'Open']
 
     def keypress(self, size, key):
-        if key == 'B':
+        if self.modified and self.legend:
+            if key == 'R':
+                self.legend._on_reset(key)
+                return None
+            if key == 'W':
+                self.legend._on_save(key)
+                return None
+
+        if key == 'N':
+            def popup(*a, **kw):
+                self.tui.show_modal(MessageDialog,
+                    'Checking any watched mailboxes for new mail.\n' +
+                    'Inboxes will be filtered for junk and custom\n' +
+                    'rules applied.',
+                    title='Checking for new mail...')
+            self.mog_ctx.new(on_success=popup)
+            return None
+
+        if key == 'O':
             self.tui.show_modal(BrowsePathDialog, self.mog_ctx)
             return None
+
         return super().keypress(size, key)
 
     def update_content(self, set_focus=False):
@@ -434,11 +456,13 @@ class Browser(urwid.Pile):
             self.contents = [(cat, ('pack', None))]
             return
 
+        self.legend = None
         self.widgets = []
         if len(self.suggestions) and not self.modified:
             self.widgets.append(self.suggestions)
         else:
-            self.widgets.append(BrowserLegend(self))
+            self.legend = BrowserLegend(self)
+            self.widgets.append(self.legend)
 
         rows -= sum(w.rows((30,)) for w in self.widgets)
         self.widgets.append(urwid.BoxAdapter(self.listbox, rows))

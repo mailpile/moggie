@@ -18,7 +18,7 @@ browse, or an IMAP URI (imap://username@imap.example.org/).
 
     def __init__(self, tui, mog_ctx):
         self.mog_ctx = mog_ctx
-        super().__init__(tui, message=self.HELP_TEXT)
+        super().__init__(tui, title='Open ...', message=self.HELP_TEXT)
 
     def make_buttons(self):
         return [

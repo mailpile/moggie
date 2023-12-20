@@ -47,7 +47,6 @@ class ContextList(urwid.ListBox):
         self.walker = urwid.SimpleListWalker([])
         self.v_history = []
         self.v_history_max = 4
-        self.global_hks = {}
 
         self.order = []
         self.contexts = {}
@@ -65,16 +64,9 @@ class ContextList(urwid.ListBox):
         self.moggie.unsubscribe(self.name)
 
     def keypress(self, size, key):
-        if key == 'B':
-            self.tui.show_browser(self.mog_ctx0, history=False)
-            return None
-        elif key in self.global_hks:
-            hk = self.global_hks[key]
-            if isinstance(hk, list):
-                hk = hk[0]
-            if hk:
-                hk()
-                return None
+        #if key == 'B':
+        #    self.tui.show_browser(self.mog_ctx0, history=False)
+        #    return None
         return super().keypress(size, key)
 
     def expand(self, i, activate=True):
@@ -85,7 +77,7 @@ class ContextList(urwid.ListBox):
 
     def column_hks(self):
         hks = []
-        hks.extend([' ', ('col_hk', 'B:'), 'Browse'])
+        #hks.extend([' ', ('col_hk', 'B:'), 'Browse'])
         return hks
 
     def activate_default_view(self):
@@ -200,7 +192,6 @@ class ContextList(urwid.ListBox):
                 return ' %dk' % (tc // 1000)
             return 'oo'
 
-        self.global_hks = {}
         self.crumb = '(moggie is unconfigured)'
         widgets = []
         if self.v_history:
@@ -226,10 +217,7 @@ class ContextList(urwid.ListBox):
             else:
                 last_ctx_name = name
 
-#           sc = ('g%d:' % (i+1)) if (i < 8) else '   '
-            ctx_name = urwid.Text([
-#               ('hotkey', sc),
-                ('subtle', name)], 'left', 'clip')
+            ctx_name = urwid.Text([('subtle', name)], 'left', 'clip')
 
             if self.expanded in (i, ctx_src_id):
                 self.expanded = ctx_src_id
@@ -275,24 +263,19 @@ class ContextList(urwid.ListBox):
 
                     if acount > 3:
                         pass  # FIXME: Add a "more" link, break loop
-                if acount:
-                    widgets.append(urwid.Divider())
 
                 shown = []
                 all_tags = mog_ctx.tags + mog_ctx.ui_tags
                 all_lc_tags = [t.lower() for t in all_tags]
                 for tag, items in self.TAG_ITEMS:
-                    if tag in all_lc_tags or not all_lc_tags:
+                    if tag in all_lc_tags or mog_ctx.default_ui_tags:
                         tc = self.tag_counts[ctx_src_id].get(tag.lower()+'*', 0)
                         for ti, (sc, name, search) in enumerate(items):
                             os = search and {
                                 'enter': _sel_search(search, ctx_src_id)}
-                            if sc and os:
-                                self.global_hks[sc] = os['enter']
-                            sc = (' %s:' % sc) if sc else '   '
                             widgets.append(Selectable(
                                 urwid.Text([
-                                    ('hotkey', sc), name,
+                                    ' %s %s ' % (EMOJI.get('tag', '+'), name),
                                     ('subtle', _friendly_count(tc)
                                                if (ti == 0) else '')]),
                                 on_select=os))
@@ -310,14 +293,11 @@ class ContextList(urwid.ListBox):
                     for ai, tag in enumerate(unshown):
                         action = _sel_search('in:%s' % tag, ctx_src_id)
                         sc = '   '
-                        if count <= len(self.TAG_KEYS):
-                            hk = self.TAG_KEYS[count-1]
-                            sc = (' %s:' % hk)
-                            self.global_hks[hk] = action
                         count += 1
                         name = tag[:1].upper() + tag[1:]
                         widgets.append(Selectable(
-                            urwid.Text([('hotkey', sc), name]),
+                            urwid.Text([
+                                ' %s %s ' % (EMOJI.get('tag', '+'), name)]),
                             on_select={'enter': action}))
                         if ai == 0 and not def_act:
                             self.default_action = def_act = action

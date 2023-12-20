@@ -10,8 +10,6 @@ class MultiChoiceDialog(MessageDialog):
     WANTED_HEIGHT = 4
     WANTED_WIDTH = 70
 
-    DEFAULT_OK = 'OK'
-
     signals = ['close']
 
     def __init__(self, tui, choices,

@@ -1,5 +1,8 @@
 import sys
+
 from .command import CLICommand
+from ...util.friendly import friendly_path
+
 
 TOPICS = {
 #############################################################################
@@ -101,7 +104,7 @@ blown mail client.</p>
 
         moggie search  "(hello AND (world OR planet)) NOT mars"
 
-    (Note that if searcching on the shell, you may need to enclose
+    (Note that if searching from the shell, you may need to enclose
     queries containing the asterisk or parenthesis in quotes to
     avoid accidental shell globbing.)
 
@@ -186,7 +189,7 @@ blown mail client.</p>
     """}
 
 
-def describe_selection(source=None, message_count=None, email=None):
+def describe_selection(source=None, message_count=None, email=None, maxlen=40):
     """
     Describe a selection of messages.
     """
@@ -214,7 +217,11 @@ def describe_selection(source=None, message_count=None, email=None):
         return '%d e-mails' % (message_count)
 
     elif source:
-        return '%s e-mails in (%s)' % (
+        if ' ' not in source and source.startswith('mailbox:'):
+            source = friendly_path(source[8:], maxlen=(maxlen - 13))
+        else:
+            source = '(%s)' % source
+        return '%s e-mails in %s' % (
             'all' if message_count is None else message_count,
             source)
 

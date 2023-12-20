@@ -8,10 +8,13 @@ class MessageDialog(urwid.WidgetWrap):
     WANTED_WIDTH = 60
     WANTED_HEIGHT = 8
 
+    DEFAULT_OK = 'OK'
+
     signals = ['close']
 
     def __init__(self, tui, message='', title=''):
         self.tui = tui
+        self.title = title
 
         self.close_button = CloseButton(
             lambda x: self._emit('close'), style='popsubtle')
@@ -30,7 +33,9 @@ class MessageDialog(urwid.WidgetWrap):
             urwid.AttrWrap(urwid.Filler(self.pile), 'popbg')))
 
     def make_buttons(self):
-        return [SimpleButton('OK', lambda x: self.on_ok(), style='popsubtle')]
+        return [
+            SimpleButton(self.DEFAULT_OK, lambda x: self.on_ok(),
+            style='popsubtle')]
 
     def make_widgets(self):
         return []
@@ -48,6 +53,7 @@ class MessageDialog(urwid.WidgetWrap):
         button_bar = urwid.Columns(button_bar, dividechars=1)
         button_bar.set_focus(1)
 
+        message = message or self.title
         widgets = [urwid.Columns([
             ('weight', 1, urwid.Text(('status', '  %s  ' % message), 'center')),
             ('fixed',  3, self.close_button)])]

@@ -482,7 +482,7 @@ class TuiFrame(urwid.Frame):
                     self.show_modal(SearchDialog)
                 return None
 
-            elif key == 'g':
+            elif key in ('g', '?'):
                 self.show_modal(GoDialog)
 
             elif key == 'z':

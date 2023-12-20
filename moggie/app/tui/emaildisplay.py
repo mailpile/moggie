@@ -56,10 +56,12 @@ Technical details:
 
 
     def __init__(self, mog_ctx, tui, metadata,
-            username=None, password=None, selected=False, parsed=None):
+            username=None, password=None, selected=False, parsed=None,
+            mailbox=None):
         self.name = 'emaildisplay-%.4f' % time.time()
         self.mog_ctx = mog_ctx
         self.tui = tui
+        self.mailbox = mailbox
         self.metadata = metadata
         self.username = username
         self.password = password
@@ -267,8 +269,10 @@ Technical details:
         # This should be using the same logic as the emaillist tag search
         # term generation
         if self.metadata.get('idx'):
-            # FIXME: Sends gigantic ints if we view a mailbox, WRONG.
             args.append('id:%d' % self.metadata['idx'])
+            # FIXME: Magic number is bad
+            if self.mailbox and self.metadata['idx'] > 100000000:
+                args.append('mailbox:%s' % self.mailbox)
         else:
             # FIXME: Sending the full metadata is silly. Also this is the
             #        parsed metadata, now the raw stuff.

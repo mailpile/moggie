@@ -162,7 +162,7 @@ class CommandAutotagTrain(CommandAutotag):
 
 
 class CommandAutotagClassify(CommandAutotag):
-    """moggie autotagclassify <tag1> [<tag2> ...] -- <keywords...>
+    """moggie autotag-classify <tag1> [<tag2> ...] -- <keywords...>
 
     Run the autotagger(s) for the named tags, against the keywords
     provided, returning a breakdown of scores for each tag. If no tags
