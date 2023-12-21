@@ -15,7 +15,7 @@ import time
 import urwid
 
 from ...email.metadata import Metadata
-from ...util.friendly import friendly_date
+from ...util.friendly import friendly_date, friendly_caps
 from ..suggestions import Suggestion
 
 from .choosetagdialog import ChooseTagDialog
@@ -195,6 +195,7 @@ class EmailListWalker(urwid.ListWalker):
                 'enter': lambda x: self.parent.show_email(
                     self.visible[pos], selected=(uuid in self.selected)),
                 'x': lambda x: self.check(uuid),
+                't': lambda x: self.check(uuid),
                 ' ': lambda x: self.check(uuid, display=True)})
 
             if focused:
@@ -338,12 +339,12 @@ class EmailList(urwid.Pile):
         VIEW_THREADS: 'threads_metadata'}
 
     TAG_OP_MAP = {
-        't': ('TAG',    'Tag selected messages'),
-        'u': ('UNTAG',  'Untag selected messages'),
+        'T': ('TAG',    'Tag selected messages'),
+        'U': ('UNTAG',  'Untag selected messages'),
         'E': ('REMOVE', 'Remove tags: %s'),
         'I': ('+read',  'Mark messages read'),
-        'f': ('+urgent','Flag as urgent'),
-        'F': ('-urgent','Unflag, not urgent'),
+        'F': ('+urgent','Flag as urgent'),
+        'N': ('-urgent','Unflag, not urgent'),
         '!': ('+junk',  'Move to junk'),
         '#': ('+trash', 'Move to trash'),
         'Z': ('SNOOZE', 'Snooze messages')}
@@ -440,7 +441,7 @@ class EmailList(urwid.Pile):
         if not self.crumb:
             terms = self.terms
             if terms.startswith('in:'):
-                terms = terms[3].upper() + terms[4:]
+                terms = friendly_caps(terms[3:])
             elif terms == 'all:mail':
                 terms = 'All Mail'
             self.crumb = terms
