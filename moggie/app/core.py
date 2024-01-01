@@ -642,6 +642,13 @@ main app worker. Hints:
         else:
             is_indexed = is_unindexed = False
 
+        # FIXME: Limit and skip are nonsensical if there are multiple
+        #        mailboxes, but also if augmentation adds/removes things.
+        # A nicer UX might be for this to become a background job with
+        # a wall-clock deadline, where we keep collecting results which
+        # the user can access by re-calling this method? We can then
+        # notify the user that more results are available and pause until
+        # they have acked and loaded the results.
         info = []
         loop = asyncio.get_event_loop()
         for mailbox in (api_request.get('mailboxes') or []):
