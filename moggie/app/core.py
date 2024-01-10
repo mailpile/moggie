@@ -169,6 +169,7 @@ main app worker. Hints:
             ksc, sopc, = context.get_openpgp_settings()
             log_level = self.worker.log_level
             worker = OpenPGPWorker(
+                self.config.unique_app_id,
                 self.worker.worker_dir, self.worker.profile_dir,
                 self.config.get_aes_keys(),
                 name=worker_name,
@@ -209,6 +210,7 @@ main app worker. Hints:
         missing_metadata = self.metadata is None
         if missing_metadata:
             self.metadata = MetadataWorker(
+                self.config.unique_app_id,
                 self.worker.worker_dir, self.worker.profile_dir,
                 aes_keys,
                 notify=notify_url,
@@ -217,6 +219,7 @@ main app worker. Hints:
 
         if self.search is None:
             self.search = SearchWorker(
+                self.config.unique_app_id,
                 self.worker.worker_dir, self.worker.profile_dir,
                 self.metadata,
                 aes_keys,
@@ -249,7 +252,9 @@ main app worker. Hints:
                 logging.warning(
                     '[app] Failed to start encrypting workers. Need login?')
 
-        self.storage = StorageWorkers(self.worker.worker_dir,
+        self.storage = StorageWorkers(
+            self.config.unique_app_id,
+            self.worker.worker_dir,
             metadata=self.metadata,
             ask_secret=self._fs_ask_secret,
             set_secret=self._fs_set_secret,
@@ -258,7 +263,9 @@ main app worker. Hints:
 
         if (self.storage and self.search and self.metadata
                 and (self.importer is None)):
-            self.importer = ImportWorker(self.worker.worker_dir,
+            self.importer = ImportWorker(
+                self.config.unique_app_id,
+                self.worker.worker_dir,
                 fs_worker=self.storage,
                 app_worker=self.worker,
                 search_worker=self.search,

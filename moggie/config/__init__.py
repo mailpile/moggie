@@ -646,6 +646,7 @@ class AppConfig(ConfigParser):
 
     ACCESS_ZERO = 'Access 0'
     CONTEXT_ZERO = 'Context 0'
+    UNSET_APP_UID = 'unset'
 
     STANDARD_ATTRIBUTE_TAGS = (
        'Unread', 'Replied', 'Forwarded', 'Flagged')
@@ -667,6 +668,7 @@ class AppConfig(ConfigParser):
         ('display_html_remote_images', PREF_ASK, PREF_BASK)]
 
     INITIAL_SETTINGS = [
+       (SECRETS, 'unique_app_id', UNSET_APP_UID),  # Not really a secret
        (GENERAL, 'config_backups', '10'),
        (GENERAL, 'default_cli_context', 'Context 0'),
        (GENERAL, 'openpgp_sop_client', DEFAULT_SOP_CONFIG),
@@ -736,6 +738,12 @@ class AppConfig(ConfigParser):
 
             if initialized == len(self.INITIAL_SETTINGS):
                 self.detect_local_accounts()
+
+            self.unique_app_id = self[self.SECRETS]['unique_app_id']
+            if self[self.SECRETS]['unique_app_id'] == self.UNSET_APP_UID:
+                self.unique_app_id = '%x' % struct.unpack('L', os.urandom(8))[0]
+                self.set(self.SECRETS, 'unique_app_id', self.unique_app_id,
+                    save=False)
 
             try:
                 self.last_rotate = os.path.getmtime(self.filepath)

@@ -73,11 +73,12 @@ class BaseWorker(Process):
     HTTP_JSON = HTTP_200 + b'Content-Type: application/json\r\n'
     HTTP_OK   = HTTP_JSON + b'Content-Length: 17\r\n\r\n{"result": true}\n'
 
-    def __init__(self, status_dir,
+    def __init__(self, unique_app_id, status_dir,
             host=None, port=None, name=None, notify=None,
             log_level=logging.ERROR, shutdown_idle=None):
         Process.__init__(self)
 
+        self.unique_app_id = unique_app_id
         self.name = name or self.KIND
         self.keep_running = True
         self.url = None
@@ -901,7 +902,8 @@ class BaseWorker(Process):
 
 
 class WorkerPool:
-    def __init__(self, workers):
+    def __init__(self, unique_app_id, workers):
+        self.unique_app_id = unique_app_id
         self.lock = threading.RLock()
         self.count = 0
         self.workers = []

@@ -48,7 +48,8 @@ class OpenPGPWorker(BaseWorker):
     PEEK_BYTES = 8192
     BLOCK = 8192
 
-    def __init__(self, status_dir, data_directory, encryption_keys,
+    def __init__(self,
+            unique_app_id, status_dir, data_directory, encryption_keys,
             name=KIND,
             notify=None,
             log_level=logging.ERROR,
@@ -59,7 +60,7 @@ class OpenPGPWorker(BaseWorker):
             tag_namespace=None,
             search=None):
 
-        BaseWorker.__init__(self, status_dir,
+        BaseWorker.__init__(self, unique_app_id, status_dir,
             name=name, notify=notify,
             log_level=log_level, shutdown_idle=shutdown_idle)
 

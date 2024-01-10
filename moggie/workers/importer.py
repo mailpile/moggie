@@ -46,7 +46,7 @@ class ImportWorker(BaseWorker):
     TICK_T = 300
     IDLE_T = 15
 
-    def __init__(self, status_dir,
+    def __init__(self, unique_app_id, status_dir,
             fs_worker=None,
             app_worker=None,
             search_worker=None,
@@ -55,7 +55,7 @@ class ImportWorker(BaseWorker):
             name=KIND,
             log_level=logging.ERROR):
 
-        BaseWorker.__init__(self, status_dir,
+        BaseWorker.__init__(self, unique_app_id, status_dir,
             name=name, notify=notify, log_level=log_level)
         self.functions.update({
             b'autotag': (True, self.api_autotag),

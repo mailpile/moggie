@@ -246,7 +246,7 @@ class PublicWorker(BaseWorker):
     PUBLIC_PREFIXES = []
     CONFIG_SECTION = None
 
-    def __init__(self, profile_dir,
+    def __init__(self, unique_app_id, profile_dir,
             host=None, port=None, kite_name=None, kite_secret=None, name=None,
             log_level=logging.ERROR):
 
@@ -255,7 +255,7 @@ class PublicWorker(BaseWorker):
         if not os.path.exists(self.worker_dir):
             os.mkdir(self.worker_dir, 0o700)
 
-        BaseWorker.__init__(self, self.worker_dir,
+        BaseWorker.__init__(self, unique_app_id, self.worker_dir,
             host=host, port=port, name=name, log_level=log_level)
 
         self.httpd = None
@@ -306,7 +306,7 @@ class PublicWorker(BaseWorker):
             kite_name = args.pop(0)
             kite_secret = args.pop(0)
 
-        return cls(workdir,
+        return cls(cfg.unique_app_id, workdir,
             host=host, port=int(port),
             kite_name=kite_name, kite_secret=kite_secret,
             log_level=int(log_level))

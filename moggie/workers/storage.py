@@ -100,10 +100,10 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
     PARSE_CACHE_MIN = 200
     PARSE_CACHE_TTL = 180
 
-    def __init__(self, status_dir, backend,
+    def __init__(self, unique_app_id, status_dir, backend,
             name=KIND, notify=None, log_level=logging.ERROR,
             shutdown_idle=None):
-        BaseWorker.__init__(self, status_dir,
+        BaseWorker.__init__(self, unique_app_id, status_dir,
             name=name, notify=notify, log_level=log_level,
             shutdown_idle=shutdown_idle)
         self.backend = backend
@@ -381,7 +381,7 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
 
 
 class StorageWorkers(WorkerPool, StorageWorkerApi):
-    def __init__(self, worker_dir, storage=None, **kwargs):
+    def __init__(self, unique_app_id, worker_dir, storage=None, **kwargs):
         if storage is None:
             storage = FileStorage(
                 relative_to=os.path.expanduser('~'),
@@ -389,7 +389,7 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
                 set_secret=kwargs.get('set_secret'),
                 metadata=kwargs.get('metadata'))
         self.fs = storage
-        fs_args = (worker_dir, self.fs)
+        fs_args = (unique_app_id, worker_dir, self.fs)
         fs_kwa = {
             'name': 'fs',
             'notify': kwargs.get('notify'),
@@ -401,14 +401,14 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
             ask_secret=kwargs.get('ask_secret'),
             set_secret=kwargs.get('set_secret'),
             metadata=kwargs.get('metadata'))
-        imap_args = (worker_dir, self.imap)
+        imap_args = (unique_app_id, worker_dir, self.imap)
         imap_kwa = {
             'name': 'imap',
             'notify': kwargs.get('notify'),
             'log_level': kwargs.get('log_level', logging.ERROR)}
         self.imap_worker_spec = ('imap', StorageWorker, imap_args, imap_kwa)
 
-        super().__init__([
+        super().__init__(unique_app_id, [
             ('read,write', StorageWorker, fs_args, fs_kwa)])
 
     def auto_add_worker(self, pop, which, capabilities):

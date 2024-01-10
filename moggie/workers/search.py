@@ -40,10 +40,11 @@ class SearchWorker(BaseWorker):
     def Connect(cls, status_dir):
         return cls(status_dir, None, None, None).connect(autostart=False)
 
-    def __init__(self, status_dir, engine_dir, metadata, encryption_keys,
+    def __init__(self,
+            unique_app_id, status_dir, engine_dir, metadata, encryption_keys,
             name=KIND, defaults=None, notify=None, log_level=logging.ERROR):
 
-        BaseWorker.__init__(self, status_dir,
+        BaseWorker.__init__(self, unique_app_id, status_dir,
             name=name, notify=notify, log_level=log_level)
         self.functions.update({
             b'add_results':  (True, self.api_add_results),
