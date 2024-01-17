@@ -99,11 +99,14 @@ class SearchWorker(BaseWorker):
         try:
             tid = int(thread_id.split(':')[-1])
             info = self.metadata.metadata([tid], threads=True, only_ids=True)
-            if info:
-                ids = ','.join(('%s' % i) for i in info[0]['messages'])
+            if info and 'metadata' in info:
+                messages = info['metadata'][0]['messages']
+                ids = ','.join(('%s' % i) for i in messages)
                 return 'id:%s' % ids
         except:
-            logging.warning('Failed to load thread message IDs for %s' % thread_id)
+            logging.exception(
+                'Failed to load thread message IDs for thread:%s (%s)'
+                % (tid, thread_id))
         return thread_id if tid is None else 'id:%s' % (tid)
 
     def add_results(self, results, callback_chain=None, touch=True, wait=True):
