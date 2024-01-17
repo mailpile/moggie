@@ -211,7 +211,7 @@ class SearchEngine:
         + '[^\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u0180-\u024F])')
 
     def __init__(self, workdir,
-            name='search', encryption_keys=None, defaults=None, maxint=0):
+            name='search', encryption_keys=None, defaults=None, maxint=1):
 
         self.records = RecordStore(os.path.join(workdir, name), name,
             salt=None, # FIXME: This must be set, OR ELSE
@@ -249,7 +249,7 @@ class SearchEngine:
         self.l1_begin = self.IDX_MAX_RESERVED + 1
         self.l2_begin = self.l1_begin + self.config['l1_keywords']
         self.maxint = maxint
-        self.deleted = IntSet()
+        self.deleted = IntSet([0])  # FIXME: Should this persist??
         self.lock = threading.RLock()
 
         # Profiling...
@@ -504,8 +504,8 @@ class SearchEngine:
             for r_id in r_ids:
                 if not isinstance(r_id, int):
                     raise ValueError('Results must be integers')
-                if r_id > self.maxint:
-                    self.maxint = r_id
+                if r_id >= self.maxint:
+                    self.maxint = r_id + 1
                 for kw in kw_list + extra_kws:
                     kw = kw.replace('*', '')  # Otherwise partial search breaks..
 
@@ -851,7 +851,7 @@ class SearchEngine:
         if term == IntSet.All:
             if tag_ns:
                 return self['in:@%s' % tag_ns]
-            return IntSet.All(self.maxint + 1)
+            return IntSet.All(self.maxint)
 
         raise ValueError('Unknown supported search type: %s' % type(term))
 

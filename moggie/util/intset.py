@@ -68,6 +68,7 @@ class IntSet:
         for i in range(iset.bits * maxpos, count):
             mask |= (1 << (i % iset.bits))
         iset.npa[maxpos] = int(iset.npa[maxpos]) & mask
+        iset.npa[0] = int(iset.npa[0]) - 1  # Exclude zero
 
         return iset
 
