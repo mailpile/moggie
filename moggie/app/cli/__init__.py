@@ -14,6 +14,10 @@ def _lazy_help(cls):
     import moggie.app.cli.help as mod
     return getattr(mod, cls)
 
+def _lazy_mailboxes(cls):
+    import moggie.app.cli.mailboxes as mod
+    return getattr(mod, cls)
+
 def _lazy_notmuch(cls):
     import moggie.app.cli.notmuch as mod
     return getattr(mod, cls)
@@ -57,6 +61,11 @@ CLI_COMMANDS = LazyLoader({
 
     'email': (_lazy_email, 'CommandEmail'),
     'parse': (_lazy_email, 'CommandParse'),
+
+    'copy': (_lazy_mailboxes, 'CommandCopy'),
+    'move': (_lazy_mailboxes, 'CommandMove'),
+    'remove': (_lazy_mailboxes, 'CommandRemove'),
+    'sync': (_lazy_mailboxes, 'CommandSync'),
 
     'welcome': (_lazy_admin, 'CommandWelcome'),
     'unlock':  (_lazy_admin, 'CommandUnlock'),
