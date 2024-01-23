@@ -78,7 +78,7 @@ class BaseWorker(Process):
             log_level=logging.ERROR, shutdown_idle=None):
         Process.__init__(self)
 
-        self.unique_app_id = unique_app_id
+        self.unique_app_id = unique_app_id or b'moggie'
         self.name = name or self.KIND
         self.keep_running = True
         self.url = None
@@ -202,15 +202,16 @@ class BaseWorker(Process):
             signal.signal(signal.SIGUSR2, self.log_more)
         configure_logging(
             type(self).__name__, stdout=self.LOG_STDOUT, level=self.log_level)
-        logging.info('[%s] Started %s, pid=%d'
-            % (self.name, type(self).__name__, os.getpid()))
+        logging.info('[%s] Started %s, pid=%d, unique_app_id=%s'
+            % (self.name, type(self).__name__, os.getpid(), self.unique_app_id))
 
         close_private_fds()
         try:
             if self.NICE and hasattr(os, 'nice'):
                 os.nice(self.NICE)
             if setproctitle:
-                setproctitle('%s: %s' % (APPNAME, self.name))
+                setproctitle(
+                    '%s/%s: %s' % (APPNAME, self.unique_app_id[:6], self.name))
 
             self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self._sock.bind((self._want_host, self._want_port))
@@ -232,8 +233,8 @@ class BaseWorker(Process):
             logging.exception('Crashed!')
         finally:
             self._sock.close()
-            logging.info('[%s] Stopped %s, pid=%d'
-                % (self.name, type(self).__name__, os.getpid()))
+            logging.info('[%s] Stopped %s, pid=%d, unique_app_id=%s'
+                % (self.name, type(self).__name__, os.getpid(), self.unique_app_id))
             try:
                 os.remove(self._status_file)
                 logging.shutdown()
@@ -288,7 +289,9 @@ class BaseWorker(Process):
                         logging.debug(
                             'Invalid secret (for %s): %s' % (args, secret))
                         self.status['requests_ignored'] += 1
-                        client.send(secret and self.HTTP_403 or self.HTTP_400)
+                        client.send(
+                            (secret and self.HTTP_403 or self.HTTP_400) +
+                            bytes(self.unique_app_id, 'utf-8'))
                 else:
                     logging.warning('Bad method or data: %s' % peeked[:20])
                     self.status['requests_ignored'] += 1
@@ -367,10 +370,12 @@ class BaseWorker(Process):
             result = None
         if conn:
             conn.close()
-        if (result != self.HTTP_403):
+        if not (result and result.startswith(self.HTTP_403)):
             logging.debug(
                 '[%s] Unexpected PING response: %s' % (self.name, result))
-        return (result == self.HTTP_403)
+            return False
+        self.unique_app_id = str(result.strip().rsplit()[-1], 'utf-8')
+        return True
 
     def connect(self, autostart=True, quick=False):
         if (self.url or self._load_url()) and (quick or self._ping()):

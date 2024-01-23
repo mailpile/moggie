@@ -277,7 +277,10 @@ FIXME: Document html and html formats!
             top = msgs.get(tid, {})
             md = msgs.get(thread['hits'][0], {})
 
-            ts = min(msgs[i]['ts'] for i in thread['hits'])
+            try:
+                ts = min(msgs[i]['ts'] for i in thread['hits'] if i in msgs)
+            except ValueError:
+                ts = 0
             fc = sum(len(m['ptrs']) for m in msgs.values())
 
             tags = []
@@ -673,6 +676,8 @@ FIXME: Document html and html formats!
             self.print_html_end(post)
 
     def _get_exporter(self, cls, **kwargs):
+        if self.worker:
+            kwargs['moggie_id'] = self.worker.unique_app_id
         if self.exporter is None:
             password = (self.options.get('--zip-password=') or [None])[-1]
             class _wwrap:
@@ -701,20 +706,22 @@ FIXME: Document html and html formats!
             exporter.close()
 
     async def emit_result_mbox(self, result, first=False, last=False):
-        exporter = self._get_exporter(MboxExporter)
+        # FIXME: Make dest configurable via CLI option?
+        exporter = self._get_exporter(MboxExporter, dest='search-mbox')
         return self._export(exporter, result, first, last)
 
     async def emit_result_zip(self, result, first=False, last=False):
-        exporter = self._get_exporter(EmlExporter)
+        exporter = self._get_exporter(EmlExporter, dest='search-zip')
         return self._export(exporter, result, first, last)
 
     async def emit_result_maildir(self, result, first=False, last=False):
-        exporter = self._get_exporter(MaildirExporter)
+        exporter = self._get_exporter(MaildirExporter, dest='search-maildir')
         return self._export(exporter, result, first, last)
 
     async def emit_result_mailzip(self, result, first=False, last=False):
-        exporter = self._get_exporter(
-            MaildirExporter, output=MaildirExporter.AS_ZIP)
+        exporter = self._get_exporter(MaildirExporter,
+            output=MaildirExporter.AS_ZIP,
+            dest='search-mailzip')
         return self._export(exporter, result, first, last)
 
     def get_output(self):

@@ -30,7 +30,7 @@ class ZipWriter:
     CAN_ENCRYPT = HAVE_ZIP_AES
 
     def __init__(self, fd, d_acl=0o040750, f_acl=0o000640, password=None):
-        self.zf = self._create(fd, password)
+        self.zf = self._open_or_create(fd, password)
 
         # This kludge keeps us compatible with both pyzipper and zipfile
         self.zipinfo_cls = zipfile.ZipInfo
@@ -43,16 +43,25 @@ class ZipWriter:
             self.add_file('README.txt', time.time(), ENCRYPTED_README,
                 encrypt=False)
 
-    def _create(self, fd, password):
+    def _open_or_create(self, fd, password):
+        mode = 'w'
+        try:
+            cur = fd.tell()
+            fd.seek(0, 2)
+            if fd.tell() != cur:
+                fd.seek(cur, 0)
+                mode = 'a'
+        except (AttributeError, IOError, OSError):
+            pass
         if password:
             zf = zipfile.AESZipFile(fd,
                  compression=zipfile.ZIP_DEFLATED,
-                 mode='w')
+                 mode=mode)
             zf.setpassword(password)
             zf.setencryption(zipfile.WZ_AES, nbits=256)
             return zf
         else:
-            return zipfile.ZipFile(fd, mode='w')
+            return zipfile.ZipFile(fd, mode=mode)
 
     def _tt(self, ts):
         return datetime.datetime.fromtimestamp(ts).timetuple()
@@ -66,6 +75,7 @@ class ZipWriter:
         self.zf.writestr(dirent, b'')
 
     def add_file(self, fn, ts, data, encrypt=True):
+        # FIXME: If the file already exists, replace it with new contents?
         fi = self.zipinfo_cls(filename=fn, date_time=self._tt(ts))
         fi.external_attr = self.f_acl << 16
         fi.compress_type = zipfile.ZIP_DEFLATED
@@ -81,7 +91,7 @@ class ZipWriter:
 class TarWriter(ZipWriter):
     CAN_ENCRYPT = False
 
-    def _create(self, fd, password):
+    def _open_or_create(self, fd, password):
         if password:
             raise OSError('Encrypted Tar files are not implemented')
         return tarfile.open(fileobj=fd, mode='w:gz')
@@ -114,13 +124,15 @@ class MaildirExporter(BaseExporter):
     which include our read/unread status and match our internal
     metadata/tags.
     """
-    EOL = b'\n'
     AS_ZIP = 0
     AS_TAR = 1
     AS_DEFAULT = AS_TAR
     SUBDIRS = ('cur', 'new', 'tmp')
     PREFIX = 'cur/'
     SUFFIX = ''
+    MANGLE_ADD_FROM = False
+    MANGLE_ADD_HEADERS = False
+    MANGLE_FIX_EOL = b'\n'
     BASIC_FLAGS = {
         'forwarded': 'P',
         'bounced':   'P',
@@ -131,8 +143,10 @@ class MaildirExporter(BaseExporter):
         'flagged':   'F',
         'trash':     'T'}
 
-    def __init__(self, real_fd, dirname=None, output=None, password=None, eol=None):
-        self.eol = self.EOL if (eol is None) else eol
+    def __init__(self, real_fd,
+            dirname=None, output=None, eol=None,
+            password=None, moggie_id=None, dest=None):
+        self.eol = self.MANGLE_FIX_EOL if (eol is None) else eol
         if output is None:
             output = self.AS_DEFAULT
         if output == self.AS_TAR:
@@ -144,6 +158,7 @@ class MaildirExporter(BaseExporter):
 
         now = int(time.time())
         self.real_fd = real_fd
+        # FIXME: Add the ability to update an existing .ZIP archive
         self.writer = ocls(real_fd, password=password)
 
         if dirname is None:
@@ -156,7 +171,8 @@ class MaildirExporter(BaseExporter):
         for sub in self.SUBDIRS:
             self.writer.mkdir(self.basedir + sub, now)
 
-        super().__init__(self.writer)
+        super().__init__(self.writer,
+            password=password, moggie_id=moggie_id, dest=dest)
 
     def can_encrypt(self):
         return self.writer.CAN_ENCRYPT
@@ -178,17 +194,21 @@ class MaildirExporter(BaseExporter):
         SEQ += 1
 
         ts = metadata.timestamp
-        tags = copy.copy(metadata.more.get('tags', []))
+        idx = metadata.idx
+        tags = [t.split(':')[-1] for t in metadata.more.get('tags', [])]
         taglist = ','.join(tags)
 
-        filename = '%s%s%d.%d.moggie=%s%s%s' % (
+        filename = '%s%smoggie-%s.%x.%x.%d=%s%s%s' % (
             self.basedir, self.PREFIX,
-            ts, SEQ, taglist, self.flags(tags), self.SUFFIX)
+            str(self.sync_id, 'utf-8'), idx, ts, SEQ,
+            taglist, self.flags(tags), self.SUFFIX)
 
-        if self.eol == b'\n':
-            message = message.replace(b'\r\n', b'\n')
-        else:
-            message = message.replace(b'\r\n', b'\n').replace(b'\n', self.eol)
+        message = self.Transform(metadata, message,
+            add_from=self.MANGLE_ADD_FROM,
+            add_headers=self.MANGLE_ADD_HEADERS,
+            add_moggie_sync=(self.MANGLE_ADD_HEADERS and self.sync_id),
+            mangle_from=False,
+            fix_newlines=self.eol)
 
         return (filename, ts, message)
 
@@ -200,7 +220,9 @@ class EmlExporter(MaildirExporter):
     SUBDIRS = []
     PREFIX = ''
     SUFFIX = '.eml'
-    EOL = b'\r\n'   # .EML is a Windows thing?
+    MANGLE_ADD_FROM = True
+    MANGLE_ADD_HEADERS = True
+    MANGLE_FIX_EOL = b'\r\n'   # .EML is a Windows thing?
 
     AS_DEFAULT = MaildirExporter.AS_ZIP
 
@@ -209,13 +231,6 @@ class EmlExporter(MaildirExporter):
 
     def default_basedir(self):
         return ''
-
-    def transform(self, metadata, message):
-        # Embed tags and read status in headers, and add the leading From
-        # line so the files can be opened as individual mboxes.
-        message = MboxExporter.MboxTransform(metadata, message,
-            mangle_from=False, add_from=True, fix_newlines=False)
-        return super().transform(metadata, message)
 
 
 if __name__ == '__main__':

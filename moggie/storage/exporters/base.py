@@ -1,4 +1,21 @@
+import datetime
+import hashlib
+import re
+import time
+
 from io import BytesIO
+
+
+def _b(t):
+    return t if isinstance(t, bytes) else bytes(t, 'utf-8')
+
+def _u(t):
+    return t if isinstance(t, str) else str(t, 'utf-8')
+
+def generate_sync_id(moggie_id, dest):
+    return '%s-%s' % (
+        _u(moggie_id)[:6],
+        hashlib.sha1(_b(dest) + _b(moggie_id)).hexdigest()[:10])
 
 
 class ClosableBytesIO(BytesIO):
@@ -9,7 +26,7 @@ class ClosableBytesIO(BytesIO):
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._closed = False 
+        self._closed = False
 
     def cleanup(self):
         super().close()
@@ -24,9 +41,20 @@ class ClosableBytesIO(BytesIO):
 
 
 class BaseExporter:
-    def __init__(self, outfile, password=None):
+    STATUS_HEADER = b'Status:'
+    TAGS_HEADER = b'Tags:'
+    SYNC_HEADER = b'X-Moggie-Sync-%s:'
+    CL_HEADER = b'Content-Length:'
+
+    def __init__(self, outfile, password=None, moggie_id=None, dest=None):
         self.fd = outfile
         self.password = password
+        self.moggie_id = moggie_id
+        self.dest = dest
+        if dest and moggie_id:
+            self.sync_id = bytes(generate_sync_id(moggie_id, dest), 'utf-8')
+        else:
+            self.sync_id = None
 
     def can_encrypt(self):
         return False
@@ -40,12 +68,79 @@ class BaseExporter:
     def close(self):
         self.fd.close()
 
-    def transform(self, metadata, message):
-        """Prepare the message for writing out to the archive."""
-        return bytearray(message)
-
     def export(self, metadata, message):
         self.fd.write(self.transform(metadata, message))
+
+    def transform(self, metadata, message):
+        """Prepare the message for writing out to the archive."""
+        return self.Transform(metadata, message, add_moggie_sync=self.sync_id)
+
+    @classmethod
+    def Transform(cls, metadata, message,
+            add_from=False,
+            add_headers=False,
+            add_moggie_sync=None,  # Defaults to same value as add_headers
+            mangle_from=False,
+            fix_newlines=False):
+        # Convert to bytes and escape any bare From or >From lines
+        if mangle_from:
+            message = re.sub(b'\n(>*)From ', b'\n>\\1From ', message)
+
+        if fix_newlines:
+            # mbox is a Unix format, so this is the newline convention we want.
+            eol = b'\n' if (fix_newlines is True) else fix_newlines
+            eol = bytes(eol, 'utf-8') if isinstance(eol, str) else eol
+            if eol == b'\r\n':
+                message = bytearray(
+                    message.replace(b'\r', b'').replace(b'\n', b'\r\n'))
+            else:
+                message = bytearray(message.replace(b'\r\n', eol))
+        else:
+            # What is our newline convention?
+            eol = b'\r\n' if (b'\r\n' in message[:256]) else b'\n'
+            message = bytearray(message)
+
+        # Add the leading From delimeter, if not already present
+        if not message.startswith(b'From ') and add_from:
+            dt = datetime.datetime.fromtimestamp(metadata.timestamp)
+            dt = bytes(dt.strftime('%a %b %d %T %Y'), 'utf-8')
+            message[:0] = bytearray(b'From moggie@localhost  %s%s' % (dt, eol))
+
+        # Make sure we end with some newlines
+        while not message.endswith(eol * 2):
+            message += eol
+
+        hend = message.find(eol * 2)
+        def _add_or_update(header, new_value):
+            h_beg = message[:hend].find(eol + header)
+            if h_beg > 0:
+                h_end = h_beg + 2 + message[h_beg+2:].find(eol)
+            else:
+                h_beg = h_end = hend
+            message[h_beg:h_end] = eol + header + b' ' + new_value
+
+        # Update message headers with tags
+        if add_headers and (hend > 0):
+            cl = len(message) - (hend + 3*len(eol))
+            _add_or_update(cls.CL_HEADER, b'%d' % cl)
+
+            if metadata:
+                tags = [t.split(':')[-1] for t in metadata.more.get('tags', [])]
+                if tags:
+                    taglist = bytes(', '.join(tags), 'utf-8')
+                    _add_or_update(cls.TAGS_HEADER, taglist)
+                if 'read' in tags:
+                    _add_or_update(cls.STATUS_HEADER, b'RO')
+                else:
+                    _add_or_update(cls.STATUS_HEADER, b'O')
+
+                if add_moggie_sync:
+                    info = b'ts=%x; id=%x' % (
+                        int(time.time()),
+                        metadata.idx)
+                    _add_or_update(cls.SYNC_HEADER % add_moggie_sync, info)
+
+        return message
 
 
 if __name__ == '__main__':
