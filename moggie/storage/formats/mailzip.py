@@ -6,6 +6,7 @@ import pyzipper as zipfile
 
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
+from ...email.sync import get_fn_sync_info
 from ...email.util import quick_msgparse, make_ts_and_Metadata
 from ...email.util import mk_maildir_idx, unpack_maildir_idx
 from ...util.mailpile import PleaseUnlockError
@@ -100,7 +101,7 @@ class FormatMailzip(FormatBytes):
         (p2, h2) = unpack_maildir_idx(idx2)
         return (h1 and h2 and (h1 == h2))
 
-    def iter_email_metadata(self, skip=0, ids=None, reverse=False):
+    def iter_email_metadata(self, skip=0, ids=None, reverse=False, sync_id=None):
         now = int(time.time())
         lts = 0
 
@@ -136,6 +137,10 @@ class FormatMailzip(FormatBytes):
                     Metadata.PTR(Metadata.PTR.IS_FS, path, len(obj), i),
                     hdrs)
                 md[Metadata.OFS_IDX] = mk_maildir_idx(key[1:], i)
+                if sync_id:
+                    sync_info = get_fn_sync_info(sync_id, key)
+                    if sync_info:
+                        md.more['sync_info'] = sync_info
                 yield(md)
         except (KeyError, ValueError, TypeError) as e:
             logging.exception('Failed to read mailbox')

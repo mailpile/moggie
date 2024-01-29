@@ -22,6 +22,7 @@ import re
 from ...email.metadata import Metadata
 from ...email.headers import parse_header
 from ...email.parsemime import parse_message as ep_parse_message
+from ...email.sync import generate_sync_header, get_header_sync_info
 from ...email.util import quick_msgparse, make_ts_and_Metadata
 from ...email.util import mk_packed_idx, unpack_idx
 from ...util.dumbcode import *
@@ -183,7 +184,7 @@ From: nobody <deleted@example.org>\r\n\
             for r, b, he, e, hdrs in self.iter_email_offsets(skip=skip))
 
     def iter_email_metadata(self,
-            skip=0, ids=None, iterator=None, reverse=False):
+            skip=0, ids=None, iterator=None, reverse=False, sync_id=None):
         obj = self.container
         now = int(time.time())
         lts = 0
@@ -198,10 +199,15 @@ From: nobody <deleted@example.org>\r\n\
             for beg, hend, end, hdrs, rank in iterator:
                 key = self._range_to_key(beg, 0, _data=hdrs)
                 path = self.get_tagged_path(key)
+                raw_header = obj[beg:hend]
                 lts, md = make_ts_and_Metadata(
-                    now, lts, obj[beg:hend], 
+                    now, lts, raw_header,
                     Metadata.PTR(Metadata.PTR.IS_FS, path, end-beg, rank),
                     hdrs)
+                if sync_id:
+                    sync_info = get_header_sync_info(sync_id, raw_header)
+                    if sync_info:
+                        md.more['sync_info'] = sync_info
                 md[Metadata.OFS_IDX] = int(key[1:], 16)
                 yield(md)
         except (ValueError, TypeError):

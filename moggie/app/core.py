@@ -663,6 +663,8 @@ main app worker. Hints:
                         terms=terms,
                         username=api_request['username'],
                         password=api_request['password'],
+                        sync_src=api_request['sync_src'],
+                        sync_dest=api_request['sync_dest'],
                         limit=api_request['limit'],
                         skip=api_request['skip']))
 

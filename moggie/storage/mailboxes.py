@@ -42,7 +42,7 @@ class MailboxStorageMixin:
         return mailbox
 
     def iter_mailbox(self, key,
-            skip=0, limit=None, ids=None, reverse=False,
+            skip=0, limit=None, ids=None, reverse=False, sync_id=None,
             username=None, password=None, context=None, secret_ttl=None):
         parser = iter([])
         if (limit is None) or (limit > 0):
@@ -54,7 +54,7 @@ class MailboxStorageMixin:
                     self.unlock_mailbox(
                         mailbox, username, password, context, secret_ttl)
                 parser = mailbox.iter_email_metadata(
-                    skip=skip, ids=ids, reverse=reverse)
+                    skip=skip, ids=ids, reverse=reverse, sync_id=sync_id)
 
         if (limit is None) and (ids is None):
             yield from parser
@@ -81,23 +81,6 @@ class MailboxStorageMixin:
                 limit -= 1
                 if limit <= 0:
                     break
-
-    def iter_metadata(self, key, ids,
-            username=None, password=None, context=None, secret_ttl=None):
-        mailbox = self.get_mailbox(key)
-
-        if mailbox is None:
-            logging.debug('Failed to open mailbox: %s' % key)
-            return
-        elif username or password:
-            self.unlock_mailbox(
-                mailbox, username, password, context, secret_ttl)
-
-        for _id in ids:
-            try:
-                yield mailbox.get_metadata(_id)
-            except KeyError:
-                pass
 
     def message(self, metadata, with_ptr=False,
             username=None, password=None, context=None, secret_ttl=None):

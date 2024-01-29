@@ -47,7 +47,7 @@ class ImapMailbox:
         p2, h2 = unpack_idx(idx2, count=2)
         return (h1 and h2 and (h1 == h2))
 
-    def iter_email_metadata(self, skip=0, ids=None, reverse=False):
+    def iter_email_metadata(self, skip=0, ids=None, reverse=False, sync_id=None):
         lts = 0
         now = time.time()
 

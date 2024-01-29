@@ -26,6 +26,7 @@ from ..storage.imap import ImapStorage
 from ..util.dumbcode import *
 from ..util.mailpile import PleaseUnlockError
 from ..email.metadata import Metadata
+from ..email.sync import generate_sync_id
 
 from .base import BaseWorker, WorkerPool
 
@@ -44,17 +45,19 @@ class StorageWorkerApi:
             key, details, recurse, relpath, username, password)
 
     async def async_mailbox(self, loop, key,
-            skip=0, limit=None, reverse=False,
-            username=None, password=None, terms=None):
+            skip=0, limit=None, reverse=False, terms=None,
+            username=None, password=None, sync_src=None, sync_dest=None):
         return await self.async_call(loop, 'mailbox',
             key, terms, skip, limit, reverse, username, password,
+            sync_src, sync_dest,
             hide_qs=True)  # Keep passwords out of web logs
 
     def mailbox(self, key,
-            skip=0, limit=None, reverse=False,
-            username=None, password=None, terms=None):
+            skip=0, limit=None, reverse=False, terms=None,
+            username=None, password=None, sync_src=None, sync_dest=None):
         return self.call('mailbox',
             key, terms, skip, limit, reverse, username, password,
+            sync_src, sync_dest,
             hide_qs=True)  # Keep passwords out of web logs
 
     async def async_email(self, loop, metadata,
@@ -193,6 +196,7 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
 
     def api_mailbox(self,
             key, terms, skip, limit, reverse, username, password,
+            sync_src, sync_dest,
             method=None):
         cache_key = '%s/%s/%s/%s' % (key, reverse, username, password)
 
@@ -210,9 +214,14 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
             return self.reply_json(pm[beg:end])
 
         try:
+            sync_dest = sync_dest or key
+            sync_id = generate_sync_id(self.unique_app_id, sync_src, sync_dest)
+            logging.debug('Sync ID is: %s (src=%s, dest=%s)'
+                % (sync_id, sync_src, sync_dest))
+
             parser = self.backend.iter_mailbox(key,
                 skip=skip, ids=(wanted_ids or None), reverse=reverse,
-                username=username, password=password)
+                sync_id=sync_id, username=username, password=password)
 
             # Ideally, we wouldn't cache anything. But some ops are slow.
             collect = []

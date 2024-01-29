@@ -12,10 +12,10 @@ except ImportError:
     import zipfile
     HAVE_ZIP_AES = False
 
+from moggie.email.sync import generate_sync_fn_part
+
 from .base import *
 from .mbox import MboxExporter
-
-SEQ = 0
 
 ENCRYPTED_README = """\
 This archive was generated using moggie, an Open Source tool for searching and
@@ -145,7 +145,7 @@ class MaildirExporter(BaseExporter):
 
     def __init__(self, real_fd,
             dirname=None, output=None, eol=None,
-            password=None, moggie_id=None, dest=None):
+            password=None, moggie_id=None, src=None, dest=None):
         self.eol = self.MANGLE_FIX_EOL if (eol is None) else eol
         if output is None:
             output = self.AS_DEFAULT
@@ -162,7 +162,7 @@ class MaildirExporter(BaseExporter):
         self.writer = ocls(real_fd, password=password)
 
         if dirname is None:
-            dirname = self.default_basedir()
+            dirname = self.default_basedir(dest)
         self.basedir = dirname
 
         if self.basedir:
@@ -172,13 +172,18 @@ class MaildirExporter(BaseExporter):
             self.writer.mkdir(self.basedir + sub, now)
 
         super().__init__(self.writer,
-            password=password, moggie_id=moggie_id, dest=dest)
+            password=password, moggie_id=moggie_id, src=src, dest=dest)
 
     def can_encrypt(self):
         return self.writer.CAN_ENCRYPT
 
-    def default_basedir(self):
-        return 'maildir.%x' % int(time.time())
+    def default_basedir(self, dest):
+        if dest:
+            dest = dest.rstrip('/')
+        if dest:
+            return dest
+        else:
+            return 'maildir.%x' % int(time.time())
 
     def flags(self, tags):
         flags = set()
@@ -190,17 +195,16 @@ class MaildirExporter(BaseExporter):
         return '%s2,%s' % (self.sep, ''.join(sorted([f for f in flags])))
 
     def transform(self, metadata, message):
-        global SEQ
-        SEQ += 1
-
         ts = metadata.timestamp
         idx = metadata.idx
         tags = [t.split(':')[-1] for t in metadata.more.get('tags', [])]
         taglist = ','.join(tags)
 
-        filename = '%s%smoggie-%s.%x.%x.%d=%s%s%s' % (
+        # FIXME: The taglist should come AFTER the separator, as tags change
+        #        Check the maildir spec!
+        filename = '%s%smoggie%st=%s%s%s' % (
             self.basedir, self.PREFIX,
-            str(self.sync_id, 'utf-8'), idx, ts, SEQ,
+            generate_sync_fn_part(self.sync_id, idx, ts),
             taglist, self.flags(tags), self.SUFFIX)
 
         message = self.Transform(metadata, message,

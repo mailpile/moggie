@@ -1,21 +1,11 @@
 import datetime
-import hashlib
+import logging
 import re
 import time
 
 from io import BytesIO
 
-
-def _b(t):
-    return t if isinstance(t, bytes) else bytes(t, 'utf-8')
-
-def _u(t):
-    return t if isinstance(t, str) else str(t, 'utf-8')
-
-def generate_sync_id(moggie_id, dest):
-    return '%s-%s' % (
-        _u(moggie_id)[:6],
-        hashlib.sha1(_b(dest) + _b(moggie_id)).hexdigest()[:10])
+from moggie.email.sync import generate_sync_id, generate_sync_header
 
 
 class ClosableBytesIO(BytesIO):
@@ -43,16 +33,18 @@ class ClosableBytesIO(BytesIO):
 class BaseExporter:
     STATUS_HEADER = b'Status:'
     TAGS_HEADER = b'Tags:'
-    SYNC_HEADER = b'X-Moggie-Sync-%s:'
     CL_HEADER = b'Content-Length:'
 
-    def __init__(self, outfile, password=None, moggie_id=None, dest=None):
+    def __init__(self, outfile,
+            password=None, moggie_id=None, src=None, dest=None):
         self.fd = outfile
         self.password = password
         self.moggie_id = moggie_id
         self.dest = dest
-        if dest and moggie_id:
-            self.sync_id = bytes(generate_sync_id(moggie_id, dest), 'utf-8')
+        if (dest or src) and moggie_id:
+            self.sync_id = bytes(generate_sync_id(moggie_id, src, dest), 'utf-8')
+            logging.debug('%s: sync_id=%s (src=%s, dest=%s)'
+                % (self, self.sync_id, src, dest))
         else:
             self.sync_id = None
 
@@ -135,10 +127,8 @@ class BaseExporter:
                     _add_or_update(cls.STATUS_HEADER, b'O')
 
                 if add_moggie_sync:
-                    info = b'ts=%x; id=%x' % (
-                        int(time.time()),
-                        metadata.idx)
-                    _add_or_update(cls.SYNC_HEADER % add_moggie_sync, info)
+                    h, v = generate_sync_header(add_moggie_sync, metadata.idx)
+                    _add_or_update(h + b':', v)
 
         return message
 

@@ -163,13 +163,15 @@ class RequestPathPolicies(RequestBase):
 class RequestMailbox(RequestBase):
     def __init__(self, context='',
             mailbox=None, mailboxes=None, limit=50, skip=0, terms=None,
-            username=None, password=None,
+            username=None, password=None, sync_src=None, sync_dest=None,
             req_id=None):
         self.update({
             'req_type': 'mailbox',
             'context': context,
             'mailboxes': [mailbox] if mailbox else mailboxes,
             'terms': terms,
+            'sync_src': sync_src,
+            'sync_dest': sync_dest,
             'username': username,
             'password': password,
             'limit': limit,

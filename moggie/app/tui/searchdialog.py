@@ -48,7 +48,9 @@ Use an asterisk (*) to search for word fragments.
             lambda e: self.search(self.search_box.edit_text))
         urwid.connect_signal(self.search_box, 'close',
             lambda e: self._emit('close'))
-        self.search_box.insert_text(initial_terms + ' ')
+        if initial_terms:
+            initial_terms = initial_terms.strip() + ' '
+        self.search_box.insert_text(initial_terms)
 
         fill = urwid.Filler(urwid.Pile([
             self.search_box,

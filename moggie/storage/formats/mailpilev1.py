@@ -245,7 +245,7 @@ class FormatMailpilev1:
                     except (KeyError, ValueError):
                         pass
 
-    def iter_email_metadata(self, skip=0, ids=None, reverse=False):
+    def iter_email_metadata(self, skip=0, ids=None, reverse=False, sync_id=None):
         if reverse:
             result = reversed(list(self.iter_email_metadata(skip=0, ids=ids)))
             if skip:

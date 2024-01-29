@@ -40,6 +40,7 @@ from ...config import AppConfig
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
 from ...email.metadata import Metadata
+from ...email.sync import parse_sync_info
 from ...api.requests import *
 from ...security.mime import part_filename, magic_part_id
 from ...security.html import clean_email_html
@@ -166,6 +167,8 @@ FIXME: Document html and html formats!
         ('--format=',       ['text'], 'X=(text*|text0|json|sexp|zip|maildir|mbox|..)'),
         ('--output=',    ['default'], 'X=(summary*|threads|messages|files|emails|..)'),
         ('--zip-password=',   [None], 'Password for encrypted ZIP exports'),
+        ('--sync-src=',       [None], 'Source for generating sync IDs'),
+        ('--sync-dest=',      [None], 'Destination for generating sync IDs'),
         # These are notmuch options which we currently ignore
         ('--sort=', ['newest-first'], ''),  # notmuch: ignored
         ('--format-version=',   [''], ''),  # notmuch: ignored
@@ -180,6 +183,7 @@ FIXME: Document html and html formats!
         self.raw_results = None
         self.exporter = None
         self.mailboxes = None
+        self.sync_dest = self.sync_src = None
         self.terms = None
         super().__init__(*args, **kwargs)
 
@@ -227,6 +231,14 @@ FIXME: Document html and html formats!
         if ((self.options.get('--zip-password=') or [None])[-1] and
                self.options['--format='][-1] not in ('zip', 'mailzip')):
             raise Nonsense('Encryption is only supported with ZIP formats')
+
+        self.sync_src = self.options.get('--sync-src=', [None])[-1]
+        while self.sync_src and self.sync_src[:2] == './':
+            self.sync_src = self.sync_src[2:]
+
+        self.sync_dest = self.options.get('--sync-dest=', [None])[-1]
+        while self.sync_dest and self.sync_dest[:2] == './':
+            self.sync_dest = self.sync_dest[2:]
 
         self.preferences = self.cfg.get_preferences(context=self.context)
         return []
@@ -315,6 +327,23 @@ FIXME: Document html and html formats!
                 '%(_sep)s%(authors)s;'
                 '%(_sep)s%(subject)s%(_tag_list)s',
                 info)
+
+    async def as_sync_info(self, md):
+        if md is not None:
+            md = Metadata(*md)
+            fn = dumb_decode(md.pointers[0].ptr_path) if md.pointers else None
+            sync_info = md.get_sync_info()
+            if fn:
+                try:
+                    fn = str(fn, 'utf-8')
+                except UnicodeDecodeError:
+                    fn = str(fn, 'latin-1')
+            yield ('%(id)s\t%(_file_str)s\t%(_sync_info_str)s', {
+                'id': self.sign_id('id:%8.8d' % md.idx),
+                'file': fn,
+                'sync_info': parse_sync_info(sync_info) if sync_info else None,
+                '_file_str': fn or '',
+                '_sync_info_str': str(sync_info or b'', 'utf-8')})
 
     async def as_messages(self, md):
         if md is not None:
@@ -677,7 +706,10 @@ FIXME: Document html and html formats!
 
     def _get_exporter(self, cls, **kwargs):
         if self.worker:
-            kwargs['moggie_id'] = self.worker.unique_app_id
+            kwargs.update({
+                'src': self.terms if (self.sync_src is None) else self.sync_src,
+                'dest': self.sync_dest,
+                'moggie_id': self.worker.unique_app_id})
         if self.exporter is None:
             password = (self.options.get('--zip-password=') or [None])[-1]
             class _wwrap:
@@ -706,22 +738,20 @@ FIXME: Document html and html formats!
             exporter.close()
 
     async def emit_result_mbox(self, result, first=False, last=False):
-        # FIXME: Make dest configurable via CLI option?
-        exporter = self._get_exporter(MboxExporter, dest='search-mbox')
+        exporter = self._get_exporter(MboxExporter)
         return self._export(exporter, result, first, last)
 
     async def emit_result_zip(self, result, first=False, last=False):
-        exporter = self._get_exporter(EmlExporter, dest='search-zip')
+        exporter = self._get_exporter(EmlExporter)
         return self._export(exporter, result, first, last)
 
     async def emit_result_maildir(self, result, first=False, last=False):
-        exporter = self._get_exporter(MaildirExporter, dest='search-maildir')
+        exporter = self._get_exporter(MaildirExporter)
         return self._export(exporter, result, first, last)
 
     async def emit_result_mailzip(self, result, first=False, last=False):
         exporter = self._get_exporter(MaildirExporter,
-            output=MaildirExporter.AS_ZIP,
-            dest='search-mailzip')
+            output=MaildirExporter.AS_ZIP)
         return self._export(exporter, result, first, last)
 
     def get_output(self):
@@ -751,6 +781,8 @@ FIXME: Document html and html formats!
         elif output == 'threads_metadata':
             self.write_error = lambda e: None
             return self.as_threads_metadata
+        elif output == 'sync-info':
+            return self.as_sync_info
         elif output == 'emails':
             self.write_error = lambda e: None
             return self.as_emails
@@ -787,14 +819,17 @@ FIXME: Document html and html formats!
         output = self.get_output()
 
         if self.mailboxes:
-            valid_outputs = ('default', 'threads', 'summary', 'metadata',
-                             'threads_metadata', 'files', 'emails')
+            valid_outputs = (
+                'default', 'messages', 'threads', 'summary', 'files',
+                'sync-info', 'metadata', 'threads_metadata', 'emails')
             if output not in valid_outputs:
                 raise Nonsense('Need --output=X, with X one of: %s'
                     % ', '.join(valid_outputs))
             query = RequestMailbox(
                 context=self.context,
                 mailboxes=self.mailboxes,
+                sync_src=self.sync_src,
+                sync_dest=self.sync_dest,
                 terms=self.terms)
         else:
             query = RequestSearch(context=self.context, terms=self.terms)

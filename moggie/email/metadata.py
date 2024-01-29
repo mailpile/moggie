@@ -8,7 +8,6 @@ from ..util.dumbcode import dumb_decode, dumb_encode_asc, dumb_encode_bin, from_
 from .headers import parse_header
 
 
-
 class Metadata(list):
     OFS_TIMESTAMP = 0
     OFS_IDX = 1
@@ -198,6 +197,9 @@ class Metadata(list):
             self._parsed.update(self.more)
             self._parsed['_MORE'] = list(self.more.keys())
         return self._parsed
+
+    def get_sync_info(self):
+        return self.more.get('sync_info') or None
 
     def get_dkim_status(self):
         """

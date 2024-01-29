@@ -1,18 +1,26 @@
 # These are CLI commands for adding/removing/syncing mailbox contents.
 #
 #    moggie copy <search-terms> -- /path/to/mailbox
-#    moggie remove <search-terms> -- /path/to/mailbox 
-#    moggie move <search-terms> -- /path/to/mailbox 
-#    moggie sync <search-terms> -- /path/to/mailbox 
+#    moggie remove <search-terms> -- /path/to/mailbox
+#    moggie move <search-terms> -- /path/to/mailbox
+#    moggie sync <search-terms> -- /path/to/mailbox
 #
 # Search-terms may themselves include mailboxes, which makes this into a
 # tool for copying/moving/syncing mailboxes with each-other.
 #
 # Common algorithm:
-#   - Search for input messages
-#   - Scan target mailbox for messages
+#   - Search for input messages (search --output='sync-info')
+#   - Scan target mailbox for messages (search --output='sync-info')
 #   - Generate sets: (in-both, missing-from-targ, gone-from-targ, new-in-targ)
 #   - Then do the needful
+#
+# The --output='sync-info' search should return lists of tuples:
+#   - Preferred message file path
+#   - Moggie message ID, synthetic or otherwise
+#   - Moggie Sync-ID, if known
+#
+# To make these things efficient, we then make sure that the sync-info
+# search is as fast as possible for mailzip and remote IMAP mailboxes.
 #
 # Notes:
 #    - TBD
