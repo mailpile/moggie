@@ -34,20 +34,6 @@ class CLICommand:
 </div></body><!-- version=%(version)s --></html>"""
 
     @classmethod
-    def Command(cls, wd, args):
-        try:
-            return cls(wd, args, access=True).sync_run()
-        except BrokenPipeError:
-            return False
-        except Nonsense as e:
-            sys.stderr.write('%s failed: %s\n' % (cls.NAME, e))
-            return False
-        except Exception as e:
-            logging.exception('%s failed' % cls.NAME)
-            sys.stderr.write('%s failed: %s\n' % (cls.NAME, e))
-            return False
-
-    @classmethod
     async def WebRunnable(cls, app, access, frame, conn, req_env, args):
         def reply(msg, eof=False):
             if msg or eof:

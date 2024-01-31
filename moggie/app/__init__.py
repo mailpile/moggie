@@ -67,7 +67,10 @@ def CommandMuttalike(moggie, args):
     """
     from ..email.draft import MessageDraft
 
-    single = ('-D', '-E', '-R', '-h', '-n', '-p', '-v' '-vv' , '-y', '-z', '-Z')
+    single = (
+        '-d', '-D', '-E', '-R', '-h', '-n',
+        '-p', '-v' '-vv' , '-y', '-z', '-Z')
+
     sys_args = {'_order': [], '--': []}
     tui_args = {'_order': [], '--': []}
     draft = None
@@ -83,9 +86,14 @@ def CommandMuttalike(moggie, args):
             eating = args.pop(0)
             target[a0] = eating
 
+    class Done(Exception):
+        def __init__(self, result):
+            self.result = result
+            super().__init__()
+
     def _process(arg, args):
         if arg == '-h':
-            return COMMANDS.get('help').Command(moggie.work_dir, args)
+            raise Done(moggie.help(*args))
         elif arg in ('-E', '-f', '-p', '-R', '-y', '-Z'):
             _eat(tui_args, arg, args)
         elif arg in ('-d', '-D', '-F', '-m', '-n'):
@@ -107,6 +115,9 @@ def CommandMuttalike(moggie, args):
 
         if not sys_args['_order'] and not sys_args['--']:
             sys_args = {}
+
+    except Done as d:
+        return d.result
 
     except Nonsense as e:
         raise
@@ -141,9 +152,9 @@ def CommandMuttalike(moggie, args):
         draft_as_args = draft.email_args()
         # FIXME: mutt will send the message automatically!
         #        To be compatible, we should add --send-at=NOW
-        return COMMANDS.get('email').Command(moggie.work_dir, draft_as_args)
+        return moggie.email(*draft_as_args)
 
-    return COMMANDS.get('help').Command(moggie.work_dir, [])
+    return moggie.help()
 
 
 def Main(args):

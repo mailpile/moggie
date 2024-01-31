@@ -66,6 +66,7 @@ class Moggie:
     """
     MODE_CLI = 'cli'
     MODE_PYTHON = 'py'
+    MODE_PY = 'py'
     DEFAULT_MODE = 'py'
     DEFAULT_LOG_LEVEL = 2
     PREFER_ASYNC = False
@@ -149,7 +150,7 @@ class Moggie:
 
     @classmethod
     def _can_run_async(cls, command):
-        return not (command and not hasattr(command, 'Command'))
+        return not (command and not hasattr(command, 'MsgRunnable'))
 
     def __init__(self,
             work_dir=None,
@@ -188,6 +189,7 @@ class Moggie:
         self._bridge = None
         self._name = 'moggie@%d' % int(time.time())
 
+        self.state_stack = []
         self.loop = asyncio.get_event_loop()
         self.set_input()
         self.set_access(access)
@@ -383,6 +385,27 @@ class Moggie:
 
         return self
 
+    def __enter__(self, *args, **kwargs):
+        self.state_stack.append((
+            self._mode, self._access,
+            self._input, self._output, self._output_eof))
+        return self
+
+    def __exit__(self, *args, **kwargs):
+        (self._mode, self._access, self._input, self._output, self._output_eof
+            ) = self.state_stack.pop(-1)
+        return self
+
+    def set_mode(self, mode):
+        self._mode = mode
+        self.set_input(sys.stdin.buffer if (mode == self.MODE_CLI) else None)
+        self.set_output(sys.stdout if (mode == self.MODE_CLI) else None)
+        return self
+
+    def set_access(self, access):
+        self._access = access
+        return self
+
     def set_output(self, destination=None, eof_marker=None):
         """
         Configure where to send command output.
@@ -416,16 +439,6 @@ class Moggie:
         to running commands.
         """
         self._input = source
-        return self
-
-    def set_mode(self, mode):
-        self._mode = mode
-        self.set_input(sys.stdin.buffer if (mode == self.MODE_CLI) else None)
-        self.set_output(sys.stdout if (mode == self.MODE_CLI) else None)
-        return self
-
-    def set_access(self, access):
-        self._access = access
         return self
 
     def run(self, command, *args, **kwargs):
@@ -498,7 +511,8 @@ class Moggie:
             if have_callbacks:
                 # Implement the callback API in an effectively synchronous way
                 # in the cases where we are running without a live websocket.
-                on_success(moggie_wrap(moggie), res)
+                with self:
+                    on_success(moggie_wrap(moggie), res)
             else:
                 return res
 
@@ -506,13 +520,15 @@ class Moggie:
             if command_obj is None:
                 await self.async_run('help')
                 result.append(False)
-            elif hasattr(command_obj, 'Command'):
+            elif hasattr(command_obj, 'MsgRunnable'):
                 command_obj = command_obj(self.work_dir, list(args),
                     access=self._access)
-                await command_obj.async_ready()
-                result.append(await command_obj.run())
+                with self:
+                    await command_obj.async_ready()
+                    result.append(await command_obj.run())
             else:
-                result.append(command_obj(self, list(args)))
+                with self:
+                    result.append(command_obj(self, list(args)))
 
         elif self._mode == self.MODE_PYTHON:
             if not hasattr(command_obj, 'MsgRunnable'):
@@ -522,11 +538,12 @@ class Moggie:
                 self._ws_command(command, args, finish, on_error)
                 return None
             else:
-                rbuf_cmd = await command_obj.MsgRunnable(self, args)
-                if rbuf_cmd is None:
-                    raise Nonsense('Not usable from within Python, sorry')
-                result, obj = rbuf_cmd
-                await obj.run()
+                with self:
+                    rbuf_cmd = await command_obj.MsgRunnable(self, args)
+                    if rbuf_cmd is None:
+                        raise Nonsense('Not usable from within Python, sorry')
+                    result, obj = rbuf_cmd
+                    await obj.run()
 
         return finish(self, result)
 
