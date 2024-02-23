@@ -1,6 +1,7 @@
 import asyncio
 import os
 import shlex
+import sys
 import time
 import unittest
 
@@ -68,11 +69,12 @@ class OnlineMoggieTest(unittest.TestCase):
     ensure our API stays unbroken as development proceeds!
     """
     def setUpClass():
-        OnlineMoggieTest.work_dir = wd = os.path.join(
-            os.path.dirname(__file__), '..', 'tmp', 'moggie-test')
-        OnlineMoggieTest.test_email_dir = os.path.join(
-            os.path.dirname(__file__), '..', 'test-data', 'emails')
+        OnlineMoggieTest.work_dir = wd = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'tmp', 'moggie-test'))
+        OnlineMoggieTest.test_email_dir = os.path.abspath(os.path.join(
+            os.path.dirname(__file__), '..', 'test-data', 'emails'))
 
+        sys.stderr.write('test_email_dir=%s\n' % OnlineMoggieTest.test_email_dir)
         os.system(shlex.join(['rm', '-rf', wd]))
         os.mkdir(wd, 0o0755)
         moggie = OnlineMoggieTest.moggie = Moggie(work_dir=wd)
@@ -95,15 +97,20 @@ class OnlineMoggieTest(unittest.TestCase):
         self.moggie.import_(self.test_email_dir, tag='inbox', config_only=True)
         self.moggie.new()
 
-        terms = ['all:mail', 'in:incoming', 'in:inbox']
-        for tries in range(0, 100):
+        # So, why is the tagging not happening? Am I waiting for the wrong thing?
+
+        terms = ['all:mail', 'in:incoming', 'in:incoming-old', 'in:inbox']
+        for tries in range(0, 200):
             counts = self.moggie.count(*terms, multi=True)[0]
-            if counts['all:mail'] > 5 and counts['in:incoming'] == 0:
+            sys.stderr.write('counts: %s\n' % counts)
+            if (counts['all:mail'] > 5
+                    and counts['in:incoming'] == 0
+                    and counts['in:incoming-old'] == 0):
                 break
             time.sleep(0.100)
-        self.assertTrue(counts['in:incoming'] == 0)
-        self.assertTrue(counts['in:inbox'] > 5)
-        self.assertTrue(counts['all:mail'] > 5)
+        self.assertEquals(counts['in:incoming'], 0)
+        self.assertGreater(counts['all:mail'], 5)
+        self.assertGreater(counts['in:inbox'], 5)
 
     def test_moggie_004_search(self):
         self.assertFalse(self.moggie.search('in:incoming'))  # No results

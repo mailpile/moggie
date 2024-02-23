@@ -132,18 +132,22 @@ class MessageDraft(Metadata):
 
         return args
 
+    def generate_email(self):
+        #from moggie.app.cli.email import EmailCommand
+        pass
+
     def generate_editable(self):
         # FIXME: Bodies, Attachments, MIME, PGP... so much fun!
         m = self.more.get
         headers = self.headers % {
             'message_id': m('message_id') or make_message_id(),
-            'date': m('date', 'now'),
+            'date': m('date') or 'now',
             'from': ' '.join(m('from', [])),
-            'to': ' '.join(m('to', [])),
-            'cc': ' '.join(m('cc', [])),
-            'bcc': ' '.join(m('bcc', [])),
+            'to': ' '.join(m('to') or []),
+            'cc': ' '.join(m('cc') or []),
+            'bcc': ' '.join(m('bcc') or []),
             'subject': m('subject') or self.no_subject(),
-            'attachments': ' '.join(m('attach', [])),
+            'attachments': ' '.join(m('attach') or []),
             'features': ', '.join(m('features', self.default_features()))}
         return '%s%s' % (headers, self.more.get('message') or '(no message)')
 
@@ -155,4 +159,4 @@ def FakeDraftMain(args, draft=None):
 
 if __name__ == "__main__":
     import sys
-    FakeMain(sys.argv[1:])
+    FakeDraftMain(sys.argv[1:])

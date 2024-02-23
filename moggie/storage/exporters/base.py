@@ -42,7 +42,7 @@ class BaseExporter:
         self.moggie_id = moggie_id
         self.dest = dest
         if (dest or src) and moggie_id:
-            self.sync_id = bytes(generate_sync_id(moggie_id, src, dest), 'utf-8')
+            self.sync_id = generate_sync_id(moggie_id, src, dest)
             logging.debug('%s: sync_id=%s (src=%s, dest=%s)'
                 % (self, self.sync_id, src, dest))
         else:
@@ -59,6 +59,12 @@ class BaseExporter:
 
     def close(self):
         self.fd.close()
+
+    def compact(self):
+        pass
+
+    def delete(self, metadata, filename=None):
+        raise IOError('Deletion is unavailable')
 
     def export(self, metadata, message):
         self.fd.write(self.transform(metadata, message))

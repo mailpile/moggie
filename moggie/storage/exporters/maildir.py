@@ -1,6 +1,7 @@
 import copy
 import datetime
 import io
+import logging
 import os
 import tarfile
 import time
@@ -17,6 +18,7 @@ from moggie.email.sync import generate_sync_fn_part
 from .base import *
 from .mbox import MboxExporter
 
+
 ENCRYPTED_README = """\
 This archive was generated using moggie, an Open Source tool for searching and
 managing e-mail. The contents are encrypted using WinZip-compatible 128-bit AES
@@ -26,11 +28,16 @@ Please use WinZip, 7-Zip or the Mac Archive Utility to access the contents.
 """
 
 
+class DirWriter:
+    pass
+
+
 class ZipWriter:
     CAN_ENCRYPT = HAVE_ZIP_AES
 
     def __init__(self, fd, d_acl=0o040750, f_acl=0o000640, password=None):
         self.zf = self._open_or_create(fd, password)
+        self.should_compact = False
 
         # This kludge keeps us compatible with both pyzipper and zipfile
         self.zipinfo_cls = zipfile.ZipInfo
@@ -45,22 +52,33 @@ class ZipWriter:
 
     def _open_or_create(self, fd, password):
         mode = 'w'
-        try:
-            cur = fd.tell()
-            fd.seek(0, 2)
-            if fd.tell() != cur:
-                fd.seek(cur, 0)
+        if isinstance(fd, (str, bytes)):
+            try:
+                fd = open(fd, 'r+b')
                 mode = 'a'
-        except (AttributeError, IOError, OSError):
-            pass
-        if password:
+            except OSError:
+                fd = open(fd, 'w+b')
+        else:
+            try:
+                cur = fd.tell()
+                fd.seek(0, 2)
+                if fd.tell() != cur:
+                    fd.seek(cur, 0)
+                    mode = 'a'
+            except (AttributeError, IOError, OSError):
+                pass
+        if self.CAN_ENCRYPT:
             zf = zipfile.AESZipFile(fd,
-                 compression=zipfile.ZIP_DEFLATED,
-                 mode=mode)
-            zf.setpassword(password)
-            zf.setencryption(zipfile.WZ_AES, nbits=256)
+                compression=zipfile.ZIP_DEFLATED,
+                mode=mode)
+            if password:
+                zf.setpassword(password)
+                zf.setencryption(zipfile.WZ_AES, nbits=256)
             return zf
         else:
+            if password:
+                logging.error('ZIP encryption is unavailable')
+                raise IOError('ZIP encryption is unavailable')
             return zipfile.ZipFile(fd, mode=mode)
 
     def _tt(self, ts):
@@ -68,14 +86,29 @@ class ZipWriter:
 
     def mkdir(self, dn, ts):
         dn = dn if (dn[-1:] == '/') else (dn + '/')
-        dirent = self.zipinfo_cls(filename=dn, date_time=self._tt(ts))
-        dirent.compress_type = zipfile.ZIP_STORED
-        dirent.external_attr = self.d_acl << 16  # Unix permissions
-        dirent.external_attr |= 0x10             # MS-DOS directory flag
-        self.zf.writestr(dirent, b'')
+        if dn not in self.zf.namelist():
+            dirent = self.zipinfo_cls(filename=dn, date_time=self._tt(ts))
+            dirent.compress_type = zipfile.ZIP_STORED
+            dirent.external_attr = self.d_acl << 16  # Unix permissions
+            dirent.external_attr |= 0x10             # MS-DOS directory flag
+            self.zf.writestr(dirent, b'')
+
+    def delete_file(self, filename):
+        try:
+            self.zf.delete(fn)
+            self.should_compact = True
+        except AttributeError:
+            logging.error('ZIP deletion unavailable, skipping %s' % fn)
+            raise IOError('Deletion is unavailable')
 
     def add_file(self, fn, ts, data, encrypt=True):
-        # FIXME: If the file already exists, replace it with new contents?
+        logging.debug('Adding %s' % fn)
+        if fn in self.zf.namelist():
+            try:
+                self.zf.delete(fn)
+            except AttributeError:
+                logging.warn('ZIP overwriting unavailable, skipping %s' % fn)
+                return
         fi = self.zipinfo_cls(filename=fn, date_time=self._tt(ts))
         fi.external_attr = self.f_acl << 16
         fi.compress_type = zipfile.ZIP_DEFLATED
@@ -83,6 +116,13 @@ class ZipWriter:
             self.zf.writestr(fi, data)
         else:
             self.zf.writestr(fi, data, encrypt=False)
+
+    def compact(self):
+        try:
+            self.zf.compact()
+            self.should_compact = False
+        except AttributeError:
+            pass
 
     def close(self):
         self.zf.close()
@@ -94,7 +134,18 @@ class TarWriter(ZipWriter):
     def _open_or_create(self, fd, password):
         if password:
             raise OSError('Encrypted Tar files are not implemented')
-        return tarfile.open(fileobj=fd, mode='w:gz')
+        if isinstance(fd, (str, bytes)):
+            zm = 'w'
+            ext = _ext(fd)
+            if ext in (b'gz', b'tgz'):
+                zm += ':gz'
+            elif ext == b'xz':
+                zm += ':xz'
+            elif ext == b'bz2':
+                zm += ':bz2'
+            return tarfile.open(name=fd, mode=zm)
+        else:
+            return tarfile.open(fileobj=fd, mode='w:gz')
 
     def mkdir(self, dn, ts):
         dn = dn if (dn[-1:] == '/') else (dn + '/')
@@ -117,6 +168,18 @@ class TarWriter(ZipWriter):
         fi.gname = 'mailpile'
         self.zf.addfile(fi, io.BytesIO(data))
 
+    def delete_file(self, filename):
+        logging.error('Deletion unavailable, skipping %s' % filename)
+        raise IOError('Deletion is unavailable')
+
+    def compact(self):
+        pass
+
+
+def _ext(fn):
+    fn = bytes(fn, 'utf-8') if isinstance(fn, str) else fn
+    return fn.rsplit(b'.')[-1]
+
 
 class MaildirExporter(BaseExporter):
     """
@@ -126,6 +189,7 @@ class MaildirExporter(BaseExporter):
     """
     AS_ZIP = 0
     AS_TAR = 1
+    AS_DIR = 2
     AS_DEFAULT = AS_TAR
     SUBDIRS = ('cur', 'new', 'tmp')
     PREFIX = 'cur/'
@@ -147,18 +211,34 @@ class MaildirExporter(BaseExporter):
             dirname=None, output=None, eol=None,
             password=None, moggie_id=None, src=None, dest=None):
         self.eol = self.MANGLE_FIX_EOL if (eol is None) else eol
+
         if output is None:
+            # No output specified, check we have a filename/dirname that
+            # tells us what the user wants instead.
             output = self.AS_DEFAULT
+            if isinstance(real_fd, (str, bytes)):
+                ext = _ext(real_fd)
+                if os.path.isdir(real_fd):
+                    output = self.AS_DIR
+                elif ext in (b'gz', b'tar', b'tgz', b'bz2', b'xz'):
+                    output = self.AS_TAR
+                elif ext in (b'zip', 'mdz'):
+                    output = self.AS_ZIP
+                elif real_fd[-1] in (b'/', '/'):
+                    output = self.AS_DIR
+
         if output == self.AS_TAR:
             ocls = TarWriter
             self.sep = ':'
-        else:
+        elif output == self.AS_ZIP:
             ocls = ZipWriter
             self.sep = ';'
+        else:
+            ocls = DirWriter
+            self.sep = ';'  # FIXME: If dir exists, check what it uses?
 
         now = int(time.time())
         self.real_fd = real_fd
-        # FIXME: Add the ability to update an existing .ZIP archive
         self.writer = ocls(real_fd, password=password)
 
         if dirname is None:
@@ -181,9 +261,13 @@ class MaildirExporter(BaseExporter):
         if dest:
             dest = dest.rstrip('/')
         if dest:
-            return dest
-        else:
-            return 'maildir.%x' % int(time.time())
+            dparts = os.path.basename(dest).rsplit('.')
+            while dparts and dparts[-1] in ('tar', 'xz', 'bz2', 'gz', 'tgz', 'zip', 'mdz'):
+                dparts.pop(-1)
+            dest = '.'.join(dparts)
+            if dest:
+                return dest
+        return 'maildir.%x' % int(time.time())
 
     def flags(self, tags):
         flags = set()
@@ -194,7 +278,7 @@ class MaildirExporter(BaseExporter):
                 flags.add(self.BASIC_FLAGS[tag])
         return '%s2,%s' % (self.sep, ''.join(sorted([f for f in flags])))
 
-    def transform(self, metadata, message):
+    def get_filename(self, metadata):
         ts = metadata.timestamp
         idx = metadata.idx
         tags = [t.split(':')[-1] for t in metadata.more.get('tags', [])]
@@ -202,22 +286,32 @@ class MaildirExporter(BaseExporter):
 
         # FIXME: The taglist should come AFTER the separator, as tags change
         #        Check the maildir spec!
-        filename = '%s%smoggie%st=%s%s%s' % (
+        return '%s%smoggie%st=%s%s%s' % (
             self.basedir, self.PREFIX,
-            generate_sync_fn_part(self.sync_id, idx, ts),
+            generate_sync_fn_part(self.sync_id, idx),
             taglist, self.flags(tags), self.SUFFIX)
 
+    def transform(self, metadata, message):
+        ts = metadata.timestamp
         message = self.Transform(metadata, message,
             add_from=self.MANGLE_ADD_FROM,
             add_headers=self.MANGLE_ADD_HEADERS,
             add_moggie_sync=(self.MANGLE_ADD_HEADERS and self.sync_id),
             mangle_from=False,
             fix_newlines=self.eol)
+        return (self.get_filename(metadata), ts, message)
 
-        return (filename, ts, message)
+    def delete(self, metadata, filename=None):
+        self.writer.delete_file(filename or self.get_filename(metadata))
 
     def export(self, metadata, message):
         self.writer.add_file(*self.transform(metadata, message))
+
+    def compact(self):
+        self.writer.compact()
+
+    def close(self):
+        self.writer.close()
 
 
 class EmlExporter(MaildirExporter):

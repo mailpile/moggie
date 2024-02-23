@@ -5,6 +5,7 @@ import sys
 import time
 import urwid
 
+from ...email.util import IDX_MAX
 from ...email.addresses import AddressInfo
 from ...email.metadata import Metadata
 from ...email.parsemime import MessagePart
@@ -270,8 +271,7 @@ Technical details:
         # term generation
         if self.metadata.get('idx'):
             args.append('id:%d' % self.metadata['idx'])
-            # FIXME: Magic number is bad
-            if self.mailbox and self.metadata['idx'] > 100000000:
+            if self.mailbox and (self.metadata['idx'] >= IDX_MAX):
                 args.append('mailbox:%s' % self.mailbox)
         else:
             # FIXME: Sending the full metadata is silly. Also this is the
@@ -314,11 +314,8 @@ Technical details:
         #        to import the message into the index. Do we want that?
         # Tagging as read would do that.
 
-        # FIXME: 100 million is a magic number to detect whether this is
-        #        a real or synthetic internal ID. We should use something
-        #        smarter!
         idx = self.metadata['idx'] if self.metadata else None
-        if idx and (idx < 100000000):
+        if idx and (idx < IDX_MAX):
             if 'in:read' not in self.metadata.get('tags', []):
                 self.mog_ctx.tag('+read', '--', 'id:%s' % idx)
 

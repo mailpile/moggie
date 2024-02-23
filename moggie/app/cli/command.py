@@ -42,12 +42,13 @@ class CLICommand:
                 else:
                     return conn.sync_reply(frame, bytes(msg, 'utf-8'), eof=eof)
         try:
-            cmd_obj = cls(app.profile_dir, args,
+            cmd_obj = cls(get_shared_moggie(), args,
                 access=access, appworker=app, connect=False, req_env=req_env)
             cmd_obj.write_reply = reply
             cmd_obj.write_error = reply
             return cmd_obj
         except PermissionError:
+            logging.exception('Failed %s' % cls.NAME)
             raise
         except:
             logging.exception('Failed %s' % cls.NAME)
@@ -65,7 +66,7 @@ class CLICommand:
                 else:
                     reply_buffers[-1].append(msg)
         try:
-            cmd_obj = cls(moggie.work_dir, copy.copy(args),
+            cmd_obj = cls(moggie, copy.copy(args),
                 access=moggie._access,
                 appworker=moggie._app_worker,
                 connect=False)
@@ -76,12 +77,13 @@ class CLICommand:
             cmd_obj.stdin = []
             return reply_buffers[0], cmd_obj
         except PermissionError:
+            logging.exception('Failed %s' % cls.NAME)
             raise
         except:
             logging.exception('Failed %s' % cls.NAME)
         return None
 
-    def __init__(self, wd, args,
+    def __init__(self, moggie, args,
             access=None, appworker=None, connect=True, req_env=None):
         from ...workers.app import AppWorker
         from ...util.rpc import AsyncRPCBridge
@@ -93,7 +95,8 @@ class CLICommand:
 
         self.connected = False
         self.messages = []
-        self.workdir = wd
+        self.moggie = moggie
+        self.workdir = moggie.work_dir
         self.context = None
         self.preferences = None
         self.stdin = sys.stdin.buffer
@@ -427,6 +430,7 @@ class CLICommand:
         try:
             return await self.run()
         except APIException:
+            logging.exception('APIException %s' % self.NAME)
             raise
         except PermissionError:
             logging.info('Access denied in %s' % self.NAME)
@@ -438,8 +442,15 @@ class CLICommand:
             except:
                 pass
 
+    async def _run_wrapper(self):
+        try:
+            return await self.run()
+        except:
+            logging.exception('Exception in %s' % (self,))
+            raise
+
     def sync_run(self):
-        task = asyncio.ensure_future(self.run())
+        task = asyncio.ensure_future(self._run_wrapper())
         while not task.done():
             try:
                 self.ev_loop.run_until_complete(task)

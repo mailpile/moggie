@@ -253,14 +253,14 @@ class Moggie:
                        on_success(self, message)
                    handled += 1
            except Exception as e:
+               logging.exception(
+                   'Error handling message: %s <= %s' % (call_spec, message))
                try:
                    if on_error:
                        on_error(self, message, e)
                        continue
                except:
                    pass
-               logging.exception(
-                   'Error handling message: %s <= %s' % (call_spec, message))
 
         if not handled:
             if message.get('req_type') not in ('pong', ):
@@ -521,7 +521,7 @@ class Moggie:
                 await self.async_run('help')
                 result.append(False)
             elif hasattr(command_obj, 'MsgRunnable'):
-                command_obj = command_obj(self.work_dir, list(args),
+                command_obj = command_obj(self, list(args),
                     access=self._access)
                 with self:
                     await command_obj.async_ready()

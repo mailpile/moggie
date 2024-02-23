@@ -8,8 +8,10 @@ from .headers import parse_header
 from .metadata import Metadata
 
 
-MAILDIR_TAG_SEP = re.compile(b'[:;-]2,')
+IDX_MAX = 0x100000000  # 4 billion e-mails should be enough for anyone?
 HASHED_IDX_MUL = 100000000
+
+MAILDIR_TAG_SEP = re.compile(b'[:;-]2,')
 
 
 def mk_hashed_idx(d, i=0, mul=HASHED_IDX_MUL, mod=None):
@@ -49,10 +51,11 @@ def mk_packed_idx(d, *ints, count=None, mod=None, _raise=None):
         pos *= 0x10 ** (max(1, ilen) + 1)
     if mod and (0 < mod < 64):
         mod = pos * (0x10 ** mod)
-    return mk_hashed_idx(d, packed, mul=pos, mod=mod)
+    return mk_hashed_idx(d, packed, mul=pos, mod=mod) + IDX_MAX
 
 
 def unpack_idx(idx, count=None):
+    idx -= IDX_MAX
     if count is None:
         count = idx % 0x10
         packed = idx // 0x10
@@ -179,13 +182,13 @@ This is an e-mail\r\n"""
     cc = 8
     pi = mk_packed_idx('hello', 1, 2, 12345, 0x123456789abcdef0, mod=cc)
     un = unpack_idx(pi)
-    #print('pi1 = %x, len=%d, unpacked=%s' % (pi, len('%x' % pi), un))
+    print('pi1 = %x, len=%d, unpacked=%s' % (pi, len('%x' % pi), un))
     assert(len('%x' % un[1]) <= cc)
     assert(un[0] == [1, 2, 12345, None])
 
     pi2 = mk_packed_idx('hello', 1, 2, 3, count=3, mod=cc)
     un2 = unpack_idx(pi2, count=3)
-    #print('pi2 = %x, unpacked=%s' % (pi2, un2))
+    print('pi2 = %x, unpacked=%s' % (pi2, un2))
     assert(len('%x' % un2[1]) <= cc)
     assert((pi2 % 0x10) != 3)    # Count not taking any space
     assert(un2[0] == [1, 2, 3])  # Int list decoded correctly

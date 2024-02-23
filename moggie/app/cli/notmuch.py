@@ -40,7 +40,7 @@ from ...config import AppConfig
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
 from ...email.metadata import Metadata
-from ...email.sync import parse_sync_info
+from ...email.sync import generate_sync_id, parse_sync_info
 from ...api.requests import *
 from ...security.mime import part_filename, magic_part_id
 from ...security.html import clean_email_html
@@ -169,6 +169,7 @@ FIXME: Document html and html formats!
         ('--zip-password=',   [None], 'Password for encrypted ZIP exports'),
         ('--sync-src=',       [None], 'Source for generating sync IDs'),
         ('--sync-dest=',      [None], 'Destination for generating sync IDs'),
+        ('--export-to=',      [None], 'Local mailbox to export to'),
         # These are notmuch options which we currently ignore
         ('--sort=', ['newest-first'], ''),  # notmuch: ignored
         ('--format-version=',   [''], ''),  # notmuch: ignored
@@ -183,7 +184,7 @@ FIXME: Document html and html formats!
         self.raw_results = None
         self.exporter = None
         self.mailboxes = None
-        self.sync_dest = self.sync_src = None
+        self.sync_dest = self.sync_src = self.sync_id = None
         self.terms = None
         super().__init__(*args, **kwargs)
 
@@ -232,13 +233,17 @@ FIXME: Document html and html formats!
                self.options['--format='][-1] not in ('zip', 'mailzip')):
             raise Nonsense('Encryption is only supported with ZIP formats')
 
-        self.sync_src = self.options.get('--sync-src=', [None])[-1]
-        while self.sync_src and self.sync_src[:2] == './':
-            self.sync_src = self.sync_src[2:]
+        def _np(t):
+            if t is None:
+                return t
+            slash = ('/' if (t and t.endswith('/')) else '')
+            return (os.path.normpath(t) if t else '') + slash
 
-        self.sync_dest = self.options.get('--sync-dest=', [None])[-1]
-        while self.sync_dest and self.sync_dest[:2] == './':
-            self.sync_dest = self.sync_dest[2:]
+        self.sync_src = _np(self.options.get('--sync-src=', [None])[-1])
+        self.sync_dest = _np(self.options.get('--sync-dest=', [None])[-1])
+        self.export_to = _np(self.options.get('--export-to=', [None])[-1])
+        if self.export_to and not self.sync_dest:
+            self.sync_dest = self.export_to
 
         self.preferences = self.cfg.get_preferences(context=self.context)
         return []
@@ -329,19 +334,27 @@ FIXME: Document html and html formats!
                 info)
 
     async def as_sync_info(self, md):
+        if (not self.sync_id) and self.sync_dest and self.sync_src:
+            self.sync_id = generate_sync_id(
+                self.worker.unique_app_id, self.sync_src, self.sync_dest)
+
         if md is not None:
             md = Metadata(*md)
             fn = dumb_decode(md.pointers[0].ptr_path) if md.pointers else None
+            uuid = md.uuid_asc
             sync_info = md.get_sync_info()
+            sync_info_parsed = parse_sync_info(sync_info, self.sync_id) if sync_info else None,
             if fn:
                 try:
                     fn = str(fn, 'utf-8')
                 except UnicodeDecodeError:
                     fn = str(fn, 'latin-1')
-            yield ('%(id)s\t%(_file_str)s\t%(_sync_info_str)s', {
+            yield ('%(id)s\t%(uuid)s\t%(_file_str)s\t%(_sync_info_str)s', {
                 'id': self.sign_id('id:%8.8d' % md.idx),
                 'file': fn,
-                'sync_info': parse_sync_info(sync_info) if sync_info else None,
+                'uuid': uuid,
+                'indexed': (md.idx < 100000000),
+                'sync_info': sync_info_parsed,
                 '_file_str': fn or '',
                 '_sync_info_str': str(sync_info or b'', 'utf-8')})
 
@@ -384,7 +397,7 @@ FIXME: Document html and html formats!
              remote_images=show_ri,
              target_blank=t_blank)
 
-    async def as_emails(self, thread):
+    async def as_emails(self, thread, fmt=None):
         def _textify(r, prefer, esc, part_fmt, msg_fmt, hdr_fmt='%(h)s: %(v)s'):
             headers = '\n'.join(
                 hdr_fmt % {'hc': h.lower(), 'h': h, 'v': esc(r['headers'][h])}
@@ -488,7 +501,7 @@ FIXME: Document html and html formats!
     <tr class="email-%(hc)s"><th>%(h)s:</th><td>%(v)s</td></tr>""")
 
         if thread is not None:
-            fmt = self.options['--format='][-1]
+            fmt = fmt or self.options['--format='][-1]
             part = int((self.options.get('--part=') or [0])[-1])
             raw = (fmt in ('mbox', 'maildir', 'mailzip', 'raw', 'zip'))
             want_body = raw or (self.options.get('--body=', [0])[-1] != 'false')
@@ -712,21 +725,24 @@ FIXME: Document html and html formats!
                 'moggie_id': self.worker.unique_app_id})
         if self.exporter is None:
             password = (self.options.get('--zip-password=') or [None])[-1]
-            class _wwrap:
-                def write(ws, data):
-                    self.write_reply(data)
-                    return len(data)
-                def flush(ws):
-                    pass
-                def close(ws):
-                    pass
+            export_to = self.export_to
+            if not export_to:
+                class _wwrap:
+                    def write(ws, data):
+                        self.write_reply(data)
+                        return len(data)
+                    def flush(ws):
+                        pass
+                    def close(ws):
+                        pass
+                export_to = _wwrap()
             if password:
                 kwargs['password'] = bytes(password, 'utf-8')
-                self.exporter = cls(_wwrap(), **kwargs)
+                self.exporter = cls(export_to, **kwargs)
                 if not self.exporter.can_encrypt():
                     raise Nonsense('Encryption is unavailable')
             else:
-                self.exporter = cls(_wwrap(), **kwargs)
+                self.exporter = cls(export_to, **kwargs)
         return self.exporter
 
     def _export(self, exporter, result, first, last):
@@ -788,8 +804,8 @@ FIXME: Document html and html formats!
             return self.as_emails
         raise Nonsense('Unknown output format: %s' % output)
 
-    def get_emitter(self):
-        fmt = self.options['--format='][-1]
+    def get_emitter(self, fmt=None):
+        fmt = self.options['--format='][-1] if (fmt is None) else fmt
         if fmt == 'json':
             return self.emit_result_json
         elif fmt == 'jhtml':
@@ -851,6 +867,8 @@ FIXME: Document html and html formats!
         elif output == 'threads':
             query['threads'] = True
             query['only_ids'] = True
+        elif output == 'sync-info':
+            self.batch = None
         elif output == 'emails':
             entire = (self.options.get('--entire-thread=') or ['false'])[-1]
             if entire != 'false':
@@ -882,8 +900,12 @@ FIXME: Document html and html formats!
         first = True
         async for result in self.results(query, limit, formatter):
             if prev is not None:
-                await emitter(prev, first=first)
-                first = False
+                try:
+                    await emitter(prev, first=first)
+                    first = False
+                except:
+                    logging.exception('Uncaught exception in search')
+                    raise
             prev = result
         await emitter(prev, first=first, last=True)
 
@@ -902,7 +924,7 @@ FIXME: Document html and html formats!
             return lambda _id: _id
 
     async def perform_query(self, query, batch, limit):
-        query['limit'] = min(batch, limit or batch)
+        query['limit'] = min(batch, limit or batch) if batch else None
         msg = await self.repeatable_async_api_request(self.access, query)
         if 'emails' not in msg and 'results' not in msg:
             raise Nonsense('Search failed. Is the app locked?')
@@ -925,11 +947,11 @@ FIXME: Document html and html formats!
             return msg.get('emails') or []
 
     async def results(self, query, limit, formatter):
-        batch = self.batch // 10
+        batch = (self.batch // 10) if self.batch else None
         output = self.get_output()
         while limit is None or limit > 0:
             results = await self.perform_query(query, batch, limit)
-            batch = min(self.batch, int(batch * 1.2))
+            batch = min(self.batch, int(batch * 1.2)) if self.batch else None
             count = len(results)
             if limit is not None:
                 limit -= count

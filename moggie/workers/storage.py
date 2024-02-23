@@ -100,7 +100,7 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
     PEEK_BYTES = 8192
     BLOCK = 8192
 
-    PARSE_CACHE_MIN = 200
+    PARSE_CACHE_MIN = 1000
     PARSE_CACHE_TTL = 180
 
     def __init__(self, unique_app_id, status_dir, backend,
@@ -197,12 +197,21 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
     def api_mailbox(self,
             key, terms, skip, limit, reverse, username, password,
             sync_src, sync_dest,
-            method=None):
+            method=None, cached=True):
         cache_key = '%s/%s/%s/%s' % (key, reverse, username, password)
 
         _filter, wanted_ids = self._prep_filter(terms)
 
-        self._expire_parse_cache()
+        # Limits imply we are concerned about speed and may also not
+        # finish in time - continuing in the background requires cache.
+        # FIXME: Is this sane?
+        if not limit:
+            logging.debug('No limits, cache disabled')
+            self.parsed_mailboxes = {}
+        else:
+            logging.debug('Expiring cache, maybe yo: limit=%s' % limit)
+            self._expire_parse_cache()
+
         if cache_key in self.parsed_mailboxes and not wanted_ids:
             while (not self.parsed_mailboxes[cache_key][1]
                     and self.background_thread is not None):

@@ -932,7 +932,7 @@ class CommandImport(CLICommand):
         self.paths = []
         self.policies = {}
 
-        self.paths = self.strip_options(args)
+        self.paths = [os.path.abspath(p) for p in self.strip_options(args)]
         self.default_policy = self.make_policy(self.options)
         self.policies = dict((p, self.autoconf(p, self.default_policy))
             for p in self.paths)

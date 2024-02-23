@@ -242,7 +242,7 @@ def dumb_decode(v,
 
 def dumb_json_encoder(obj):
     try:
-        logging.debug('BUG? Encoding %s into JSON' % obj.__class__.__name__)
+        #FIXME: logging.debug('BUG? Encoding %s into JSON' % obj.__class__.__name__)
         try:
             # We use this structure to identify our encoded objects:
             #
