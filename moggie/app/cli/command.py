@@ -1,6 +1,7 @@
 import asyncio
 import copy
 import logging
+import os
 import time
 import sys
 
@@ -144,9 +145,16 @@ class CLICommand:
             await self._await_connection()
 
     def remove_mailbox_terms(self, terms):
-        return (
+        mailboxes, terms = (
             [t[8:] for t in terms if t[:8] == 'mailbox:'] or None,
             [t for t in terms if t[:8] != 'mailbox:'])
+        if (not mailboxes
+                and len(terms) == 1
+                and terms[0][:1] in ('.', '/')
+                and os.path.exists(terms[0])):
+            mailboxes = [os.path.abspath(terms[0])]
+            terms = []
+        return mailboxes, terms
 
     def combine_terms(self, terms):
         if self.options.get('--or', [False])[-1]:

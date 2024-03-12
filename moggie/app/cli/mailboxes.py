@@ -1,9 +1,9 @@
 # These are CLI commands for adding/removing/syncing mailbox contents.
 #
-#    moggie copy <search-terms> -- /path/to/mailbox
-#    moggie remove <search-terms> -- /path/to/mailbox
-#    moggie move <search-terms> -- /path/to/mailbox
-#    moggie sync <search-terms> -- /path/to/mailbox
+#    moggie copy <search-terms> /path/to/mailbox
+#    moggie remove <search-terms> /path/to/mailbox
+#    moggie move <search-terms> /path/to/mailbox
+#    moggie sync <search-terms> /path/to/mailbox
 #
 # Search-terms may themselves include mailboxes, which makes this into a
 # tool for copying/moving/syncing mailboxes with each-other.
@@ -116,9 +116,8 @@ class CommandMailboxes(CommandSearch):
         args = list(args)
 
         self.target_mailbox = args.pop(-1)
-        minuses = args.pop(-1)
-        if minuses != '--':
-            raise Nonsense('Invalid arguments')
+        if args and args[-1] == '--':
+            args.pop(-1)
 
         args = super().configure(args)
 
