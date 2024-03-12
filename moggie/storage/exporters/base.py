@@ -46,6 +46,7 @@ class BaseExporter:
             logging.debug('%s: sync_id=%s (src=%s, dest=%s)'
                 % (self, self.sync_id, src, dest))
         else:
+            logging.debug('No sync ID, how sad!')
             self.sync_id = None
 
     def can_encrypt(self):

@@ -74,6 +74,11 @@ class StorageWorkerApi:
             metadata[:Metadata.OFS_HEADERS], text, data, full_raw, parts,
             username, password)
 
+    async def async_delete_emails(self, loop, mailbox, metadata_list,
+            username=None, password=None):
+        return await self.async_call(loop, 'delete_emails',
+            mailbox, metadata_list, username, password)
+
     def get(self, key, *args, dumbcode=None):
         if dumbcode is not None:
             return self.call('get', key, *args, qs={'dumbcode': dumbcode})
@@ -111,14 +116,15 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
             shutdown_idle=shutdown_idle)
         self.backend = backend
         self.functions.update({
-            b'info':         (True,  self.api_info),
-            b'mailbox':      (True,  self.api_mailbox),
-            b'email':        (True,  self.api_email),
-            b'get':          (False, self.api_get),
-            b'json':         (False, self.api_json),
-            b'set':          (False, self.api_set),
-            b'append':       (False, self.api_append),
-            b'delete':       (False, self.api_delete)})
+            b'info':          (True,  self.api_info),
+            b'mailbox':       (True,  self.api_mailbox),
+            b'email':         (True,  self.api_email),
+            b'get':           (False, self.api_get),
+            b'json':          (False, self.api_json),
+            b'set':           (False, self.api_set),
+            b'append':        (False, self.api_append),
+            b'delete':        (False, self.api_delete),
+            b'delete_emails': (True,  self.api_delete_emails)})
 
         self.parsed_mailboxes = {}
         self.background_thread = None
@@ -292,6 +298,20 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
             parsed.with_full_raw()
         self.reply_json(parsed)
 
+    def api_delete_emails(self,
+            mailbox, metadata_list, username, password, method=None):
+
+        (deleted, ignored, failed, moved) = self.backend.bulk_delete_messages(
+            mailbox, [Metadata(*m) for m in metadata_list],
+            username=username,
+            password=password)
+
+        self.reply_json({
+            'deleted': deleted,
+            'ignored': ignored,
+            'failed': failed,
+            'moved': moved})
+
     def api_get(self, key, *args, dumbcode=False, method=None):
         if len(args) > 0 and dumbcode:
             return self.reply(self.HTTP_400)
@@ -449,17 +469,18 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
         caps = 'read'
         if fn in ('set', 'append', 'delete'):
             caps = 'write'
+
         if args and isinstance(args[0], str) and args[0].startswith('imap:'):
             caps = 'imap'
         if args and isinstance(args[0], bytes) and args[0].startswith(b'imap:'):
             caps = 'imap'
+
         if fn == 'email' and isinstance(args[0], list):
             md = Metadata(*(args[0][:Metadata.OFS_HEADERS] + [b'']))
             if md.pointers[0].ptr_type == Metadata.PTR.IS_IMAP:
                 caps = 'imap'
 
-        worker = self.with_worker(capabilities=caps, pop=pop, wait=wait)
-        return worker
+        return self.with_worker(capabilities=caps, pop=pop, wait=wait)
 
 
 if __name__ == '__main__':

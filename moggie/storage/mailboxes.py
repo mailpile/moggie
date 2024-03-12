@@ -15,7 +15,7 @@ def _u(txt):
 
 class MailboxStorageMixin:
     """
-    This mixin relies on the parent class implementing:
+    This mixin relies on the target class implementing:
         - ask_secret, set_secret
         - get_mailbox
         - can_handle_ptr
@@ -109,7 +109,7 @@ class MailboxStorageMixin:
                         return self.__getitem__(ptr.ptr_path, *gi_args)
                 except PleaseUnlockError:
                     raise
-                except (KeyError, OSError) as e:
+                except (KeyError, OSError, IOError) as e:
                     logging.info('Loading e-mail failed: %s' % e)
 
         raise KeyError('Not found: %s' % _u(dumb_decode(ptr.ptr_path)))
@@ -128,8 +128,63 @@ class MailboxStorageMixin:
             if self.can_handle_ptr(ptr):
                 try:
                     del self[ptr.ptr_path]
-                except (KeyError, OSError):
+                except (KeyError, OSError, IOError):
                     failed.append(ptr)
             else:
                 failed.append(ptr)
         return failed
+
+    def bulk_delete_messages(self, key, metadata_list,
+            username=None, password=None, context=None, secret_ttl=None):
+        """
+        Try to delete all the messages described by the metadata in the list.
+
+        Returns tuple of lists of metadata: (deleted, ignored, failed, moved)
+
+        Note that the moved list may contain metadata not present in the
+        original request, in the case that deleting this message caused
+        others to change locations.
+        """
+        if isinstance(key, str):
+            key = bytes(key, 'utf-8')
+        mailbox = self.get_mailbox(key)
+        if not mailbox:
+            logging.debug('Failed to open mailbox: %s' % key)
+            return ([], metadata_list, [], [])  # All ignored
+        if username or password:
+            self.unlock_mailbox(
+                mailbox, username, password, context, secret_ttl)
+
+        deleted = []
+        ignored = []
+        failed = []
+        moved = []
+        for md in metadata_list:
+            all_ptrs = md.pointers
+            loop_max = len(all_ptrs)
+            deleted_c = missing_c = errored_c = 0
+            for i in range(0, loop_max):
+                ptr = all_ptrs.pop(0)
+                if ptr.container != key:
+                    logging.debug('Delete(%s): ignoring (%s)%s' % (key, ptr.container, ptr))
+                    all_ptrs.append(ptr)
+                    continue
+                try:
+                    del self[ptr.ptr_path]
+                    deleted_c += 1
+                except KeyError:
+                    missing_c += 1
+                except (OSError, IOError):
+                    all_ptrs.append(ptr)
+                    errored_c += 1
+
+            md[md.OFS_POINTERS] = all_ptrs
+            if errored_c:
+                failed.append(md)
+            elif deleted_c or missing_c:
+                # Deleted or already gone, we are happy
+                deleted.append(md)
+            else:
+                ignored.append(md)
+
+        return (deleted, ignored, failed, moved)

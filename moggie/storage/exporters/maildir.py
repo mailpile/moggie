@@ -34,10 +34,12 @@ class DirWriter:
 
 class ZipWriter:
     CAN_ENCRYPT = HAVE_ZIP_AES
+    CAN_DELETE = True
 
     def __init__(self, fd, d_acl=0o040750, f_acl=0o000640, password=None):
         self.zf = self._open_or_create(fd, password)
         self.should_compact = False
+        self.encrypting = (password is not None)
 
         # This kludge keeps us compatible with both pyzipper and zipfile
         self.zipinfo_cls = zipfile.ZipInfo
@@ -82,6 +84,8 @@ class ZipWriter:
             return zipfile.ZipFile(fd, mode=mode)
 
     def _tt(self, ts):
+        if self.encrypting:
+            ts -= (ts % 3600)
         return datetime.datetime.fromtimestamp(ts).timetuple()
 
     def mkdir(self, dn, ts):
@@ -95,8 +99,20 @@ class ZipWriter:
 
     def delete_file(self, filename):
         try:
+            logging.debug('Deleting %s' % fn)
             self.zf.delete(fn)
             self.should_compact = True
+        except AttributeError:
+            logging.error('ZIP deletion unavailable, skipping %s' % fn)
+            raise IOError('Deletion is unavailable')
+
+    def delete_by_prefix(self, fn_prefix):
+        try:
+            for fn in self.zf.namelist():
+                if fn.startswith(fn_prefix):
+                    logging.debug('Deleting %s' % fn)
+                    self.zf.delete(fn)
+                    self.should_compact = True
         except AttributeError:
             logging.error('ZIP deletion unavailable, skipping %s' % fn)
             raise IOError('Deletion is unavailable')
@@ -130,6 +146,7 @@ class ZipWriter:
 
 class TarWriter(ZipWriter):
     CAN_ENCRYPT = False
+    CAN_DELETE = False
 
     def _open_or_create(self, fd, password):
         if password:
@@ -167,6 +184,10 @@ class TarWriter(ZipWriter):
         fi.uname = 'mailpile'
         fi.gname = 'mailpile'
         self.zf.addfile(fi, io.BytesIO(data))
+
+    def delete_by_prefix(self, fn_prefix):
+        logging.error('Deletion unavailable, skipping %s' % filename)
+        raise IOError('Deletion is unavailable')
 
     def delete_file(self, filename):
         logging.error('Deletion unavailable, skipping %s' % filename)
@@ -305,7 +326,11 @@ class MaildirExporter(BaseExporter):
         self.writer.delete_file(filename or self.get_filename(metadata))
 
     def export(self, metadata, message):
-        self.writer.add_file(*self.transform(metadata, message))
+        filename, ts, message = self.transform(metadata, message)
+        if self.writer.CAN_DELETE:
+            prefix = '-'.join(filename.split('-')[:2])
+            self.writer.delete_by_prefix(prefix)
+        self.writer.add_file(filename, ts, message)
 
     def compact(self):
         self.writer.compact()

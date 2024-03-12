@@ -25,7 +25,7 @@ class FormatMailzip(FormatBytes):
     FILE_RE = re.compile(r'(^|/)(cur|new)/[^/]+[:;-]2,[^/]*$')
 
     @classmethod
-    def Zipfile(self, parent, key, mode='r'):
+    def Zipfile(self, parent, key, mode='a'):
         if hasattr(key, 'fileno'):
             return zipfile.AESZipFile(key, mode=mode)
         else:
@@ -48,7 +48,7 @@ class FormatMailzip(FormatBytes):
 
     def __init__(self, parent, path, container, **kwargs):
         super().__init__(parent, path, container, **kwargs)
-        self.zf = self.Zipfile(parent, path[0], mode='r')
+        self.zf = self.Zipfile(parent, path[0], mode='a')
         password = kwargs.get('password')
         if password:
             self.unlock(None, password)
@@ -81,7 +81,9 @@ class FormatMailzip(FormatBytes):
                 resource=p)
 
     def __delitem__(self, key):
-        raise IOError('FIXME: Cannot delete from mailzips yet')
+        if isinstance(key, bytes):
+            key = str(key, 'utf-8')
+        self.zf.delete(key[1:])
 
     def __iadd__(self, data):
         raise IOError('FIXME: Cannot add to mailzips yet')

@@ -220,19 +220,6 @@ FIXME: Document html and html formats!
                 'maildir', 'mailzip', 'zip', 'mbox'):
             self.default_output = 'emails'
 
-        output = self.options['--output=']
-        if 'result-meta' in output:
-            self.with_result_meta = True
-            output.remove('result-meta')
-        if len(output) > 1:
-            output.remove('default')
-        if len(output) > 1:
-            raise Nonsense('Please only request one type of output')
-
-        if ((self.options.get('--zip-password=') or [None])[-1] and
-               self.options['--format='][-1] not in ('zip', 'mailzip')):
-            raise Nonsense('Encryption is only supported with ZIP formats')
-
         def _np(t):
             if t is None:
                 return t
@@ -244,9 +231,31 @@ FIXME: Document html and html formats!
         self.export_to = _np(self.options.get('--export-to=', [None])[-1])
         if self.export_to and not self.sync_dest:
             self.sync_dest = self.export_to
+        if not self.sync_src:
+            if self.mailboxes:
+                self.sync_src = 'mailbox:' + ', '.join(self.mailboxes)
+            elif self.terms:
+                self.sync_src = self.terms
 
+        self.validate_configuration()
         self.preferences = self.cfg.get_preferences(context=self.context)
         return []
+
+    def validate_configuration(self, output=True, zip_encryption=True):
+        if output:
+            output = self.options['--output=']
+            if 'result-meta' in output:
+                self.with_result_meta = True
+                output.remove('result-meta')
+            if len(output) > 1:
+                output.remove('default')
+            if len(output) > 1:
+                raise Nonsense('Please only request one type of output')
+
+        if zip_encryption:
+            if ((self.options.get('--zip-password=') or [None])[-1] and
+                   self.options['--format='][-1] not in ('zip', 'mailzip')):
+                raise Nonsense('Encryption is only supported with ZIP formats')
 
     async def as_metadata(self, md):
         if md is not None:
@@ -343,7 +352,7 @@ FIXME: Document html and html formats!
             fn = dumb_decode(md.pointers[0].ptr_path) if md.pointers else None
             uuid = md.uuid_asc
             sync_info = md.get_sync_info()
-            sync_info_parsed = parse_sync_info(sync_info, self.sync_id) if sync_info else None,
+            sync_info_parsed = parse_sync_info(sync_info, self.sync_id) if sync_info else None
             if fn:
                 try:
                     fn = str(fn, 'utf-8')

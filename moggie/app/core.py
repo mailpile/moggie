@@ -12,11 +12,12 @@ import time
 import sys
 
 from moggie import Moggie
-from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
-from ..config.helpers import DictItemProxy, EncodingListItemProxy
 from ..api.requests import *
 from ..api.responses import *
 from ..api.exceptions import *
+from ..config import APPNAME_UC, APPVER, AppConfig, AccessConfig
+from ..config.helpers import DictItemProxy, EncodingListItemProxy
+from ..email.util import IDX_MAX
 from ..util.asyncio import async_run_in_thread
 from ..util.dumbcode import *
 from ..workers.importer import ImportWorker
@@ -677,6 +678,33 @@ main app worker. Hints:
         watched = False
         return ResponseMailbox(api_request, info, watched)
 
+    async def api_req_delete_emails(self, conn_id, access, api_request):
+        ctx = api_request['context']
+        roles, tag_ns, scope_s = access.grants(ctx,
+            AccessConfig.GRANT_READ + AccessConfig.GRANT_FS)
+
+        # FIXME: Triage local/remote here? Access controls!!
+
+        loop = asyncio.get_event_loop()
+        mailboxes = api_request.get('from_mailboxes')
+        metadata_list = [
+            Metadata(*md) for md in (api_request['metadata_list'] or [])]
+
+        if not mailboxes:
+            # Extract mailboxes from metadata - this will delete the
+            # messages everywhere they are to be found.
+            mailboxes = set()
+            for md in metadata_list:
+                for ptr in md.pointers:
+                    mailboxes.add(ptr.get_container())
+
+        for mailbox in mailboxes:
+            logging.debug('Should delete from %s: %s' % (mailbox, metadata_list))
+            result = await self.storage.with_caller(conn_id).async_delete_emails(
+                loop, mailbox, metadata_list,
+                username=api_request.get('username'),
+                password=api_request.get('password'))
+
     async def api_req_search(self, conn_id, access, api_request):
         ctx = api_request['context']
         # Will raise ValueError or NameError if access denied
@@ -1130,6 +1158,8 @@ main app worker. Hints:
             result = await self.api_req_email(conn_id, access, api_req)
         elif type(api_req) == RequestMailbox:
             result = await self.api_req_mailbox(conn_id, access, api_req)
+        elif type(api_req) == RequestDeleteEmails:
+            result = await self.api_req_delete_emails(conn_id, access, api_req)
         elif type(api_req) == RequestBrowse:
             result = await self.api_req_browse(conn_id, access, api_req)
         elif type(api_req) == RequestContexts:

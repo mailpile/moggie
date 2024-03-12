@@ -211,6 +211,22 @@ class RequestEmail(RequestBase):
         }, req_id=req_id)
 
 
+class RequestDeleteEmails(RequestBase):
+    def __init__(self, context='',
+            from_mailboxes=None, metadata_list=[],
+            tag_undo_id=None, tag_redo_id=None, undoable=True,
+            username=None, password=None,
+            req_id=None):
+        self.update({
+            'req_type': 'delete',
+            'context': context,
+            'from_mailboxes': from_mailboxes,
+            'metadata_list': metadata_list,
+            'username': username,
+            'password': password
+        }, req_id=req_id)
+
+
 class RequestContexts(RequestBase):
     def __init__(self, req_id=None):
         self.update({
@@ -321,6 +337,7 @@ def to_api_request(_input):
          'autotag_classify': RequestAutotagClassify,
          'ping': RequestPing,
          'email': RequestEmail,
+         'delete': RequestDeleteEmails,
          'counts': RequestCounts,
          'search': RequestSearch,
          'browse': RequestBrowse,
