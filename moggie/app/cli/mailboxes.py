@@ -1,8 +1,8 @@
 # These are CLI commands for adding/removing/syncing mailbox contents.
 #
 #    moggie copy <search-terms> /path/to/mailbox
-#    moggie remove <search-terms> /path/to/mailbox
 #    moggie move <search-terms> /path/to/mailbox
+#    moggie remove <search-terms>
 #    moggie sync <search-terms> /path/to/mailbox
 #
 # Search-terms may themselves include mailboxes, which makes this into a
@@ -51,6 +51,7 @@
 # Notes:
 #    - TBD
 #
+import datetime
 import os
 import time
 import logging
@@ -83,18 +84,18 @@ class CommandMailboxes(CommandSearch):
         ('--username=',       [None], 'Username with which to access email'),
         ('--password=',       [None], 'Password with which to access email'),
     ],[
-        (None, None, 'strategies'),
+        (None, None, 'removal'),
         # If not, we ignore or tag as trash if we are indexed? Hmm.
         ('--delete',         [False], 'Allow sync/move to delete messages'),
         ('--trash',          [False], 'Tag messages as trash instead of delete'),
         ('--remove-after=',      [0], 'X=<hours>, delete X+ hours after copy'),
-        ('--json-ui-state',       [], 'Include UI state in JSON result'),
     ],[
         (None, None, 'output'),
         ('--create=',         [None], 'X=(mailzip|maildir|mbox)'),
         ('--format=',       ['text'], 'X=(text*|text0|json|sexp)'),
         ('--output=',   ['metadata'], None),
-        ('--zip-password=',   [None], 'Password for encrypted ZIP exports')]]
+        ('--zip-password=',   [None], 'Password for encrypted ZIP exports'),
+        ('--json-ui-state',       [], 'Include UI state in JSON result')]]
 
     def __init__(self, *args, **kwargs):
         self.moggie = get_shared_moggie()
@@ -112,14 +113,14 @@ class CommandMailboxes(CommandSearch):
     def validate_configuration(self):
         super().validate_configuration(zip_encryption=False)
 
-    def configure(self, args):
-        args = list(args)
-
+    def configure_target(self, args):
         self.target_mailbox = args.pop(-1)
         if args and args[-1] == '--':
             args.pop(-1)
+        return args
 
-        args = super().configure(args)
+    def configure(self, args):
+        args = super().configure(self.configure_target(list(args)))
 
         def _format_from_path(fn, exists=False):
             ext = fn.rsplit('.', 1)[-1]
@@ -133,17 +134,19 @@ class CommandMailboxes(CommandSearch):
                 return 'maildir'
             raise Nonsense('Unsure what mailbox format to use for %s' % fn)
 
-        self.export_to = self.sync_dest = self.target_mailbox
-        if os.path.isdir(self.export_to):
-            self.options['--create='] = ['maildir']
-        elif os.path.exists(self.export_to):
-            self.options['--create='] = [
-                _format_from_path(self.export_to, exists=True)]
-        elif not self.options['--create='][-1]:
-            self.options['--create='] = [_format_from_path(self.export_to)]
+        if self.target_mailbox:
+            self.export_to = self.sync_dest = self.target_mailbox
+            if os.path.isdir(self.export_to):
+                self.options['--create='] = ['maildir']
+            elif os.path.exists(self.export_to):
+                self.options['--create='] = [
+                    _format_from_path(self.export_to, exists=True)]
+            elif not self.options['--create='][-1]:
+                self.options['--create='] = [_format_from_path(self.export_to)]
 
-        self.email_emitter = self.get_emitter(fmt=self.options['--create='][-1])
-        self.options['--part='] = [0]  # Fetch entire emails
+            self.email_emitter = self.get_emitter(fmt=self.options['--create='][-1])
+            self.options['--part='] = [0]  # Fetch entire emails
+
         self.remove_after = int(self.options['--remove-after='][-1])
 
         if self.sync_src:
@@ -157,11 +160,6 @@ class CommandMailboxes(CommandSearch):
                 self.remove_tag_op = '-' + self.sync_src.split()[0][3:]
             else:
                 self.remove_messages = self.remove_by_tagging
-
-        # If our source is a mailbox, we actually delete
-        # If our source starts with a tag, we untag only that first tag
-        # ... unless real deletion is requested, then tag +trash
-        # If our source is anything more complicated, bail out
 
         return args
 
@@ -197,6 +195,8 @@ class CommandMailboxes(CommandSearch):
             return sync_info
 
     async def get_target_sync_info(self):
+        if not self.target_mailbox:
+            return []
         return await self._get_sync_info(self.target_mailbox)
 
     async def get_source_sync_info(self):
@@ -230,7 +230,7 @@ class CommandMailboxes(CommandSearch):
                 username=self.options['--username='][-1],
                 password=self.options['--password='][-1])
             logging.debug('Deleting %d messages from %s' % (len(metadata_list), mailbox))
-            await self.worker.async_api_request(self.access, query)
+            await self.repeatable_async_api_request(self.access, query)
         else:
             logging.debug('Nothing to remove')
 
@@ -242,15 +242,15 @@ class CommandMailboxes(CommandSearch):
         return []
 
     async def perform_query(self, *args):
-      try:
-        self.source_sync_info = await self.get_source_sync_info()
-        self.target_sync_info = await self.get_target_sync_info()
-        plan = await self.plan_actions(await super().perform_query(*args))
-        self.remove_post.extend(self.want_pre_delete(plan))
-        return plan
-      except Exception as e:
-        logging.exception('Asploded in perform_query()')
-        raise
+        try:
+            self.source_sync_info = await self.get_source_sync_info()
+            self.target_sync_info = await self.get_target_sync_info()
+            plan = await self.plan_actions(await super().perform_query(*args))
+            self.remove_post.extend(self.want_pre_delete(plan))
+            return plan
+        except Exception as e:
+            logging.exception('Asploded in perform_query()')
+            raise
 
     async def run(self):
         try:
@@ -263,10 +263,46 @@ class CommandMailboxes(CommandSearch):
 
 
 class CommandCopy(CommandMailboxes):
-    """moggie copy <search-terms ...> /path/to/mailbox
+    """moggie copy [options] <search-terms ...> /path/to/mailbox
 
-    Copy messages matching the search, to the named mailbox. Messages
-    already present in the mailbox will be omitted.
+    Copy messages matching the search, to the named mailbox.
+
+    Search terms can include mailboxes (local or remote), so this is also
+    a straightforward way to convert one mailbox format to another.
+
+    If not specified using the `--create=` argument, the format of the
+    created mailbox will be inferred from the filename.
+
+    ### Examples
+
+        moggie copy in:inbox /tmp/inbox.mdz   # Create a zipped Maildir
+        moggie copy in:inbox /tmp/inbox.mbx   # Create a Unix mbox
+
+        moggie copy /tmp/mailbox.mbx /tmp/mailbox.mdz
+
+        moggie copy imap://user@host/INBOX /tmp/stuff.mdz
+
+    ### Search Options
+
+    %(common)s
+
+    ### Output Options
+
+    %(output)s
+
+    ### Incremental Updates
+
+    For destinations which moggie is capable of updating (all except for
+    tar/tar.gz Maildir archives), messages already present in the mailbox
+    will be omitted. This allows the command to efficiently be used to
+    regularly update the contents of a target mailbox with the latest
+    results of a search.
+
+    Note this is not true synchronization, as it will never remove a
+    message; consider `moggie sync` for that use case.
+
+    If you want to remove the messages from the source after copying,
+    consdier `moggie move` instead.
     """
     NAME = 'copy'
     WEB_EXPOSE = True
@@ -339,19 +375,79 @@ class CommandCopy(CommandMailboxes):
 
 
 class CommandMove(CommandCopy):
-    """moggie move <search-terms ...> /path/to/mailbox
+    """moggie move [options] <search-terms ...> /path/to/mailbox
 
     Copy messages matching the search, to the named mailbox. Messages
     already present in the mailbox will be omitted. Once messages have
-    been copied, originals will be deleted if enough time has passed.
+    been copied, originals will be deleted, untagged or moved to trash.
+
+    Message removal can be postponed using the `--remove-after=` argument,
+    allowing other mail clients to access messages in a shared inbox before
+    they are removed by moggie.
+
+    Search terms can include mailboxes (local or remote).
+
+    If not specified using the `--create=` argument, the format of the
+    created mailbox will be inferred from the filename.
+
+    ### Examples
+
+        moggie move in:inbox /tmp/inbox.mdz   # Create a zipped Maildir
+        moggie move in:inbox /tmp/inbox.mbx   # Create a Unix mbox
+
+        moggie move /tmp/mailbox.mbx /tmp/mailbox.mdz
+
+        moggie move imap://user@host/INBOX inbox.mdz  # Download and delete
+
+    ### Search Options
+
+    %(common)s
+
+    ### Removal Options
+
+    %(removal)s
+
+    Note that the default removal strategy depends on the source definition.
+
+    If the source is a mailbox, moggie will delete by default (but only if
+    given permission with the `--delete` option).
+
+    If the source is a search starting with a tag, e.g. `in:inbox`, removal
+    will untag the messages (`moggie tag -inbox ...`).
+
+    If the source is a keyword search, messages will be "removed" by adding
+    the `trash` tag.
+
+    Tagging as trash can be requested for other sources by using the
+    `--trash` option. Deletion (instead of tagging or untagging) is  requested
+    by using the `--delete` option.
+
+    ### Output Options
+
+    %(output)s
+
+    ### Incremental Updates
+
+    For destinations which moggie is capable of updating (all except for
+    tar/tar.gz Maildir archives), messages already present in the mailbox
+    will be skipped. This allows the command to efficiently be used to
+    regularly update the contents of a target mailbox with the latest
+    results of a search.
+
+    Note this is not true synchronization, as it will never remove a
+    message; consider `moggie sync` for that use case.
+
+    If you want to copy the messages from the source without deleting,
+    consider `moggie copy` instead. To delete without copying, use
+    `moggie remove`.
     """
     NAME = 'move'
     WEB_EXPOSE = True
     ROLES = AccessConfig.GRANT_READ
 
     RESULT_KEY = 'MOVE'
-    FMT_DELETED = 'Deleted\t%(uuid)s\t%(subject)s'
-    DELT_MESSAGE = 'deleted'
+    FMT_REMOVED = 'Removed\t%(uuid)s\t%(subject)s'
+    REM_MESSAGE = 'Removed'
 
     def configure(self, args):
         rv = super().configure(args)
@@ -374,14 +470,14 @@ class CommandMove(CommandCopy):
         for pnm in plan:
             if pnm:
                 plan, metadata = pnm
-                if plan == self.DELT_MESSAGE:
+                if plan == self.REM_MESSAGE:
                     yield metadata
 
     async def plan_actions(self, results):
         plan = []
         existing_uuids = dict((si['uuid'], si) for si in self.target_sync_info)
 
-        min_age = int(self.remove_after) # FIXME:  * 3600
+        min_age = int(self.remove_after) * 3600
         delete_ts = int(time.time()) - min_age
 
         for result in results:
@@ -403,10 +499,111 @@ class CommandMove(CommandCopy):
                     copied_ts = None
 
                 if copied_ts and (copied_ts <= delete_ts):
-                    plan.append((self.DELT_MESSAGE, md))
+                    plan.append((self.REM_MESSAGE, md))
                 else:
                     plan.append((self.SKIP_MESSAGE, md))
 
-#       plan.append(False)  # EOM marker
         return plan
 
+
+class CommandRemove(CommandMailboxes):
+    """moggie remove [options] <search-terms ...>
+
+    Remove messages matching the search.
+
+    Search terms can include mailboxes (local or remote).
+
+    ### Examples
+
+        moggie remove in:trash from:bre
+
+    ### Search Options
+
+    %(common)s
+
+    ### Removal Options
+
+    %(removal)s
+
+    Note that the default removal strategy depends on the source definition.
+
+    If the source is a mailbox, moggie will delete by default (but only if
+    given permission with the `--delete` option).
+
+    If the source is a search starting with a tag, e.g. `in:inbox`, removal
+    will untag the messages (`moggie tag -inbox ...`).
+
+    If the source is a keyword search, messages will be "removed" by adding
+    the `trash` tag.
+
+    Tagging as trash can be requested for other sources by using the
+    `--trash` option. Deletion (instead of tagging or untagging) is  requested
+    by using the `--delete` option.
+
+    Note that delayed removal is done based on the date header of the e-mail
+    (not the it was discovered or manipulated by moggie).
+    """
+    NAME = 'remove'
+    WEB_EXPOSE = True
+    ROLES = AccessConfig.GRANT_READ
+
+    RESULT_KEY = 'REMOVE'
+    FMT_REMOVED = 'Removed\t%(uuid)s\t%(subject)s'
+    REM_MESSAGE = 'removed'
+
+    def configure_target(self, args):
+        self.target_mailbox = None
+        return args
+
+    def configure(self, args):
+        args = super().configure(args)
+
+        # This is an optimization, we still check the dates of the
+        # messages themselves before deciding to delete.
+        min_age = int(self.remove_after)
+        current_hour = datetime.datetime.now().hour
+        if self.terms and min_age - current_hour:
+            min_age_days = max(0, min_age // 24)
+            self.terms += ' -dates:%dd..' % min_age_days
+
+        return args
+
+    def want_pre_delete(self, plan):
+        for pnm in plan:
+            if pnm:
+                plan, metadata = pnm
+                if plan == self.REM_MESSAGE:
+                    yield metadata
+
+    def get_formatter(self):
+        return self.as_removed_emails
+
+    async def plan_actions(self, results):
+        plan = []
+        deadline = int(time.time() - self.remove_after)
+        for result in results:
+            md = Metadata(*result)
+            if self.remove_after:
+                if md.timestamp < deadline:
+                    plan.append((self.REM_MESSAGE, md))
+            else:
+                plan.append((self.REM_MESSAGE, md))
+
+        return plan
+
+    async def as_removed_emails(self, pnm):
+        if not pnm:
+            return
+
+        if not isinstance(pnm, tuple) and not isinstance(pnm[1], Metadata):
+            logging.debug('Not (plan, metadata): %s' % pnm)
+            return
+
+        plan, metadata = pnm
+
+        parsed = metadata.parsed()
+        parsed['_metadata'] = metadata
+        parsed['subject'] = parsed.get('subject', '(unknown)')
+        parsed[self.RESULT_KEY] = plan
+
+        yield (self.FMT_REMOVED, parsed)

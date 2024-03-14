@@ -147,6 +147,11 @@ class MailboxStorageMixin:
         """
         if isinstance(key, str):
             key = bytes(key, 'utf-8')
+        if username or password:
+            gi_args = (username, password, context, secret_ttl)
+        else:
+            gi_args = set()
+
         mailbox = self.get_mailbox(key)
         if not mailbox:
             logging.debug('Failed to open mailbox: %s' % key)
@@ -170,8 +175,10 @@ class MailboxStorageMixin:
                     all_ptrs.append(ptr)
                     continue
                 try:
-                    del self[ptr.ptr_path]
+                    self.__delitem__(ptr.ptr_path, *gi_args)
                     deleted_c += 1
+                except PleaseUnlockError:
+                    raise
                 except KeyError:
                     missing_c += 1
                 except (OSError, IOError):

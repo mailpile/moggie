@@ -47,8 +47,8 @@ def version_term_magic(term, max_version):
                 return int(ver)
 
         terms = []
-        beg = _intify(beg)
-        end = _intify(end)
+        beg = max(0, _intify(beg))
+        end = max(0, _intify(end))
         if beg > end:
             raise ValueError('%s > %s (out of range)' % (beg, end))
 

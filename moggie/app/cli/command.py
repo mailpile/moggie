@@ -148,12 +148,15 @@ class CLICommand:
         mailboxes, terms = (
             [t[8:] for t in terms if t[:8] == 'mailbox:'] or None,
             [t for t in terms if t[:8] != 'mailbox:'])
-        if (not mailboxes
-                and len(terms) == 1
-                and terms[0][:1] in ('.', '/')
-                and os.path.exists(terms[0])):
-            mailboxes = [os.path.abspath(terms[0])]
-            terms = []
+
+        if not mailboxes and (len(terms) == 1):
+            if terms[0][:1] in ('.', '/') and os.path.exists(terms[0]):
+                mailboxes = [os.path.abspath(terms[0])]
+                terms = []
+            elif terms[0].startswith('imap:/'):
+                mailboxes = [terms[0]]
+                terms = []
+
         return mailboxes, terms
 
     def combine_terms(self, terms):

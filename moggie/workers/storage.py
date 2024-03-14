@@ -301,10 +301,13 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
     def api_delete_emails(self,
             mailbox, metadata_list, username, password, method=None):
 
-        (deleted, ignored, failed, moved) = self.backend.bulk_delete_messages(
-            mailbox, [Metadata(*m) for m in metadata_list],
-            username=username,
-            password=password)
+        try:
+            (deleted, ignored, failed, moved) = self.backend.bulk_delete_messages(
+                mailbox, [Metadata(*m) for m in metadata_list],
+                username=username,
+                password=password)
+        except PleaseUnlockError as pue:
+            raise self.pue_to_needinfo(pue)
 
         self.reply_json({
             'deleted': deleted,

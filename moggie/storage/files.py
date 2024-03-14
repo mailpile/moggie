@@ -89,7 +89,7 @@ class FileStorage(BaseStorage, MailboxStorageMixin):
                 return False
         return True
 
-    def __delitem__(self, key):
+    def __delitem__(self, key, *unlock_args):
         paths = self.key_to_paths(key)
         ptr = [paths.pop(0)]
         if not paths:
@@ -101,6 +101,9 @@ class FileStorage(BaseStorage, MailboxStorageMixin):
                 cc = None
             for sub_type, sub_path in paths:
                 cd = FORMATS[sub_type](self, ptr, cc)
+                if unlock_args:
+                    logging.debug('unlock_args=%s' % (unlock_args,))
+                    cd = self.unlock_mailbox(cd, *unlock_args)
                 cc = cd[sub_path]
                 ptr.append((sub_type, sub_path))
             del cd[sub_path]
