@@ -3,6 +3,48 @@ import os
 import re
 
 
+_time_multipliers = {
+    'M':  60,
+    'H':  60 * 60,
+    'h':  60 * 60,
+    'd':  60 * 60 * 24,
+    'w':  60 * 60 * 24 * 7,
+    'm': (60 * 60 * 24 * (30 + 31)) // 2,
+    'y': (60 * 60 * 24 * (365 + 365 + 365 + 366)) // 4}
+
+def friendly_time_to_seconds(word):
+    mul = _time_multipliers.get(word[-1:])
+    if not mul:
+        return int(word)
+    return int(word[:-1]) * mul
+
+def friendly_time_ago_to_timestamp(word, now=None):
+    # FIXME: Do date calculations properly? Since we have a reference
+    #        time (now), we could calculate precise dates. We should
+    #        also allow the user to specify timestamps in common formats.
+    if now is None:
+        now = int(time.time())
+
+    if word[-1:] in ('m', 'y', 'Y'):
+        dt_now = datetime.datetime.fromtimestamp(now)
+        months = int(word[:-1]) if (word[-1] == 'm') else 0
+        years = int(word[:-1]) if (word[-1] in ('y', 'Y')) else 0
+        years += months // 12
+        months %= 12
+        if months > dt_now.month:
+            months -= 12
+            years += 1
+
+        return int(datetime.datetime(
+            dt_now.year - years,
+            dt_now.month - months,
+            dt_now.day,
+            dt_now.hour,
+            dt_now.minute,
+            dt_now.second).timestamp())
+
+    return now - friendly_time_to_seconds(word)
+
 def friendly_caps(word):
     parts = re.split('[\s_\.-]', word)
     return ' '.join('%s%s' % (p[:1].upper(), p[1:]) for p in parts if p)

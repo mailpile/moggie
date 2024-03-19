@@ -62,6 +62,7 @@ from .notmuch import CommandSearch
 from moggie import get_shared_moggie
 from moggie.api.requests import RequestTag, RequestDeleteEmails
 from moggie.email.metadata import Metadata
+from moggie.util.friendly import friendly_time_ago_to_timestamp
 
 
 class CommandMailboxes(CommandSearch):
@@ -85,10 +86,9 @@ class CommandMailboxes(CommandSearch):
         ('--password=',       [None], 'Password with which to access email'),
     ],[
         (None, None, 'removal'),
-        # If not, we ignore or tag as trash if we are indexed? Hmm.
-        ('--delete',         [False], 'Allow sync/move to delete messages'),
-        ('--trash',          [False], 'Tag messages as trash instead of delete'),
-        ('--remove-after=',      [0], 'X=<hours>, delete X+ hours after copy'),
+        ('--trash',          [False], 'Tag removed messages as trash'),
+        ('--delete',         [False], 'Allow permanent deletion of messages'),
+        ('--remove-after=',      [0], 'X=1h, X=2d, ... remove after some time'),
     ],[
         (None, None, 'output'),
         ('--create=',         [None], 'X=(mailzip|maildir|mbox)'),
@@ -99,7 +99,7 @@ class CommandMailboxes(CommandSearch):
 
     def __init__(self, *args, **kwargs):
         self.moggie = get_shared_moggie()
-        self.remove_after = None
+        self.remove_max_ts = None
         self.remove_messages = None
         self.remove_tag_op = '+trash'
         self.remove_post = []
@@ -147,7 +147,8 @@ class CommandMailboxes(CommandSearch):
             self.email_emitter = self.get_emitter(fmt=self.options['--create='][-1])
             self.options['--part='] = [0]  # Fetch entire emails
 
-        self.remove_after = int(self.options['--remove-after='][-1])
+        self.remove_max_ts = friendly_time_ago_to_timestamp(
+            self.options['--remove-after='][-1])
 
         if self.sync_src:
             if self.options['--trash'][-1]:
@@ -383,7 +384,8 @@ class CommandMove(CommandCopy):
 
     Message removal can be postponed using the `--remove-after=` argument,
     allowing other mail clients to access messages in a shared inbox before
-    they are removed by moggie.
+    they are removed by moggie. The `--remove-after` argument understands
+    these suffixes: h=hours, d=days, w=weeks, m=months, y=years.
 
     Search terms can include mailboxes (local or remote).
 
@@ -451,7 +453,7 @@ class CommandMove(CommandCopy):
 
     def configure(self, args):
         rv = super().configure(args)
-        if not self.remove_after:
+        if not self.remove_min_age:
             if self.remove_messages is not None:
                 self.email_emitter = self.wrap_email_emitter(self.email_emitter)
             else:
@@ -477,9 +479,6 @@ class CommandMove(CommandCopy):
         plan = []
         existing_uuids = dict((si['uuid'], si) for si in self.target_sync_info)
 
-        min_age = int(self.remove_after) * 3600
-        delete_ts = int(time.time()) - min_age
-
         for result in results:
             md = Metadata(*result)
             sync_info = existing_uuids.get(md.uuid_asc)
@@ -498,7 +497,7 @@ class CommandMove(CommandCopy):
                     # Sync info missing or doesn't match.
                     copied_ts = None
 
-                if copied_ts and (copied_ts <= delete_ts):
+                if copied_ts and (copied_ts <= self.remove_max_ts):
                     plan.append((self.REM_MESSAGE, md))
                 else:
                     plan.append((self.SKIP_MESSAGE, md))
@@ -560,10 +559,10 @@ class CommandRemove(CommandMailboxes):
 
         # This is an optimization, we still check the dates of the
         # messages themselves before deciding to delete.
-        min_age = int(self.remove_after)
+        min_age_hours = (time.time() - self.remove_max_ts) // 3600
         current_hour = datetime.datetime.now().hour
-        if self.terms and min_age - current_hour:
-            min_age_days = max(0, min_age // 24)
+        if self.terms and min_age_hours - current_hour:
+            min_age_days = max(0, min_age_hours // 24)
             self.terms += ' -dates:%dd..' % min_age_days
 
         return args
@@ -580,11 +579,10 @@ class CommandRemove(CommandMailboxes):
 
     async def plan_actions(self, results):
         plan = []
-        deadline = int(time.time() - self.remove_after)
         for result in results:
             md = Metadata(*result)
             if self.remove_after:
-                if md.timestamp < deadline:
+                if md.timestamp <= self.remove_max_ts:
                     plan.append((self.REM_MESSAGE, md))
             else:
                 plan.append((self.REM_MESSAGE, md))

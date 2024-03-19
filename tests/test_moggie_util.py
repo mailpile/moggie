@@ -2,6 +2,7 @@ import unittest
 import doctest
 
 #import moggie.util.conn_brokers
+import moggie.util.http
 import moggie.util.imap
 import moggie.util.intset
 import moggie.util.mailpile
@@ -105,6 +106,19 @@ class DummbCodeTests(unittest.TestCase):
 
 
 class FriendlyTests(unittest.TestCase):
+    def test_friendly_time_ago(self):
+        ts = 1710849600  # 19 mar 2024, 12:00 UTC
+        testing = friendly_time_ago_to_timestamp
+        self.assertEqual(testing('0', now=ts), ts)
+        self.assertEqual(testing('1h', now=ts), ts - 3600)
+        self.assertEqual(testing('1d', now=ts), ts - (24*3600))
+        self.assertEqual(testing('1w', now=ts), ts - (7*24*3600))
+        self.assertEqual(testing('1m', now=ts), ts - (29*24*3600))
+        self.assertEqual(testing('1y', now=ts), 1679227200)  # 19 mar 2023, 12:00 UTC
+        self.assertEqual(testing('12m', now=ts), 1679227200)  # 19 mar 2023, 12:00 UTC
+        self.assertEqual(testing('16m', now=ts), 1668859200)  # 19 nov 2022, 12:00 UTC
+        self.assertEqual(testing('10y', now=ts), 1395230400)  # 19 mar 2014, 12:00 UTC
+
     def test_friendly_date(self):
         ts = 1696845600
         self.assertEqual(friendly_date(ts), '2023-10-09')
