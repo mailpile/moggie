@@ -19,14 +19,11 @@ def friendly_time_to_seconds(word):
     return int(word[:-1]) * mul
 
 def friendly_time_ago_to_timestamp(word, now=None):
-    # FIXME: Do date calculations properly? Since we have a reference
-    #        time (now), we could calculate precise dates. We should
-    #        also allow the user to specify timestamps in common formats.
     if now is None:
         now = int(time.time())
 
     if word[-1:] in ('m', 'y', 'Y'):
-        dt_now = datetime.datetime.fromtimestamp(now)
+        dt_now = datetime.datetime.utcfromtimestamp(now)
         months = int(word[:-1]) if (word[-1] == 'm') else 0
         years = int(word[:-1]) if (word[-1] in ('y', 'Y')) else 0
         years += months // 12
