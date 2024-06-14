@@ -1,5 +1,6 @@
 import copy
 import re
+import logging
 import hashlib
 
 from html.parser import HTMLParser
@@ -603,10 +604,12 @@ def clean_email_html(metadata, email, part,
         remote_images=False,
         target_blank=False):
 
-    if metadata.idx and (id_signer is not None):
-        url_prefix = '/cli/show/%s?part=' % id_signer('id:%s' % metadata.idx)
-    else:
-        url_prefix = 'cid:'
+    url_prefix = 'cid:'
+    try:
+        if metadata.idx and (id_signer is not None):
+            url_prefix = '/cli/show/%s?part=' % id_signer('id:%s' % metadata.idx)
+    except:
+        pass
 
     def _find_by_cid(cid):
         for i, p in enumerate(email['_PARTS']):

@@ -125,6 +125,11 @@ class CommandParse(CLICommand):
     ]]
 
     class Settings:
+        def __str__(self):
+            return '<Settings %s>' % ' '.join(
+                '%s=%s' % (attr, getattr(self, attr))
+                for attr in self.__dict__)
+
         def __init__(self, **kwargs):
             def _opt(k, a, defaults):
                 val = kwargs.get(a) or kwargs.get(k)
@@ -367,6 +372,16 @@ class CommandParse(CLICommand):
     async def Parse(cls, cli_obj, data,
             settings=None, allow_network=False,
             **kwargs):
+        """
+        Parse the e-mail according to the settings. Data should be a
+        a raw message (bytes), or a dict containing a 'data' element
+        which is the raw message and an optional 'metadata' element
+        with raw Moggie metadata for this message.
+
+        If present, the input dict will be returned as the parse result, with
+        the 'data' entry deleted and a 'parsed' element added in its place,
+        and the 'metadata' element expanded to its parsed form.
+        """
         t0 = time.time()
 
         if settings is None:
@@ -374,10 +389,15 @@ class CommandParse(CLICommand):
 
         result = {}
         if isinstance(data, dict):
-            result = data
+            result.update(data)
+            if 'email' in result and '_RAW' in result['email']:
+                data = base64.b64decode(result['email']['_RAW'])
+                del result['email']
+            if 'data' in result:
+                data = result['data']
+                del result['data']
         else:
-            result['data'] = data
-        data = result.get('data')
+            pass  # data = data!
 
         md = result.get('metadata')
         html_magic = (settings.with_html
@@ -546,9 +566,6 @@ class CommandParse(CLICommand):
         else:
             del result['metadata']
 
-        if 'data' in result:
-            del result['data']
-
         result['_PARSE_TIME_MS'] = int(1000 * (time.time() - t0))
         return result
 
@@ -571,10 +588,11 @@ class CommandParse(CLICommand):
         self.settings = self.Settings(**self.options)
         self.settings.zip_password = self.options['--zip-password=']
 
-        if not self.allow_network:
-            self.settings.verify_dkim = False
-            if len(self.options['--verify-dkim=']) > 1:
-                raise Nonsense('Cannot verify DKIM without network access')
+        return self.configure2(args)
+
+    def configure2(self, args):
+        if not self.allow_network and self.settings.verify_dkim:
+             raise Nonsense('Cannot verify DKIM without network access')
 
         def _load(t, target):
             if t[:1] == '-':
@@ -627,9 +645,6 @@ class CommandParse(CLICommand):
                 else:
                     args = [t for t in current if t]
 
-        return self.configure2(args)
-
-    def configure2(self, args):
         def _mailbox_and_terms(t):
             mailboxes, t = self.remove_mailbox_terms(t)
             return mailboxes, self.combine_terms(t)
@@ -1030,8 +1045,9 @@ system should have learned new things since then.
                 result = await self.repeatable_async_api_request(
                     self.access, request)
 
-            if result and 'emails' in result:
+            if result and result.get('emails'):
                 for metadata in result['emails']:
+                    msg = None
                     req = RequestEmail(
                             metadata=metadata,
                             full_raw=True,
@@ -1044,7 +1060,6 @@ system should have learned new things since then.
                     except APIException:
                         if not self.settings.with_missing:
                             raise
-                        msg = None
                     if msg and 'email' in msg:
                         yield {
                             'data': base64.b64decode(msg['email']['_RAW']),
@@ -1076,15 +1091,21 @@ system should have learned new things since then.
     async def run(self):
         emitter = self.get_emitter()
 
-        if self.searches:
-            async for message in self.gather_emails():
+        async def handle_message(message):
+            if 'error' in message:
+                if self.settings.with_missing:
+                    emitter(message)
+            else:
                 emitter(await self.Parse(self, message, self.settings,
                     allow_network=self.allow_network))
 
+        if self.searches:
+            async for message in self.gather_emails():
+                await handle_message(message)
+
         if self.messages:
             for message in self.messages:
-                emitter(await self.Parse(self, message, self.settings,
-                    allow_network=self.allow_network))
+                await handle_message(message)
 
         emitter(None)
 

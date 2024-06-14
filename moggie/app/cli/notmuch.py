@@ -35,7 +35,7 @@ import sys
 import time
 
 from .command import Nonsense, CLICommand, AccessConfig
-from .email import CommandEmail
+from .email import CommandEmail, CommandParse
 from ...config import AppConfig
 from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
@@ -172,7 +172,7 @@ FIXME: Document html and html formats!
         ('--export-to=',      [None], 'Local mailbox to export to'),
         # These are notmuch options which we currently ignore
         ('--sort=', ['newest-first'], ''),  # notmuch: ignored
-        ('--format-version=',   [''], ''),  # notmuch: ignored
+        ('--format-version=',     [], ''),  # notmuch: ignored
         ('--exclude=',      ['true'], ''),  # notmuch: ignored
         ('--duplicate=',        [''], '')]] # notmuch: ignored
 
@@ -407,7 +407,7 @@ FIXME: Document html and html formats!
              target_blank=t_blank)
 
     async def as_emails(self, thread, fmt=None):
-        def _textify(r, prefer, esc, part_fmt, msg_fmt, hdr_fmt='%(h)s: %(v)s'):
+        def _textify(r, prefer, _all, esc, pesc, part_fmt, msg_fmt, hdr_fmt='%(h)s: %(v)s'):
             headers = '\n'.join(
                 hdr_fmt % {'hc': h.lower(), 'h': h, 'v': esc(r['headers'][h])}
                 for h in ('Date', 'To', 'Cc', 'From', 'Reply-To', 'Subject')
@@ -427,17 +427,26 @@ FIXME: Document html and html formats!
                     else:
                         types.append(None)
                         p['class'] = 'part mPartAttachment'
+
                 if (parent_ct == 'multipart/alternative') and (len(parts) > 1):
-                    try:
-                        preferred = types.index(prefer)
-                    except ValueError:
+
+                    options = [(len(parts[i].get('content', '')), i)
+                        for i, t in enumerate(types) if t == prefer]
+
+                    if len(options) == 1:
+                        preferred = options[0][1]
+                    elif len(options) > 1:
+                        preferred = max(options)[1]
+                    else:
                         preferred = [(1 if t else 0) for t in types].index(1)
+
                     for i, p in enumerate(parts):
                         if i == preferred:
                             p['class'] += ' mShow'
                             p['_pref'] = ' (preferred)'
                         else:
                             p['class'] += ' mHide'
+
                 return parts
 
             url_prefix = '/cli/show/id:%s' % r['id']
@@ -450,9 +459,12 @@ FIXME: Document html and html formats!
                 if 'content' in p:
                     if isinstance(p['content'], list):
                         p['content'] = '\n'.join(
-                            _part(sp) for sp in _classify(ct, p['content']))
+                            _part(sp) for sp in _classify(ct, p['content'])
+                            if _all or 'mHide' not in sp.get('class', ''))
+                    else:
+                        p['content'] = pesc(p, p['content']).rstrip() + '\n'
                 else:
-                    p['content'] = (p['_fn'] or 'Non-text part: ') + p['_ct']
+                    p['content'] = '(%s)' % ((p['_fn'] or 'Non-text part: ') + p['_ct'])
                 return (part_fmt % p)
 
             return (msg_fmt % {
@@ -467,8 +479,23 @@ FIXME: Document html and html formats!
                 'h': headers,
                 'b': '\n'.join(_part(sp) for sp in _classify('', r['body']))})
 
-        def _as_text(r):
-            return _textify(r, 'text/plain', lambda t: t,
+        def _as_simple_text(r):
+            indent = self.options['--indent='][-1]
+            prefix = '' if (indent is True) else indent
+            joiner = '\n' + prefix
+            def _indent(part, txt):
+                return prefix + joiner.join(txt.splitlines())
+            return _textify(r, 'text/plain', False, lambda t: t, _indent,
+                """%(content)s""",
+                """\
+X-EMAIL: id:%(i)s depth:%(d)d path:%(f)s
+Tags: %(t)s
+%(h)s
+
+%(b)s""")
+
+        def _as_notmuch_text(r):
+            return _textify(r, 'text/plain', True, lambda t: t, lambda p,t: t,
                 """\
 \x0cpart{ ID: %(id)s, %(_fn)sContent-type: %(_ct)s%(_pref)s
 %(content)s
@@ -483,8 +510,9 @@ FIXME: Document html and html formats!
 %(b)s
 \x0cbody}
 \x0cmessage}""")
+
         def _as_html(r):
-            return _textify(r, 'text/html', _html_quote,
+            return _textify(r, 'text/html', True, _html_quote, lambda p,t: t,
                 """
     <div class="%(class)s" data-part-id="%(id)s" data-mimetype="%(_ct)s">
       <a class="mDownload" href="%(_url)s">Download</a>
@@ -514,19 +542,23 @@ FIXME: Document html and html formats!
             part = int((self.options.get('--part=') or [0])[-1])
             raw = (fmt in ('mbox', 'maildir', 'mailzip', 'raw', 'zip'))
             want_body = raw or (self.options.get('--body=', [0])[-1] != 'false')
-            want_html = self.options.get('--include-html')
+            want_html = bool((fmt in ('json', 'html', 'jhtml'))
+                or self.options.get('--include-html'))
             shown_types = ('text/plain', 'text/html') if want_html else ('text/plain',)
 
+            logging.debug('want_html=%s' % want_html)
+
+            notmuch_compatible = bool(self.options.get('--format-version='))
             thread = self._as_thread(thread)
             for md in thread['messages']:
+              try:
                 md = Metadata(*md)
                 if want_body:
                     query = RequestEmail(
                         metadata=md,
-                        text=(not raw or part),
                         data=(True if part else False),
                         parts=([part-1] if part else None),
-                        full_raw=(raw and not part),
+                        full_raw=(not part),
                         username=self.options['--username='][-1],
                         password=self.options['--password='][-1])
                     query['context'] = self.context
@@ -545,14 +577,29 @@ FIXME: Document html and html formats!
                          '_mimetype': _part['content-type'][0],
                          '_data': _part.get('_DATA')})
 
-                elif raw and msg['email'].get('_RAW'):
+                elif raw:
                     yield ('',
-                        {'_metadata': md, '_data': msg['email'].get('_RAW')})
+                        {'_metadata': md, '_data': msg['email']['_RAW']})
 
                 else:
+                    # FIXME:
+                    #   - remove duplicate logic, rely on the Parse!
+                    #   - respect multipart/alternative: pick one for display
+                    msg['metadata'] = md
+                    parsed = await CommandParse.Parse(self, msg,
+                        with_nothing=True,
+                        with_headers=True,
+                        with_text=True,
+                        with_html=want_html,
+                        with_html_clean=want_html,  # FIXME: Choose one?
+                        with_html_text=True,
+                        with_structure=True)
+
+                    msg['email'] = parsed = parsed['parsed']
+
                     headers = {}
                     for hdr in ('Subject', 'From', 'To', 'Cc', 'Date'):
-                        val = msg['email'].get(hdr.lower())
+                        val = parsed.get(hdr.lower())
                         if isinstance(val, str):
                             headers[hdr] = val
                         elif isinstance(val, dict):
@@ -564,14 +611,18 @@ FIXME: Document html and html formats!
                                 headers[hdr] = ', '.join(
                                     ('%s <%s>' % (v['fn'], v['address'])).strip()
                                     for v in val)
+
                     body = []
-                    if '_PARTS' in msg['email']:
+                    siblings = []
+                    multipart_type = None
+                    if '_PARTS' in parsed:
                         partstack = [body]
                         depth = 0
-                        for i, _part in enumerate(msg['email']['_PARTS']):
-                            info = {
-                                'id': i+1,
-                                'content-type': _part.get('content-type', ['text/plain'])[0]}
+                        ignored_parts = set()
+                        for i, _part in enumerate(parsed['_PARTS']):
+                            content_type = _part.get('content-type', ['text/plain'])[0]
+                            info = {'id': i+1, 'content-type': content_type}
+
                             part_id = magic_part_id(i+1, _part)
                             if part_id:
                                 info['magic-id'] = part_id
@@ -587,28 +638,45 @@ FIXME: Document html and html formats!
                                 if cte:
                                     info['content-transfer-encoding'] = cte
                                 info['content-length'] = (_part['_BYTES'][2] - _part['_BYTES'][1])
+
                             if 'content-id' in _part:
                                 info['content-id'] = _part['content-id']
+
                             while _part['_DEPTH'] < depth:
                                 partstack.pop(-1)
                                 depth -= 1
-                            if info['content-type'] != 'text/x-mime-postamble':
+
+                            if content_type != 'text/x-mime-postamble':
                                 partstack[-1].append(info)
-                            if '_TEXT' in _part and info['content-type'] in shown_types:
-                                if 'html' in info['content-type']:
-                                    info['content'] = self._fix_html(
-                                        md, msg, _part)
-                                else:
-                                    info['content'] = _part['_TEXT']
-                            elif info['content-type'].startswith('multipart/'):
+
+                            if content_type.startswith('multipart/'):
                                 info['content'] = []
                                 partstack.append(info['content'])
                                 depth += 1
 
+                            elif i in ignored_parts:
+                                continue
+
+                            elif '_TEXT' in _part:
+                                if 'html' == content_type[-4:]:
+                                    if content_type in shown_types:
+                                        # FIXME: Way to select uncleaned HTML?
+                                        html = _part.get('_HTML_CLEAN', _part['_TEXT'])
+                                        info['content'] = html
+                                    else:
+                                        # We just converted this into text/plain!
+                                        info['content-type'] = 'text/plain'
+                                        info['content'] = _part['_HTML_TEXT']
+                                else:
+                                    info['content'] = _part['_TEXT']
+
                     if fmt in ('html', 'jhtml'):
                         func = _as_html
+                    elif notmuch_compatible:
+                        func = _as_notmuch_text
                     else:
-                        func = _as_text
+                        func = _as_simple_text
+
                     yield (func, {
                         'id': self.sign_id('id:%s' % md.idx)[3:],
                         'match': md.idx in thread['hits'],
@@ -628,6 +696,9 @@ FIXME: Document html and html formats!
                         '_header': 'FIXME',
                         '_metadata': md,
                         '_parsed': msg})
+              except Exception as e:
+                logging.exception('Failed to format message')
+                raise
 
     async def emit_result_raw(self, result, first=False, last=False):
         if result is not None:
@@ -1024,7 +1095,7 @@ class CommandAddress(CommandSearch):
         ('--output=',         [], 'X=(sender*|recipients|address|count)'),
     # These are notmuch options which we currently ignore
         ('--sort=',           ['newest-first'], ''),
-        ('--format-version=', [''], ''),
+        ('--format-version=', [], ''),
         ('--exclude=',        ['true'], '')]]
 
     def __init__(self, *args, **kwargs):
@@ -1160,6 +1231,7 @@ class CommandShow(CommandSearch):
         (None, None, 'output'),
         ('--format=',   ['text'], 'X=(text*|text0|json|sexp)'),
         ('--output=',         [], 'X=(sender*|recipients|address|count)'),
+        ('--indent=',      [' '], 'Prefix used to indent message body (default=` `)'),
         ('--limit=',        [''], ''),
         ('--entire-thread=',  [], 'X=(true|false*), show all messages in thread?'),
         ('--body=',     ['true'], 'X=(true*|false), output message body?'),
@@ -1167,8 +1239,8 @@ class CommandShow(CommandSearch):
         ('--include-html',    [], 'Include HTML parts in output'),
     # These are notmuch options which we currently ignore
         ('--verify',          [], ''),
-        ('--decrypt=',        [],  ''),
-        ('--format-version=', [''], ''),
+        ('--decrypt=',        [], ''),
+        ('--format-version=', [], 'Set this to any value for notmuch-compatible output'),
         ('--exclude=',    ['true'], ''),
         ('--duplicate=',      [''], '')]]
 
