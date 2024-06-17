@@ -46,6 +46,7 @@ from ...security.mime import part_filename, magic_part_id
 from ...security.html import clean_email_html
 from ...storage.exporters.mbox import MboxExporter
 from ...storage.exporters.maildir import MaildirExporter, EmlExporter
+from ...storage.exporters.msgdirs import MsgdirsExporter
 from ...util.mailpile import tag_unquote
 from ...util.dumbcode import dumb_decode, to_json, from_json
 
@@ -112,6 +113,8 @@ class CommandSearch(CLICommand):
        * `zip` - Entire messages as individual files in a ZIP archove
        * `maildir` - Entire messages in a Maildir mailbox, in a .TGZ archive
        * `mailzip` - Entire messages in a Maildir mailbox, in a .ZIP archive
+       * `msgdirs` - Messages converted to files+directories, in a .TGZ archive
+       * `msgdzip` - Messages converted to files+directories, in a .ZIP archive
        * `mbox` - Entire messages in a Unix mbox mailbox
 
     Notes:
@@ -166,6 +169,7 @@ FIXME: Document html and html formats!
         (None, None, 'output'),
         ('--format=',       ['text'], 'X=(text*|text0|json|sexp|zip|maildir|mbox|..)'),
         ('--output=',    ['default'], 'X=(summary*|threads|messages|files|emails|..)'),
+        ('--indent=',          [' '], ''),
         ('--zip-password=',   [None], 'Password for encrypted ZIP exports'),
         ('--sync-src=',       [None], 'Source for generating sync IDs'),
         ('--sync-dest=',      [None], 'Destination for generating sync IDs'),
@@ -208,16 +212,16 @@ FIXME: Document html and html formats!
             self.mimetype = 'text/html; charset=utf-8'
         elif fmt == 'mbox':
             self.mimetype = 'application/mbox'
-        elif fmt in ('zip', 'mailzip'):
-            self.mimetype = 'application/mbox'
-        elif fmt == 'maildir':
+        elif fmt in ('zip', 'mailzip', 'msgdzip'):
+            self.mimetype = 'application/zip'
+        elif fmt in ('maildir', 'msgdirs'):
             self.mimetype = 'application/x-tgz'
 
         if fmt in ('html', 'jhtml') and not self.options['--limit='][-1]:
             self.options['--limit='].append(self.HTML_DEFAULT_LIMIT)
 
         if self.options['--format='][-1] in (
-                'maildir', 'mailzip', 'zip', 'mbox'):
+                'maildir', 'mailzip', 'zip', 'mbox', 'msgdirs', 'msgdzip'):
             self.default_output = 'emails'
 
         def _np(t):
@@ -540,7 +544,7 @@ Tags: %(t)s
         if thread is not None:
             fmt = fmt or self.options['--format='][-1]
             part = int((self.options.get('--part=') or [0])[-1])
-            raw = (fmt in ('mbox', 'maildir', 'mailzip', 'raw', 'zip'))
+            raw = (fmt in ('raw', 'zip', 'maildir', 'mailzip', 'mbox'))
             want_body = raw or (self.options.get('--body=', [0])[-1] != 'false')
             want_html = bool((fmt in ('json', 'html', 'jhtml'))
                 or self.options.get('--include-html'))
@@ -670,14 +674,7 @@ Tags: %(t)s
                                 else:
                                     info['content'] = _part['_TEXT']
 
-                    if fmt in ('html', 'jhtml'):
-                        func = _as_html
-                    elif notmuch_compatible:
-                        func = _as_notmuch_text
-                    else:
-                        func = _as_simple_text
-
-                    yield (func, {
+                    result = {
                         'id': self.sign_id('id:%s' % md.idx)[3:],
                         'match': md.idx in thread['hits'],
                         'excluded': False,
@@ -695,7 +692,16 @@ Tags: %(t)s
                         '_fn': 'FIXME',
                         '_header': 'FIXME',
                         '_metadata': md,
-                        '_parsed': msg})
+                        '_parsed': msg}
+
+                    if fmt in ('html', 'jhtml'):
+                        func = _as_html
+                    elif notmuch_compatible:
+                        func = _as_notmuch_text
+                    else:
+                        func = _as_simple_text
+
+                    yield (func, result)
               except Exception as e:
                 logging.exception('Failed to format message')
                 raise
@@ -827,9 +833,17 @@ Tags: %(t)s
 
     def _export(self, exporter, result, first, last):
         if result is not None:
-            metadata = result[1]['_metadata']
-            raw_email = base64.b64decode(result[1]['_data'])
-            exporter.export(metadata, raw_email)
+            try:
+                func, data = result
+                if hasattr(exporter, 'export_parsed'):
+                    exporter.export_parsed(
+                        data['_metadata'], data['_parsed'], func(data))
+                else:
+                    metadata = data['_metadata']
+                    raw_email = base64.b64decode(data['_data'])
+                    exporter.export(metadata, raw_email)
+            except:
+                logging.exception('Export failed')
         if last:
             exporter.close()
 
@@ -847,6 +861,15 @@ Tags: %(t)s
 
     async def emit_result_mailzip(self, result, first=False, last=False):
         exporter = self._get_exporter(MaildirExporter,
+            output=MaildirExporter.AS_ZIP)
+        return self._export(exporter, result, first, last)
+
+    async def emit_result_msgdirs(self, result, first=False, last=False):
+        exporter = self._get_exporter(MsgdirsExporter)
+        return self._export(exporter, result, first, last)
+
+    async def emit_result_msgdzip(self, result, first=False, last=False):
+        exporter = self._get_exporter(MsgdirsExporter,
             output=MaildirExporter.AS_ZIP)
         return self._export(exporter, result, first, last)
 
@@ -906,6 +929,10 @@ Tags: %(t)s
             return self.emit_result_maildir
         elif fmt == 'mailzip':
             return self.emit_result_mailzip
+        elif fmt == 'msgdirs':
+            return self.emit_result_msgdirs
+        elif fmt == 'msgdzip':
+            return self.emit_result_msgdzip
         elif fmt == 'zip':
             return self.emit_result_zip
         raise Nonsense('Unknown output format: %s' % fmt)

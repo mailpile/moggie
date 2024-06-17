@@ -213,8 +213,14 @@ class MaildirExporter(BaseExporter):
     AS_DIR = 2
     AS_DEFAULT = AS_TAR
     SUBDIRS = ('cur', 'new', 'tmp')
+
     PREFIX = 'cur/'
     SUFFIX = ''
+    FMT_DIRNAME = 'maildir.%x'
+    # FIXME: The taglist should come AFTER the separator, as tags change
+    #        Check the maildir spec!
+    FMT_FILENAME = '%(dir)s%(prefix)smoggie%(sync_fn)st=%(tags)s%(flags)s%(suffix)s'
+
     MANGLE_ADD_FROM = False
     MANGLE_ADD_HEADERS = False
     MANGLE_FIX_EOL = b'\n'
@@ -288,7 +294,7 @@ class MaildirExporter(BaseExporter):
             dest = '.'.join(dparts)
             if dest:
                 return dest
-        return 'maildir.%x' % int(time.time())
+        return self.FMT_DIRNAME % int(time.time())
 
     def flags(self, tags):
         flags = set()
@@ -304,22 +310,23 @@ class MaildirExporter(BaseExporter):
         idx = metadata.idx
         tags = [t.split(':')[-1] for t in metadata.more.get('tags', [])]
         taglist = ','.join(tags)
-
-        # FIXME: The taglist should come AFTER the separator, as tags change
-        #        Check the maildir spec!
-        return '%s%smoggie%st=%s%s%s' % (
-            self.basedir, self.PREFIX,
-            generate_sync_fn_part(self.sync_id, idx),
-            taglist, self.flags(tags), self.SUFFIX)
+        return self.FMT_FILENAME % {
+                'dir': self.basedir,
+                'prefix': self.PREFIX,
+                'sync_fn': generate_sync_fn_part(self.sync_id, idx),
+                'tags': taglist,
+                'flags': self.flags(tags),
+                'suffix': self.SUFFIX}
 
     def transform(self, metadata, message):
         ts = metadata.timestamp
-        message = self.Transform(metadata, message,
-            add_from=self.MANGLE_ADD_FROM,
-            add_headers=self.MANGLE_ADD_HEADERS,
-            add_moggie_sync=(self.MANGLE_ADD_HEADERS and self.sync_id),
-            mangle_from=False,
-            fix_newlines=self.eol)
+        if message is not None:
+            message = self.Transform(metadata, message,
+                add_from=self.MANGLE_ADD_FROM,
+                add_headers=self.MANGLE_ADD_HEADERS,
+                add_moggie_sync=(self.MANGLE_ADD_HEADERS and self.sync_id),
+                mangle_from=False,
+                fix_newlines=self.eol)
         return (self.get_filename(metadata), ts, message)
 
     def delete(self, metadata, filename=None):
