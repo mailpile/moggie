@@ -2,6 +2,7 @@ import base64
 import json
 import logging
 
+from ...security.filenames import clean_filename
 from .maildir import MaildirExporter
 
 
@@ -25,7 +26,7 @@ class MsgdirsExporter(MaildirExporter):
         cd = part.get('content-disposition', ['inline', {}])
         xt = self.EXT_MAP.get(ct[0], 'dat')
         fn = cd[1].get('filename') or ct[1].get('name') or ('part.' + xt)
-        return '%2.2d.%s.%s' % (idx + 1, cd[0], fn)
+        return '%2.2d.%s.%s' % (idx + 1, clean_filename(cd[0]), clean_filename(fn))
 
     def export_parsed(self, metadata, parsed, friendly):
         dirname, ts, _ = self.transform(metadata, None)

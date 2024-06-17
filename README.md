@@ -86,6 +86,10 @@ Or, if you prefer a virtualenv:
    4. source .venv/bin/activate
    5. python3 -m pip install -r requirements.txt
 
+Run the tests:
+
+   * python3 -W ignore:ResourceWarning -m unittest
+
 
 *(Note that the virtualenv method is somewhat prone to failure, since many
 of moggie's dependencies are tricky to build from source. A hybrid approach
@@ -131,7 +135,6 @@ weird issues.
 The data includes logs (in the subdirectory named `logs`) which may be
 useful for debugging. Be warned it may also leak your secrets if you
 increase the logging verbosity. There is also a `config.rc`.
-
 
 
 ## Credits and License ##
