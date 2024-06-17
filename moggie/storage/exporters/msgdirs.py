@@ -17,15 +17,18 @@ class MsgdirsExporter(MaildirExporter):
 
     # FIXME: Extract this, it's definitly dup code
     EXT_MAP = {
+        'image/jpeg': 'jpg',
+        'image/gif': 'gif',
+        'application/pdf': 'pdf',
         'text/plain': 'txt',
         'text/html': 'html'}
 
     def part_filename(self, idx, part):
         ct = part.get('content-type', ['text/plain', {}]) 
         cd = part.get('content-disposition', ['inline', {}])
-        xt = self.EXT_MAP.get(ct[0], 'dat')
-        fn = cd[1].get('filename') or ct[1].get('name') or ('part.' + xt)
-        return '%2.2d.%s.%s' % (idx + 1, clean_filename(cd[0]), clean_filename(fn))
+        xt = '.' + self.EXT_MAP.get(ct[0], 'dat')
+        fn = cd[1].get('filename') or ct[1].get('name') or (cd[0] + xt)
+        return '%2.2d.%s' % (idx, clean_filename(fn))
 
     def export_parsed(self, metadata, parsed, friendly):
         dirname, ts, _ = self.transform(metadata, None)
@@ -37,22 +40,25 @@ class MsgdirsExporter(MaildirExporter):
         self.writer.add_file(dirname + 'message.txt', ts,
             bytes(friendly, 'utf-8'))
 
-        for i, part in enumerate(parsed['email']['_PARTS']):
+        count = 1
+        for part in parsed['email']['_PARTS']:
             if '_TEXT' in part:
-                part['_FILE'] = fn = self.part_filename(i, part)
+                part['_FILE'] = fn = self.part_filename(count, part)
                 self.writer.add_file(dirname + fn, ts, bytes(part['_TEXT'], 'utf-8'))
+                count += 1
 
-            elif '_RAW' in part:
-                part['_FILE'] = fn = self.part_filename(i, part)
-                self.writer.add_file(dirname + fn, ts, base64.b64decode(part['_RAW']))
+            elif '_DATA' in part:
+                part['_FILE'] = fn = self.part_filename(count, part)
+                self.writer.add_file(dirname + fn, ts, base64.b64decode(part['_DATA']))
+                count += 1
 
             # Cleanup!
-            for key in ('_TEXT', '_RAW', '_HTML_TEXT', '_HTML_CLEAN'):
+            for key in ('_TEXT', '_DATA', '_RAW', '_HTML_TEXT', '_HTML_CLEAN'):
                 if key in part:
                     del part[key]
 
         self.writer.add_file(dirname + 'structure.json', ts,
-            bytes(json.dumps(parsed['email'], indent=2), 'utf-8'))
+            bytes(json.dumps(parsed['email'], indent=1), 'utf-8'))
 
 
 if __name__ == '__main__':
