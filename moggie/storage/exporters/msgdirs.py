@@ -21,7 +21,6 @@ class MsgdirsExporter(MaildirExporter):
         'text/html': 'html'}
 
     def part_filename(self, idx, part):
-        # FIXME: Sanitize things here, this is potentially dangerous
         ct = part.get('content-type', ['text/plain', {}]) 
         cd = part.get('content-disposition', ['inline', {}])
         xt = self.EXT_MAP.get(ct[0], 'dat')
