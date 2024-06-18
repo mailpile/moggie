@@ -593,6 +593,7 @@ Tags: %(t)s
                     parsed = await CommandParse.Parse(self, msg,
                         with_nothing=True,
                         with_headers=True,
+                        with_data=True,
                         with_text=True,
                         with_html=want_html,
                         with_html_clean=want_html,  # FIXME: Choose one?

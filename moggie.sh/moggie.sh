@@ -1,5 +1,7 @@
 #!/bin/bash
 #
+#set -x
+
 MOGGIE_SH_VIEWER=${MOGGIE_SH_VIEWER:-"less -F -X -s"}
 MOGGIE_SH_CHOOSER=${MOGGIE_SH_CHOOSER:-"fzf -i -e --layout=reverse-list --no-sort"}
 MOGGIE_SH_MAILLIST=${MOGGIE_SH_MAILLIST:-"$MOGGIE_SH_CHOOSER --with-nth=2.."}
@@ -39,6 +41,10 @@ PROMPT_ROOT="q:Quit t:Tags c:Compose"
 PROMPT_EMAIL="q:Quit r:Reply a:Archive b:Shell"
 
 SEARCH="$@"
+if [ -e "$1" ]; then
+    SEARCH="mailbox:$SEARCH"
+fi
+
 PROMPT=$PROMPT_ROOT
 while true; do
     if [ "$SEARCH" = "" ]; then
@@ -53,10 +59,11 @@ while true; do
         a) echo 'Please archive' && sleep 2
            SEARCH=""
         ;;
-        b) moggie search "$SEARCH $CHOSEN" --format=msgdirs >$TEMPFILE
+        b) moggie search "$SEARCH" "$CHOSEN" --format=msgdirs >$TEMPFILE
            DIRNAME=$(dirname $(head -c 1024 $TEMPFILE |tar tfz - 2>/dev/null |head -2 |tail -1))
-           if [ "$DIRNAME" != "" ]; then
-               if tar xfz $TEMPFILE 2>/dev/null; then
+           echo "DIRNAME: $DIRNAME"
+           if [ "$DIRNAME" != "" -a "$DIRNAME" != "." ]; then
+               if tar xfz $TEMPFILE; then
                (
                    cd $DIRNAME
                    echo -e '\n'\
@@ -68,8 +75,8 @@ while true; do
                    bash --init-file <(echo '. ~/.bashrc; PS1="email $ "') -i
                )
                fi
+               rm -rf ./$(dirname $DIRNAME)
            fi
-           rm -rf ./$(dirname $DIRNAME)
         ;;
         c) echo 'Please compose new message' && sleep 2
            SEARCH=""
@@ -94,7 +101,7 @@ while true; do
         #        Instead of --with-html-text=Y, a best-effort text display
         if [ "$CHOSEN" != "" ]; then
             clear
-            moggie show "$SEARCH $CHOSEN" |$MOGGIE_SH_VIEWER
+            moggie show "$SEARCH" "$CHOSEN" |$MOGGIE_SH_VIEWER
             PROMPT=$PROMPT_EMAIL
         else
             PROMPT=$PROMPT_ROOT

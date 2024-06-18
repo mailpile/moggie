@@ -1,8 +1,12 @@
 import base64
+import datetime
 import json
 import logging
+import os
+import time
 
 from ...security.filenames import clean_filename
+from ...util.friendly import friendly_datetime
 from .maildir import MaildirExporter
 
 
@@ -12,7 +16,6 @@ class MsgdirsExporter(MaildirExporter):
     """
     SUBDIRS = []
     PREFIX = ''
-    FMT_DIRNAME = 'messages.%x'
     FMT_FILENAME = '%(dir)smoggie%(sync_fn)smsg'
 
     # FIXME: Extract this, it's definitly dup code
@@ -23,12 +26,32 @@ class MsgdirsExporter(MaildirExporter):
         'text/plain': 'txt',
         'text/html': 'html'}
 
+    def __init__(self, *args, **kwargs):
+        if not kwargs.get('dirname'):
+            now = friendly_datetime(time.time())
+            now = now.replace('-', '').replace(' ', '-').replace(':', '')
+            kwargs['dirname'] = 'messages.%s' % now
+        self.counter = 0
+        super().__init__(*args, **kwargs)
+
     def part_filename(self, idx, part):
         ct = part.get('content-type', ['text/plain', {}]) 
         cd = part.get('content-disposition', ['inline', {}])
         xt = '.' + self.EXT_MAP.get(ct[0], 'dat')
         fn = cd[1].get('filename') or ct[1].get('name') or (cd[0] + xt)
         return '%2.2d.%s' % (idx, clean_filename(fn))
+
+    def transform(self, metadata, message):
+        dirname, ts, _ = super().transform(metadata, message)
+        pmeta = metadata.parsed()
+        self.counter += 1
+        from_subj = '%3.3d - %s - %s' % (
+            self.counter,
+            pmeta['from'].address,
+            pmeta.get('subject') or '(no subject)')
+        dirname = os.path.join(
+            os.path.dirname(dirname), clean_filename(from_subj))
+        return dirname, ts, None
 
     def export_parsed(self, metadata, parsed, friendly):
         dirname, ts, _ = self.transform(metadata, None)
