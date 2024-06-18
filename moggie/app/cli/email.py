@@ -82,14 +82,14 @@ class CommandParse(CLICommand):
     CONNECT = False    # We manually connect if we need to!
     OPTIONS = [[
         (None, None, 'moggie'),
-        ('--context=', ['default'], 'Context to use for default settings'),
-        ('--format=',     ['text'], 'X=(text*|html|json|sexp)'),
-        ('--stdin=',            [], None), # Allow lots to send stdin (internal)
-        ('--input=',            [], 'Load e-mail from file X, "-" for stdin'),
-        ('--username=',     [None], 'Username with which to access the email'),
-        ('--password=',     [None], 'Password with which to access the email'),
-        ('--or',           [False], 'Use OR instead of AND with search terms'),
-        ('--allow-network',     [False], 'Allow outgoing network requests'),
+        ('--context=',      ['default'], 'Context to use for default settings'),
+        ('--format=',          ['text'], 'X=(text*|html|json|sexp)'),
+        ('--stdin=',                 [], None), # Allow lots to send stdin (internal)
+        ('--input=',                 [], 'Load e-mail from file X, "-" for stdin'),
+        ('--username=',          [None], 'Username with which to access the email'),
+        ('--password=',          [None], 'Password with which to access the email'),
+        ('--or',                [False], 'Use OR instead of AND with search terms'),
+        ('--forbid-network',    [False], 'Disallow outgoing network requests'),
         ('--forbid-filesystem', [False], 'Forbid loading local files'),
         ('--write-back',        [False], 'Write parse results to search index'),
         ] + CommandOpenPGP.OPTIONS_PGP_SETTINGS + [
@@ -370,7 +370,7 @@ class CommandParse(CLICommand):
 
     @classmethod
     async def Parse(cls, cli_obj, data,
-            settings=None, allow_network=False,
+            settings=None, allow_network=True,
             **kwargs):
         """
         Parse the e-mail according to the settings. Data should be a
@@ -582,7 +582,7 @@ class CommandParse(CLICommand):
         # FIXME: Think about this, how DO we want to restrict access to the
         #        filesytem? It is probaby per user/context.
         self.allow_fs = not self.options['--forbid-filesystem'][-1]
-        self.allow_network = self.options['--allow-network'][-1]
+        self.allow_network = not self.options['--forbid-network'][-1]
         self.write_back = self.options['--write-back'][-1]
 
         self.settings = self.Settings(**self.options)
