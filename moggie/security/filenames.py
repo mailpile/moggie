@@ -1,7 +1,7 @@
 import re
 
 RE_FN_DISALLOWED = re.compile(r'([/\\:\s]|\.\.)')
-RE_FN_RISKY_EXT = re.compile(r'\.(exe|dll|com)$')  # FIXME: Add more?
+RE_FN_RISKY_EXT = re.compile(r'\.(exe|dll)$')  # FIXME: Add more?
 
 
 def clean_filename(fn):
@@ -14,8 +14,8 @@ def clean_filename(fn):
     >>> clean_filename('trojan.dll')
     'trojan_dll.dat'
 
-    >>> clean_filename('trojan.com')
-    'trojan_com.dat'
+    >>> clean_filename('domain.com')
+    'domain.com'
 
     >>> clean_filename('evil trojan horse.exe')
     'evil_trojan_horse_exe.dat'

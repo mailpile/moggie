@@ -23,38 +23,40 @@ class MsgdirsExporter(MaildirExporter):
         'image/jpeg': 'jpg',
         'image/gif': 'gif',
         'application/pdf': 'pdf',
+        'text/x-mime-preamble': 'txt',
+        'text/x-mime-postamble': 'txt',
         'text/plain': 'txt',
         'text/html': 'html'}
 
     def __init__(self, *args, **kwargs):
         if not kwargs.get('dirname'):
-            now = friendly_datetime(time.time())
-            now = now.replace('-', '').replace(' ', '-').replace(':', '')
-            kwargs['dirname'] = 'messages.%s' % now
-        self.counter = 0
+            kwargs['dirname'] = 'E-Mail'
         super().__init__(*args, **kwargs)
 
     def part_filename(self, idx, part):
         ct = part.get('content-type', ['text/plain', {}]) 
-        cd = part.get('content-disposition', ['inline', {}])
+        dd = 'hidden' if ct[0].startswith('text/x-mime-') else 'inline'
+        cd = part.get('content-disposition', [dd, {}])
         xt = '.' + self.EXT_MAP.get(ct[0], 'dat')
         fn = cd[1].get('filename') or ct[1].get('name') or (cd[0] + xt)
         return '%2.2d.%s' % (idx, clean_filename(fn))
 
-    def transform(self, metadata, message):
-        dirname, ts, _ = super().transform(metadata, message)
+    def get_dirname_and_ts(self, metadata):
+        yyyymmdd, hhmm = friendly_datetime(metadata.timestamp).split()
+
         pmeta = metadata.parsed()
-        self.counter += 1
-        from_subj = '%3.3d - %s - %s' % (
-            self.counter,
-            pmeta['from'].address,
+        dirname = '%s__%s' % (
+            hhmm.replace(':', ''),
             pmeta.get('subject') or '(no subject)')
-        dirname = os.path.join(
-            os.path.dirname(dirname), clean_filename(from_subj))
-        return dirname, ts, None
+
+        dirname = os.path.join(self.basedir, yyyymmdd,
+            clean_filename(pmeta['from'].address),
+            clean_filename(dirname))
+
+        return dirname, metadata.timestamp
 
     def export_parsed(self, metadata, parsed, friendly):
-        dirname, ts, _ = self.transform(metadata, None)
+        dirname, ts = self.get_dirname_and_ts(metadata)
         if self.writer.CAN_DELETE:
             prefix = '-'.join(dirname.split('-')[:2])
             self.writer.delete_by_prefix(prefix)
