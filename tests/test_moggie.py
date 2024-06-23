@@ -37,12 +37,12 @@ class OfflineMoggieTest(unittest.TestCase):
             _from='bre@example.org',
             to='bjarni@example.org',
             html='N',
-            message='Hello world, this is great')[0]
+            message='Hello world, this is great')[0]['_RFC822']
 
-        self.assertRegex(email1, b'Content-Type: text/plain;')
-        self.assertRegex(email1, b'To: <bjarni@example.org>')
-        self.assertRegex(email1, b'From: <bre@example.org>')
-        self.assertRegex(email1, b'Hello world, this is great')
+        self.assertRegex(email1, 'Content-Type: text/plain;')
+        self.assertRegex(email1, 'To: <bjarni@example.org>')
+        self.assertRegex(email1, 'From: <bre@example.org>')
+        self.assertRegex(email1, 'Hello world, this is great')
 
     def test_moggie_parse(self):
         moggie = Moggie()
@@ -50,15 +50,18 @@ class OfflineMoggieTest(unittest.TestCase):
         email1 = moggie.email(
             _from='bre@example.org',
             to='bjarni@example.org',
+            subject=hello,
             html='N',
-            message=hello)[0]
+            message=hello)[0]['_RFC822']
 
-        parse1 = moggie.parse(stdin=email1)[0]['parsed']
+        parse1 = moggie.parse(stdin=bytes(email1, 'utf-8'))[0]['parsed']
 
         self.assertEqual(parse1['_ORDER'], [
-            'mime-version', 'content-type', 'content-disposition',
-            'content-transfer-encoding', 'message-id', 'date', 'from', 'to'])
+            'MIME-Version', 'Content-Type', 'Content-Disposition',
+            'Content-Transfer-Encoding', 'Message-ID',
+            'Date', 'Subject', 'From', 'To'])
         self.assertEqual(parse1['_PARTS'][0]['_TEXT'].strip(), hello)
+        self.assertEqual(parse1['subject'], hello)
 
 
 class OnlineMoggieTest(unittest.TestCase):

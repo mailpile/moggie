@@ -238,27 +238,31 @@ def parse_header(raw_header):
     for ln in unfolded.splitlines():
         try:
             if first and ln[:5] == 'From ':
-                hdr = '_mbox_separator'
+                hdr = raw_hdr = '_mbox_separator'
                 val = ln.strip()
             else:
                 if ln[:1] == '_':
                     raise ValueError('Illegal char in header name')
-                hdr, val = ln.split(':', 1)
-                hdr = hdr.lower()
+                raw_hdr, val = ln.split(':', 1)
+                hdr = raw_hdr.lower()
                 val = val.strip()
         except ValueError:
             val = ln.strip()
             if not val:
                 continue
-            hdr = '_invalid'
+            hdr = raw_hdr = '_invalid'
             headers['_has_errors'] = True
         first = False
 
         if hdr in SINGLETONS and hdr in headers:
+            raw_hdr = '_duplicate-' + raw_hdr
             hdr = '_duplicate-' + hdr
             headers['_has_errors'] = True
 
-        order.append(hdr)
+        # This preserves the original order of the headers, as well as their
+        # original capitalization. This is good for reconstruction, and is
+        # also use by the header-fingerprinting code to differentiate MUAs.
+        order.append(raw_hdr)
 
         if hdr in ADDRESS_HEADERS:
             headers[hdr] = headers.get(hdr, []) + AddressHeaderParser(val)
