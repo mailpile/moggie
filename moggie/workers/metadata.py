@@ -96,7 +96,8 @@ class MetadataWorker(BaseWorker):
                 omd.parent_id = md.parent_id
                 omd.more.update(md.more)
                 omd.more['syn_idx'] = omd.idx
-                omd[Metadata.OFS_IDX] = md.idx
+                omd.more['metadata_idx'] = md.idx
+                #omd[Metadata.OFS_IDX] = md.idx
                 return omd
 
         def _wanted(md):

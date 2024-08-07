@@ -300,12 +300,16 @@ FIXME: Document html and html formats!
         sep = '\t' if self.options['--tabs'][-1] else ' '
         thread = self._as_thread(thread)
         if thread['hits']:
-            tid = thread['thread']
+            mid = tid = thread['thread']
             msgs = dict((i[1] or tid, Metadata(*i).parsed())
                 for i in thread['messages'])
 
             top = msgs.get(tid, {})
             md = msgs.get(thread['hits'][0], {})
+
+            # If we have a syn_idx, that means we are searching within a
+            # mailbox and should emit IDs that will work with that search.
+            mid = md.get('syn_idx', mid)
 
             try:
                 ts = min(msgs[i]['ts'] for i in thread['hits'] if i in msgs)
@@ -337,8 +341,8 @@ FIXME: Document html and html formats!
             info['_tag_list'] = '%s(%s)' % (sep, ' '.join(tags)) if tags else ''
             info['_file_count'] = '(%d)' % fc if (fc > len(msgs)) else ''
             info['_id'] = (
-                ('id:%12.12d' % tid) if (len(msgs) == 1) else
-                ('thread:' + info['thread']))
+                ('id:%12.12d' % mid) if (len(msgs) == 1) else
+                ('thread:' + tid))
             yield (
                 '%(_id)s%(_sep)s%(date_relative)s'
                 '%(_sep)s[%(matched)s/%(total)s%(_file_count)s]'
