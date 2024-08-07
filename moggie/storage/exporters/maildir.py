@@ -335,7 +335,7 @@ class MaildirExporter(BaseExporter):
     def export(self, metadata, message):
         filename, ts, message = self.transform(metadata, message)
         if self.writer.CAN_DELETE:
-            prefix = '-'.join(filename.split('-')[:2])
+            prefix = filename.rsplit('-', 1)[0]
             self.writer.delete_by_prefix(prefix)
         self.writer.add_file(filename, ts, message)
 
