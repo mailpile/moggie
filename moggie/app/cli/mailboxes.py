@@ -63,6 +63,7 @@ from moggie import get_shared_moggie
 from moggie.api.requests import RequestTag, RequestDeleteEmails
 from moggie.email.metadata import Metadata
 from moggie.util.friendly import friendly_time_ago_to_timestamp
+from moggie.util.mailpile import b64c, sha1b64
 
 
 class CommandMailboxes(CommandSearch):
@@ -88,7 +89,8 @@ class CommandMailboxes(CommandSearch):
         (None, None, 'removal'),
         ('--trash',          [False], 'Tag removed messages as trash'),
         ('--delete',         [False], 'Allow permanent deletion of messages'),
-        ('--remove-after=',      [0], 'X=1h, X=2d, ... remove after some time'),
+        ('--remove-after=',    ['0'], 'X=1h, X=2d, ... remove after some time'),
+        ('--keep-progress=', [False], 'X=(/path|ID) persist state between runs'),
     ],[
         (None, None, 'output'),
         ('--create=',         [None], 'X=(mailzip|maildir|mbox)'),
@@ -104,9 +106,11 @@ class CommandMailboxes(CommandSearch):
         self.remove_tag_op = '+trash'
         self.remove_post = []
         self.email_cache = {}
+        self.source_mailbox = None
         self.target_mailbox = None
-        self.target_sync_info = None
-        self.source_sync_info = None
+        self.target_sync_info = []
+        self.source_sync_info = []
+        self.keep_progress = None
         self.email_emitter = None
         super().__init__(*args, **kwargs)
 
@@ -162,22 +166,33 @@ class CommandMailboxes(CommandSearch):
             else:
                 self.remove_messages = self.remove_by_tagging
 
+        keep_progress = self.options['--keep-progress='][-1]
+        if keep_progress:
+            if keep_progress in ('Y', True) and self.sync_src:
+                keep_progress = b64c(sha1b64(self.sync_src))
+            if '/' in keep_progress:
+                self.keep_progress = keep_progress
+            else:
+                self.keep_progress = os.path.join(
+                    self.workdir, 'copy-progress-' + keep_progress)
+
         return args
 
     async def _get_sync_info(self, mailbox, reverse=False):
-        src, dst = self.sync_src, mailbox
+        src, dst = self.sync_dest, self.sync_src
+        progress = self.keep_progress
         if reverse:
-           dst, src = src, dst
            mailbox_username = self.options['--username='][-1]
            mailbox_password = self.options['--password='][-1]
+           if progress:
+               progress = progress + '-R'
         else:
+           src, dst = dst, src
            mailbox_username = None
            mailbox_password = self.options['--zip-password='][-1]
 
         with self.moggie as moggie:
             moggie.connect(autostart=False)  # FIXME: Should already be done!
-
-            # FIXME: Need to finish the moggie.Moggie / cli.Commmand refactor
 
             sync_info = list(
                 await moggie.set_mode(moggie.MODE_PY).async_search(
@@ -193,7 +208,36 @@ class CommandMailboxes(CommandSearch):
             if sync_info and isinstance(sync_info[0], list):
                 sync_info = sync_info[0]
 
+            if self.keep_progress:
+                try:
+                    with open(progress, 'r') as kp:
+                        uuids = kp.read().splitlines()
+                    sync_info.extend({'uuid': u} for u in uuids if u)
+                    logging.info('Loaded progress state (%d UUIDs) from %s'
+                        % (len(uuids), progress))
+                except (IOError, OSError, TypeError) as e:
+                    logging.debug('Failed to load progress state from %s: %s'
+                        % (progress, e))
+
+            # FIXME: Need to finish the moggie.Moggie / cli.Commmand refactor
+            #print('Sync info for %s->%s: %d entries' % (src, dst, len(sync_info)))
+
             return sync_info
+
+    async def persist_progress(self):
+        if not self.keep_progress:
+            return
+        for sync_info, suffix in (
+                (self.target_sync_info, ''),
+                (self.source_sync_info, '-R')):
+            filename = self.keep_progress + suffix
+            try:
+                if sync_info:
+                    progress = '\n'.join(set(si['uuid'] for si in sync_info))
+                    with open(filename, 'w') as kp:
+                        kp.write(progress)
+            except (IOError, OSError):
+                logging.exception('Failed to update: %s' % filename)
 
     async def get_target_sync_info(self):
         if not self.target_mailbox:
@@ -201,7 +245,9 @@ class CommandMailboxes(CommandSearch):
         return await self._get_sync_info(self.target_mailbox)
 
     async def get_source_sync_info(self):
-        return None
+        if not self.source_mailbox:
+            return []
+        return await self._get_sync_info(self.source_mailbox, reverse=True)
 
     async def remove_by_tagging(self, metadata_list):
         msg_idxs = sorted(list(set(m.idx for m in metadata_list if m)))
@@ -244,8 +290,6 @@ class CommandMailboxes(CommandSearch):
 
     async def perform_query(self, *args):
         try:
-            self.source_sync_info = await self.get_source_sync_info()
-            self.target_sync_info = await self.get_target_sync_info()
             plan = await self.plan_actions(await super().perform_query(*args))
             self.remove_post.extend(self.want_pre_delete(plan))
             return plan
@@ -255,9 +299,15 @@ class CommandMailboxes(CommandSearch):
 
     async def run(self):
         try:
+            self.source_sync_info = await self.get_source_sync_info()
+            self.target_sync_info = await self.get_target_sync_info()
+
             rv = await super().run()
+
             if self.remove_messages is not None:
                 await self.remove_messages(self.remove_post)
+
+            await self.persist_progress()
         except:
             logging.exception('remove_messages() failed')
         return rv
@@ -298,6 +348,12 @@ class CommandCopy(CommandMailboxes):
     will be omitted. This allows the command to efficiently be used to
     regularly update the contents of a target mailbox with the latest
     results of a search.
+
+    If you want to vary the destination mailbox over time or plan to delete
+    from the destination, but want to avoid re-copying messages, use
+    `--keep-progress=Y` (or instead of Y provide a custom ID or path to a
+    file). This will keep a record of what has been copied and avoid copying
+    it again, even if it is missing from the destination.
 
     Note this is not true synchronization, as it will never remove a
     message; consider `moggie sync` for that use case.
@@ -364,6 +420,8 @@ class CommandCopy(CommandMailboxes):
                 if data:
                     await self.email_emitter((plan, data), last=False)
                     fmt, status = self.FMT_COPIED, plan
+                    if self.keep_progress:
+                        self.target_sync_info.append({'uuid', metadata.uuid})
         else:
             fmt, status = self.FMT_SKIPPED, plan
 
@@ -435,6 +493,12 @@ class CommandMove(CommandCopy):
     will be skipped. This allows the command to efficiently be used to
     regularly update the contents of a target mailbox with the latest
     results of a search.
+
+    If you want to vary the destination mailbox over time or plan to delete
+    from the destination, but want to avoid re-copying messages, use
+    `--keep-progress=Y` (or instead of Y provide a custom ID or path to a
+    file). This will keep a record of what has been copied and avoid copying
+    it again, even if it is missing from the destination.
 
     Note this is not true synchronization, as it will never remove a
     message; consider `moggie sync` for that use case.
@@ -565,6 +629,10 @@ class CommandRemove(CommandMailboxes):
             min_age_days = max(0, min_age_hours // 24)
             self.terms += ' -dates:%dd..' % min_age_days
 
+        if not self.remove_messages:
+            raise Nonsense(
+                'Cannot remove anything. Give permission with --delete?')
+
         return args
 
     def want_pre_delete(self, plan):
@@ -581,7 +649,7 @@ class CommandRemove(CommandMailboxes):
         plan = []
         for result in results:
             md = Metadata(*result)
-            if self.remove_after:
+            if self.remove_max_ts:
                 if md.timestamp <= self.remove_max_ts:
                     plan.append((self.REM_MESSAGE, md))
             else:
@@ -605,3 +673,96 @@ class CommandRemove(CommandMailboxes):
         parsed[self.RESULT_KEY] = plan
 
         yield (self.FMT_REMOVED, parsed)
+
+
+class CommandSync(CommandMailboxes):
+    """moggie sync [options] <source> /path/to/mailbox
+
+    Synchronize a "source" with a destination mailbox. The source can be
+    another mailbox or a tag (optionally modified by additional search terms).
+
+    When synchronizing with a tag, moggie will add remote pointers to its
+    index unless local storage is specified using the `--local-copies=`
+    argument (see below), in which case copies of all discovered new mail
+    will be downloaded and local storage will be preferred.
+
+    ### Examples
+
+        moggie sync in:inbox imap://user@host/INBOX
+        moggie sync --local-copies=/path/to/foo.mbx in:inbox imap://...
+
+    ### Search Options
+
+    %(common)s
+
+    ### Removal Options
+
+    %(removal)s
+
+    Note that the default removal strategy depends on the source definition.
+
+    If the source is a mailbox, moggie will delete by default (but only if
+    given permission with the `--delete` option).
+
+    If the source is a search starting with a tag, e.g. `in:inbox`, removal
+    will untag the messages (`moggie tag -inbox ...`) from the source (or
+    tag as trash with `--trash`, or completely delete with `--delete`).
+    """
+    NAME = 'sync'
+    WEB_EXPOSE = True
+    ROLES = AccessConfig.GRANT_READ
+
+    RESULT_KEY = 'REMOVE'
+    FMT_REMOVED = 'Removed\t%(uuid)s\t%(subject)s'
+    REM_MESSAGE = 'removed'
+
+    def configure(self, args):
+        args = super().configure(args)
+
+        if len(self.mailboxes) == 1:
+            self.source_mailbox = self.mailboxes[0]
+
+        # Figure out whether our source is a mailbox, and if so, set the
+        # self.source_mailbox... or alternately, if we have a --local-copies,
+        # set that as a source mailbox.
+
+        return args
+
+    async def plan_actions(self, results):
+        target_info = dict((i['uuid'], i) for i in self.target_sync_info)
+        source_info = dict((i['uuid'], i) for i in self.source_sync_info)
+
+        source_missing = [u for u in target_info if u not in source_info]
+        target_missing = [u for u in source_info if u not in target_info]
+
+        # We can calulate the effective last sync time as the maximum sync
+        # time seen in the sync info.
+        last_sync_time = max([0] +
+            [i.get('sync_info', {}).get('ts', 0) for i in target_info.values()] +
+            [i.get('sync_info', {}).get('ts', 0) for i in source_info.values()])
+
+        is_first_sync = (
+            len(source_missing) == len(target_info) and
+            len(target_missing) == len(source_info))
+
+        print('Last sync time: %s, is_first_sync=%s' % (last_sync_time, is_first_sync))
+        print('source_missing = %.69s' % (source_missing,))
+        print('source_info = %.69s' % (source_info,))
+        print('target_missing = %.69s' % (target_missing,))
+        print('target_info = %.69s' % (target_info,))
+
+        plan = []
+        for result in results:
+            md = Metadata(*result)
+            target_sync_info = target_info.get(md.uuid_asc)
+            source_sync_info = source_info.get(md.uuid_asc)
+
+            if source_sync_info is None:
+                pass  # What does this mean?
+
+            if target_sync_info is None:
+                pass  # OK, then what?
+
+#           plan.append((self.SKIP_MESSAGE, md))
+
+        return plan
