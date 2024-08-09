@@ -100,6 +100,7 @@ class CommandMailboxes(CommandSearch):
         ('--json-ui-state',       [], 'Include UI state in JSON result')]]
 
     def __init__(self, *args, **kwargs):
+        self.changed = 0
         self.moggie = get_shared_moggie()
         self.remove_max_ts = None
         self.remove_messages = None
@@ -225,7 +226,7 @@ class CommandMailboxes(CommandSearch):
             return sync_info
 
     async def persist_progress(self):
-        if not self.keep_progress:
+        if not self.keep_progress or not self.changed:
             return
         for sync_info, suffix in (
                 (self.target_sync_info, ''),
@@ -260,6 +261,7 @@ class CommandMailboxes(CommandSearch):
                 password=self.options['--password='][-1])
             logging.debug('Tagging: %s %s' % (self.remove_tag_op, msg_idx_list))
             await self.worker.async_api_request(self.access, query)
+            self.changed += 1
         else:
             logging.debug('Nothing to remove')
 
@@ -278,6 +280,7 @@ class CommandMailboxes(CommandSearch):
                 password=self.options['--password='][-1])
             logging.debug('Deleting %d messages from %s' % (len(metadata_list), mailbox))
             await self.repeatable_async_api_request(self.access, query)
+            self.changed += 1
         else:
             logging.debug('Nothing to remove')
 
@@ -420,6 +423,7 @@ class CommandCopy(CommandMailboxes):
                 if data:
                     await self.email_emitter((plan, data), last=False)
                     fmt, status = self.FMT_COPIED, plan
+                    self.changed += 1
                     if self.keep_progress:
                         self.target_sync_info.append({'uuid', metadata.uuid})
         else:
