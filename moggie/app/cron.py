@@ -209,8 +209,11 @@ class Cron:
     def _eval_env(self, ts):
         now_ts = int(ts)
         now = datetime.datetime.now()
+        fdate = friendly_date(now_ts)
         env = {
-            'yyyy_mm_dd': friendly_date(now_ts),
+            'yyyy_mm_dd': fdate,
+            'yyyy_mm': fdate.rsplit('-', 1)[0],
+            'yyyy': fdate.split('-', 1)[0],
             'now_ts': now_ts,
             'now': now}
         if self._eval_env_extra:
@@ -224,16 +227,22 @@ class Cron:
             if prefer_async:
                 async def _async_runner():
                     nonlocal _id, action, action
-                    args = shlex.split(action % self._eval_env(ts))[1:]
-                    logging.info('[cron] %s/moggie: %s' % (_id, args))
-                    await self._moggie.connect().async_run(*args)
+                    try:
+                        args = shlex.split(action % self._eval_env(ts))[1:]
+                        logging.info('[cron] %s/moggie: %s' % (_id, args))
+                        await self._moggie.connect().async_run(*args)
+                    except Exception as e:
+                        logging.error('[cron] %s/moggie: FAILED: %s' % (_id, e))
                 return (True, _async_runner)
             else:
                 def _runner():
                     nonlocal _id, action, action
-                    args = shlex.split(action % self._eval_env(ts))[1:]
-                    logging.info('[cron] %s/moggie: %s' % (_id, args))
-                    self._external_moggie.connect().run(*args)
+                    try:
+                        args = shlex.split(action % self._eval_env(ts))[1:]
+                        logging.info('[cron] %s/moggie: %s' % (_id, args))
+                        self._external_moggie.connect().run(*args)
+                    except Exception as e:
+                        logging.error('[cron] %s/moggie: FAILED: %s' % (_id, e))
 
         elif action[:1] in ('!', '~', os.path.sep):
             action = action.lstrip('!')
