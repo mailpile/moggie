@@ -41,6 +41,7 @@ from ...email.addresses import AddressInfo
 from ...email.parsemime import MessagePart
 from ...email.metadata import Metadata
 from ...email.sync import generate_sync_id, parse_sync_info
+from ...api.exceptions import *
 from ...api.requests import *
 from ...security.mime import part_filename, magic_part_id
 from ...security.html import clean_email_html
@@ -297,9 +298,13 @@ FIXME: Document html and html formats!
     async def as_summary(self, thread):
         if thread is None:
             return
-        sep = '\t' if self.options['--tabs'][-1] else ' '
+
         thread = self._as_thread(thread)
-        if thread['hits']:
+        if not thread.get('hits'):
+            return
+
+        try:
+            sep = '\t' if self.options['--tabs'][-1] else ' '
             mid = tid = thread['thread']
             msgs = dict((i[1] or tid, Metadata(*i).parsed())
                 for i in thread['messages'])
@@ -325,6 +330,7 @@ FIXME: Document html and html formats!
             authors = ', '.join(list(set(
                 (m['from']['fn'] or m['from']['address'])
                 for m in msgs.values() if 'from' in m)))
+
             info = {
                 '_sep': sep,
                 'thread': '%8.8d' % tid,
@@ -342,38 +348,43 @@ FIXME: Document html and html formats!
             info['_file_count'] = '(%d)' % fc if (fc > len(msgs)) else ''
             info['_id'] = (
                 ('id:%12.12d' % mid) if (len(msgs) == 1) else
-                ('thread:' + tid))
+                ('thread:%s' % tid))
+
             yield (
                 '%(_id)s%(_sep)s%(date_relative)s'
                 '%(_sep)s[%(matched)s/%(total)s%(_file_count)s]'
                 '%(_sep)s%(authors)s;'
                 '%(_sep)s%(subject)s%(_tag_list)s',
                 info)
+        except:
+            logging.exception('Failed to render: %s' % (thread,))
 
     async def as_sync_info(self, md):
+        if md is None:
+            return
+
         if (not self.sync_id) and self.sync_dest and self.sync_src:
             self.sync_id = generate_sync_id(
                 self.worker.unique_app_id, self.sync_src, self.sync_dest)
 
-        if md is not None:
-            md = Metadata(*md)
-            fn = dumb_decode(md.pointers[0].ptr_path) if md.pointers else None
-            uuid = md.uuid_asc
-            sync_info = md.get_sync_info()
-            sync_info_parsed = parse_sync_info(sync_info, self.sync_id) if sync_info else None
-            if fn:
-                try:
-                    fn = str(fn, 'utf-8')
-                except UnicodeDecodeError:
-                    fn = str(fn, 'latin-1')
-            yield ('%(id)s\t%(uuid)s\t%(_file_str)s\t%(_sync_info_str)s', {
-                'id': self.sign_id('id:%8.8d' % md.idx),
-                'file': fn,
-                'uuid': uuid,
-                'indexed': (md.idx < 100000000),
-                'sync_info': sync_info_parsed,
-                '_file_str': fn or '',
-                '_sync_info_str': str(sync_info or b'', 'utf-8')})
+        md = Metadata(*md)
+        fn = dumb_decode(md.pointers[0].ptr_path) if md.pointers else None
+        uuid = md.uuid_asc
+        sync_info = md.get_sync_info()
+        sync_info_parsed = parse_sync_info(sync_info, self.sync_id) if sync_info else None
+        if fn:
+            try:
+                fn = str(fn, 'utf-8')
+            except UnicodeDecodeError:
+                fn = str(fn, 'latin-1')
+        yield ('%(id)s\t%(uuid)s\t%(_file_str)s\t%(_sync_info_str)s', {
+            'id': self.sign_id('id:%8.8d' % md.idx),
+            'file': fn,
+            'uuid': uuid,
+            'indexed': (md.idx < 100000000),
+            'sync_info': sync_info_parsed,
+            '_file_str': fn or '',
+            '_sync_info_str': str(sync_info or b'', 'utf-8')})
 
     async def as_messages(self, md):
         if md is not None:
@@ -707,9 +718,12 @@ Tags: %(t)s
                         func = _as_simple_text
 
                     yield (func, result)
+              except APIException as e:
+                # Message not found
+                pass
               except Exception as e:
                 logging.exception('Failed to format message')
-                raise
+                pass
 
     async def emit_result_raw(self, result, first=False, last=False):
         if result is not None:
@@ -922,11 +936,11 @@ Tags: %(t)s
             return self.emit_result_html
         elif fmt == 'text0':
             return self.emit_result_text0
-        elif fmt in 'text':
+        elif fmt == 'text':
             return self.emit_result_text
         elif fmt == 'sexp':
             return self.emit_result_sexp
-        elif fmt in 'raw':
+        elif fmt == 'raw':
             return self.emit_result_raw
         elif fmt == 'mbox':
             return self.emit_result_mbox
@@ -1063,23 +1077,27 @@ Tags: %(t)s
         output = self.get_output()
         while limit is None or limit > 0:
             results = await self.perform_query(query, batch, limit)
-            batch = min(self.batch, int(batch * 1.2)) if self.batch else None
+            if self.batch:
+                batch = min(self.batch, int(batch * 1.2))
+
             count = len(results)
             if limit is not None:
                 limit -= count
+
 
             for r in results:
                 async for fd in formatter(r):
                     yield fd
 
             query['skip'] += count
-            if ((count < query['limit'])
+            if ((count < (query['limit'] or 0))
                     or (not count)
                     or (output in ('tags', 'tag_info'))):
                 break
 
         async for fd in formatter(None):
             yield fd
+
 
 
 class CommandAddress(CommandSearch):
@@ -1410,7 +1428,7 @@ class CommandShow(CommandSearch):
     async def run(self):
         if self.options.get('--part='):
             self.options['--format='] = ['raw']
-        if self.options['--format='][-1] in ('json', 'sexp'):
+        if self.options['--format='][-1] in ('json', 'sexp', 'text'):
             self.options['--entire-thread='][:0] = ['true']
         if self.options['--format='][-1] in ('html', 'jhtml'):
             if self.preferences['display_html'] == 'yes':
