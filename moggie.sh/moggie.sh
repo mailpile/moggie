@@ -4,6 +4,8 @@ exec bash --init-file <(sed -e '1,/^exec/ d' $0) -i
 
 ##[ Setup ]###################################################################
 
+[ -e ~/.bashrc ] && source ~/.bashrc
+
 MOGGIE_SH_HOMEDIR=${MOGGIE_SH_HOMEDIR:-~/.local/share/Moggie/moggie.sh}
 MOGGIE_SH_VIEWER=${MOGGIE_SH_VIEWER:-"less -F -X -s"}
 MOGGIE_SH_CHOOSER=${MOGGIE_SH_CHOOSER:-"fzf -i -e --layout=reverse-list --no-sort"}
@@ -24,11 +26,17 @@ moggie_sh_divider() {
     echo -e "${BBLUE}==================================================================${RESET}"
 }
 
+moggie_sh_info() {
+    echo -n -e "${BBLUE}"
+    echo -n "$@"
+    echo -e "${RESET}"
+}
+
 moggie_sh_done() {
     moggie_sh_divider
     case "$1" in
         download)
-            echo "*** Downloaded to: $(dirname $(grep /message.txt $MOGGIE_TMP))"
+            moggie_sh_info "*** Downloaded to: $(dirname $(grep /message.txt $MOGGIE_TMP))"
             moggie_sh_divider
         ;;
         *)
@@ -39,9 +47,9 @@ moggie_sh_done() {
         ;;
     esac
     if [ "$MOGGIE_CHOICE" != "" ]; then
-        echo -e "${BBLUE}Commands: v=view, d=download, r=reply, f=forward, s=search, q=quit${RESET}"
+        moggie_sh_info "Commands: v=view, d=download, r=reply, f=forward, s=search, q=quit"
     else
-        echo -e "${BBLUE}Commands: c=compose, t=tags, s=search, q=quit${RESET}"
+        moggie_sh_info "Commands: c=compose, t=tags, s=search, q=quit"
     fi
 }
 
@@ -54,46 +62,56 @@ c() {
         fi
     fi
 
-    # Make sure it exists, normalize variables
+    # Make sure it exists, normalize access and directory names
     mkdir -p "$MOGGIE_SH_DRAFT"
-    chmod go-rwx "$MOGGIE_SH_DRAFT"
-    cd "$MOGGIE_SH_DRAFT"
+    chmod go-rwx "$MOGGIE_SH_DRAFT" "$MOGGIE_SH_HOMEDIR/Drafts"
+    pushd "$MOGGIE_SH_DRAFT" >/dev/null
     MOGGIE_SH_DRAFT="$(pwd)"
 
-    if [ ! -e "$MOGGIE_SH_DRAFT/message.txt" ]; then
-        cat <<tac >"$MOGGIE_SH_DRAFT/message.txt"
+    if [ ! -e message.txt ]; then
+        # FIXME: We should have moggie generate this, based on the
+        #        preferences (to/from/etc) for the active context.
+        cat <<tac >message.txt
 To: You <you@example.org>
 From: Me <me@example.org>
 Subject: Draft e-mail
 
-$(cat ~/.signature 2>/dev/null)
 
-=============================================================[moggie-sh-snip]==
+$(cat ~/.signature 2>/dev/null)
+tac
+    fi
+    cp message.txt draft.txt
+    cat <<tac >>draft.txt
+==============================================================moggie-sh-snip====
 Type your message above this line!
 
-If you want to add attachments, exit the editor and copy them to the draft's
-folder: $MOGGIE_SH_DRAFT
+If you want to add attachments, exit the editor and copy them to:
+
+  "$MOGGIE_SH_DRAFT"
 
 Once you're happy, send the e-mail by typing \`send\` at the moggie.sh prompt.
 tac
-    fi
 
-    ${VISUAL:-${EDITOR:-vi}} "message.txt"
-
-    SUBJECT=$(grep ^Subject: "message.txt" \
+    ${VISUAL:-${EDITOR:-vi}} draft.txt
+    sed -e '/====moggie-sh-snip====/,$ d' <draft.txt >message.txt
+    rm -f draft.txt
+    SUBJECT=$(grep ^Subject: message.txt \
         |head -1 \
         |cut -f2 -d:)
+
+    popd >/dev/null 2>&1
     if [ "$SUBJECT" != "" ]; then
         NN="$(dirname "$MOGGIE_SH_DRAFT")/$(date +%Y%m%d-%H%M) $SUBJECT"
         [ "$MOGGIE_SH_DRAFT" != "$NN" ] \
             && mv "$MOGGIE_SH_DRAFT" "$NN" \
             && MOGGIE_SH_DRAFT="$NN"
     fi
-    cd "$MOGGIE_SH_DRAFT"
+
+    pushd "$MOGGIE_SH_DRAFT" >/dev/null
 }
 
 d() {
-    IDS=$(echo $(echo "$MOGGIE_CHOICE" |cut -f1) |sed -e s'/ id:/ +id:/g')
+    IDS=$(echo $(echo "$MOGGIE_CHOICE" |cut -f1) |sed -e s'/ id:/ +id:/g' -e s'/ thread:/ +thread:/g')
     moggie search "$MOGGIE_SEARCH" "$IDS" --format=msgdirs |tar xvfz - >$MOGGIE_TMP
     moggie_sh_done download
 }
@@ -102,9 +120,10 @@ alias q=exit
 
 s() {
     MOGGIE_SEARCH="$@"
+    MOGGIE_CHOICE=""
     moggie search "${MOGGIE_SEARCH:-in:inbox}" |sed -e 's/ /\t/'  >"$MOGGIE_TMP"
     if [ ! -s "$MOGGIE_TMP" ]; then
-        echo '*** No messages found, search again!'
+        moggie_sh_info '*** No messages found, search again!'
     else
         MOGGIE_CHOICE="$($MOGGIE_SH_MAILLIST <$MOGGIE_TMP)"
         if [ $(echo "$MOGGIE_CHOICE" |wc -l) = 1 ]; then
@@ -115,16 +134,24 @@ s() {
     fi
 }
 
+alias inbox='s in:inbox'
+alias sent='s in:sent'
+alias all-mail='s all:mail'
+
 v() {
-    IDS=$(echo $(echo "$MOGGIE_CHOICE" |cut -f1) |sed -e s'/ id:/ +id:/g')
+    IDS=$(echo $(echo "$MOGGIE_CHOICE" |cut -f1) |sed -e s'/ id:/ +id:/g' -e s'/ thread:/ +thread:/g')
     moggie show "$MOGGIE_SEARCH" "$IDS" |$MOGGIE_SH_VIEWER
     moggie_sh_done view
 }
 
 drafts() {
     mkdir -p "$MOGGIE_SH_HOMEDIR/Drafts"
+    COUNT=$(echo $(ls -1 |wc -l))
     pushd "$MOGGIE_SH_HOMEDIR/Drafts" >/dev/null
-    echo "*** $(pwd) has" $(ls -1 |wc -l) "drafts"
+    moggie_sh_info "*** $(pwd) has" $COUNT "drafts"
+    if [ $COUNT -gt 0 ]; then
+        ls -1
+    fi
 }
 
 
@@ -132,7 +159,7 @@ drafts() {
 ##[ Main ]####################################################################
 
 mkdir -p $MOGGIE_SH_HOMEDIR
-cd $MOGGIE_SH_HOMEDIR
+pushd $MOGGIE_SH_HOMEDIR >/dev/null
 
 cat <<tac
                                         _
