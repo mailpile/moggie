@@ -134,6 +134,10 @@ class MetadataStore(RecordStore):
     # Dividing by 16 lets us not care about 32-bit timestamp rollover
     TS_RESOLUTION = 16
 
+    # Keys we never want to store in the metadata index, as they would
+    # waste space and confuse other algos.
+    IGNORE_MORE_KEYS = ('metadata_idx', 'syn_idx')
+
     def __init__(self, workdir, store_id, aes_keys):
         super().__init__(workdir, store_id,
             sparse=True,
@@ -263,7 +267,7 @@ class MetadataStore(RecordStore):
 
     def _msg_keys(self, metadata, imap_keys=False, fs_path_keys=False):
         msgid = metadata.get_raw_header('Message-Id')
-        if msgid is None:
+        if (msgid is None) or (len(msgid) < 20):
             yield metadata.uuid
         else:
             yield msgid
@@ -282,6 +286,12 @@ class MetadataStore(RecordStore):
                 return om, key, keys
         return None, None, keys
 
+    def _clean(self, metadata):
+        for k in self.IGNORE_MORE_KEYS:
+            if k in metadata.more:
+                del metadata.more[k]
+        return metadata
+
     def set(self, keys, metadata, **kwargs):
         if not isinstance(metadata, Metadata):
             raise ValueError('Need instance of Metadata')
@@ -298,7 +308,7 @@ class MetadataStore(RecordStore):
         if rerank:
             self._rank(idx, metadata)
         new_keys = [idx] + [k for k in keys if not isinstance(k, int)]
-        return super().set(new_keys, metadata, **kwargs)
+        return super().set(new_keys, self._clean(metadata), **kwargs)
 
     def update_or_add(self, metadata,
             extra_keys=[], imap_keys=False, fs_path_keys=False):
@@ -320,7 +330,7 @@ class MetadataStore(RecordStore):
                 metadata.more[k] = v
 
         all_keys.sort(key=lambda k: 0 if (k == msg_key) else 1)
-        return (False, self.set(all_keys, metadata))
+        return (False, self.set(all_keys, self._clean(metadata)))
 
     def add_if_new(self, metadata,
             extra_keys=[], imap_keys=False, fs_path_keys=False):
@@ -329,7 +339,7 @@ class MetadataStore(RecordStore):
         if om is not None:
             return None
         else:
-            return self.set(all_keys, metadata)
+            return self.set(all_keys, self._clean(metadata))
 
     def append(self, metadata,
             extra_keys=[], imap_keys=False, fs_path_keys=False,
@@ -344,6 +354,7 @@ class MetadataStore(RecordStore):
 
         # FIXME: This almost always writes twice, because of the ranking.
         #        It would be nice if that were not the case!
+        metadata = self._clean(metadata)
         idx = super().append(metadata, **kwargs)
         if self._rank(idx, metadata):
             super().set(idx, metadata)
