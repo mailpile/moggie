@@ -117,7 +117,7 @@ def greedy_parse_terms(terms, magic_map={}):
                         break
 
             if isinstance(term, str):
-                if not term.startswith('id:'):
+                if not (term.startswith('id:') or term.startswith('thread:')):
                     term = term.lower()
                 search_stack[-1].append(term)
             else:
