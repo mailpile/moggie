@@ -240,7 +240,6 @@ Technical details:
         elif self.view == self.VIEW_REPORT:
             command = self.mog_ctx.parse
             args = [
-                '--allow-network',
                 '--with-everything=Y',
                 '--with-missing=Y',
                 '--format=text']
