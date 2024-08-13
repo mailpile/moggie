@@ -1,3 +1,4 @@
+import copy
 import datetime
 import logging
 import re
@@ -5,7 +6,7 @@ import time
 from email.utils import encode_rfc2231, parsedate_tz, formatdate, format_datetime
 
 from .rfc2074 import rfc2074_quote, rfc2074_unquote
-from .addresses import AddressHeaderParser
+from .addresses import AddressInfo, AddressHeaderParser
 
 
 FOLDING_RE = re.compile(r'\r?\n\s+', flags=re.DOTALL)
@@ -35,7 +36,7 @@ SINGLETONS = (
     'user-agent',
     'x-mailer')
 
-EMIT_MULTIPLE = ('HP-Obscured',)
+EMIT_MULTIPLE = ('HP-Obscured', 'Received')
 
 TEXT_HEADERS = ('subject',)
 
@@ -221,6 +222,15 @@ def parse_received(header_value):
     return fdict
 
 
+def format_received(fdict):
+    emit = []
+    for field in RECEIVED_TOKENS:
+        if field in fdict:
+            emit.append(field)
+            emit.append(fdict[field])
+    return '%s; %s' % (' '.join(emit), fdict['date'])
+
+
 def parse_header(raw_header):
     """
     This will parse an e-mail header into a JSON-serializable dictionary
@@ -254,6 +264,7 @@ def parse_header(raw_header):
             headers['_has_errors'] = True
         first = False
 
+        orig_hdr = hdr
         if hdr in SINGLETONS and hdr in headers:
             raw_hdr = '_duplicate-' + raw_hdr
             hdr = '_duplicate-' + hdr
@@ -264,23 +275,23 @@ def parse_header(raw_header):
         # also use by the header-fingerprinting code to differentiate MUAs.
         order.append(raw_hdr)
 
-        if hdr in ADDRESS_HEADERS:
+        if orig_hdr in ADDRESS_HEADERS:
             headers[hdr] = headers.get(hdr, []) + AddressHeaderParser(val)
 
-        elif hdr in TEXT_HEADERS:
+        elif orig_hdr in TEXT_HEADERS:
             headers[hdr] = headers.get(hdr, []) + [rfc2074_unquote(val)]
 
-        elif hdr == 'content-type':
+        elif orig_hdr == 'content-type':
             headers[hdr] = headers.get(hdr, []) + [parse_content_type(val)]
 
-        elif hdr in HEADERS_WITH_PARAMS:
+        elif orig_hdr in HEADERS_WITH_PARAMS:
             headers[hdr] = headers.get(hdr, []) + [parse_parameters(val)]
 
-        elif hdr in HEADERS_ONLY_PARAMS:
+        elif orig_hdr in HEADERS_ONLY_PARAMS:
             headers[hdr] = headers.get(hdr, []) + [parse_parameters(val,
                 value_re=None, unspace=True)]
 
-        elif hdr == 'received':
+        elif orig_hdr == 'received':
             headers[hdr] = headers.get(hdr, []) + [parse_received(val)]
 
         else:
@@ -320,8 +331,11 @@ def format_header(hname, data,
     if not isinstance(data, list):
         data = [data]
 
+    as_received = False
     if hname == 'Date':
         as_timestamp = True
+    elif hname in ('Received', 'received'):
+        as_received = True
     elif hname == 'MIME-Version':
         floatfmt = intfmt = '%.1f'
 
@@ -343,7 +357,12 @@ def format_header(hname, data,
             k, v = item
             return ['%s=%s' % (k, _quote_space(_encode(v)[0]))]
         elif isinstance(item, dict):
-            return _encode(list(item.items()))
+            if as_received:
+                return [format_received(item)]
+            elif 'fn' in item and 'address' in item and len(fn) == 2:
+                return _encode(AddressInfo(item['address'], item['fn']))
+            else:
+                return _encode(list(item.items()))
 
         if len(ll) > 1:
             ll.pop(0)
@@ -384,7 +403,9 @@ def format_header(hname, data,
 
         return ''.join(folds)
 
-    if hname in EMIT_MULTIPLE:
+    if hname == '_mbox_separator':
+        return values[0]
+    elif hname in EMIT_MULTIPLE:
         return eol.join(
             _fold('%s: %s' % (hname, value)) for value in values)
     else:
@@ -392,12 +413,38 @@ def format_header(hname, data,
 
 
 def format_headers(header_dict, eol='\r\n'):
-    header_items = list(header_dict.items())
-    header_items.sort(key=lambda k:
-        (HEADER_ORDER.get(k[0].lower(), 0), k[0], k[1]))
-    return (
-        eol.join(format_header(k, v, eol=eol) for k, v in header_items)
-        + eol + eol)
+    orig_order = header_dict.get('_ORDER')
+    if orig_order is None:
+        header_items = [(k, v) for k, v in header_dict.items() if k[:1] != '_']
+        header_items.sort(key=lambda k:
+            (HEADER_ORDER.get(k[0].lower(), 0), k[0], k[1]))
+        return (
+            eol.join(format_header(k, v, eol=eol) for k, v in header_items)
+            + eol + eol)
+
+    emitting = []
+    copied = copy.deepcopy(header_dict)
+    for h in orig_order:
+        try:
+            kl = h.lower()
+            k = h if (h in copied) else kl
+            if h.startswith('_duplicate-'):
+                h = h.split('-', 1)[-1]
+            if kl in SINGLETONS:
+                v = copied.pop(k)
+                emitting.append(format_header(h, v, eol=eol))
+            elif copied[k]:
+                v = copied[k].pop(0)
+                emitting.append(format_header(h, v, eol=eol))
+            else:
+                copied.pop(k)
+        except KeyError:
+            pass
+    for k in copied:
+        if k[:1] != '_' and copied[k]:
+            emitting.append(format_header(k, copied[k], eol=eol))
+
+    return eol.join(emitting) + eol + eol
 
 
 if __name__ == '__main__':
@@ -424,7 +471,7 @@ Subject:
  =?utf-8?b?SGVsbG8gd29ybGQ=?=
 
 """)
-    #print('%s' % json.dumps(parse, indent=1))
+    #print(format_headers(parse))
 
     assert(json.dumps(parse))
     assert(parse['received'][0]['from'] == 'foo')
