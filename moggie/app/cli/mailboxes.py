@@ -85,12 +85,12 @@ class CommandMailboxes(CommandSearch):
         ('--entire-thread=',      [], 'X=(true|false)'),
         ('--username=',       [None], 'Username with which to access email'),
         ('--password=',       [None], 'Password with which to access email'),
+        ('--keep-progress=', [False], 'X=(/path|ID) persist state between runs'),
     ],[
         (None, None, 'removal'),
         ('--trash',          [False], 'Tag removed messages as trash'),
         ('--delete',         [False], 'Allow permanent deletion of messages'),
         ('--remove-after=',    ['0'], 'X=1h, X=2d, ... remove after some time'),
-        ('--keep-progress=', [False], 'X=(/path|ID) persist state between runs'),
     ],[
         (None, None, 'output'),
         ('--create=',         [None], 'X=(mailzip|maildir|mbox)'),
@@ -237,7 +237,7 @@ class CommandMailboxes(CommandSearch):
                     progress = '\n'.join(set(si['uuid'] for si in sync_info))
                     with open(filename, 'w') as kp:
                         kp.write(progress)
-            except (IOError, OSError):
+            except:
                 logging.exception('Failed to update: %s' % filename)
 
     async def get_target_sync_info(self):
@@ -425,7 +425,7 @@ class CommandCopy(CommandMailboxes):
                     fmt, status = self.FMT_COPIED, plan
                     self.changed += 1
                     if self.keep_progress:
-                        self.target_sync_info.append({'uuid', metadata.uuid})
+                        self.target_sync_info.append({'uuid': metadata.uuid_asc})
         else:
             fmt, status = self.FMT_SKIPPED, plan
 
