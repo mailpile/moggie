@@ -44,15 +44,13 @@ class MsgdirsExporter(MaildirExporter):
     def get_dirname_and_ts(self, metadata):
         yyyymmdd, hhmm = friendly_datetime(metadata.timestamp).split()
 
-        pmeta = metadata.parsed()
-        dirname = '%s__%s' % (
+        pmd = metadata.parsed()
+        dirname = '%s__%s__%s' % (
             hhmm.replace(':', ''),
-            pmeta.get('subject') or '(no subject)')
+            pmd['from'].address if pmd.get('from') else '(unknown)',
+            pmd.get('subject') or '(no subject)')
 
-        dirname = os.path.join(self.basedir, yyyymmdd,
-            clean_filename(pmeta['from'].address),
-            clean_filename(dirname))
-
+        dirname = os.path.join(self.basedir, yyyymmdd, clean_filename(dirname))
         return dirname, metadata.timestamp
 
     def export_parsed(self, metadata, parsed, friendly):
