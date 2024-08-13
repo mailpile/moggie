@@ -263,7 +263,9 @@ class MetadataStore(RecordStore):
 
     def _msg_keys(self, metadata, imap_keys=False, fs_path_keys=False):
         msgid = metadata.get_raw_header('Message-Id')
-        if msgid is not None:
+        if msgid is None:
+            yield metadata.uuid
+        else:
             yield msgid
         if imap_keys or fs_path_keys:
             for ptr in metadata.pointers:
