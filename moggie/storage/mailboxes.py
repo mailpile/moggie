@@ -93,24 +93,28 @@ class MailboxStorageMixin:
         else:
             gi_args = set()
 
-        # FIXME: We need to check whether this is actually the right message, or
-        #        whether the mailbox has changed from under us. If it has, we
+        # FIXME: We need to check whether this is actually the right message,
+        #        or whether the mailbox has changed from under us. If it has, we
         #        need to (in coordination with the metadata index) rescan for
         #        messages update the metadata. This is true for both mbox and
         #        Maildir: Maildir files may get renamed if other apps change
         #        read/unread status or assign tags. For mbox, messages can move
         #        around within the file.
+        skipped = 0
         for ptr in metadata.pointers:
-            if self.can_handle_ptr(ptr):
-                try:
-                    if with_ptr:
-                        return ptr, self.__getitem__(ptr.ptr_path, *gi_args)
-                    else:
-                        return self.__getitem__(ptr.ptr_path, *gi_args)
-                except PleaseUnlockError:
-                    raise
-                except (KeyError, OSError, IOError) as e:
-                    logging.info('Loading e-mail failed: %s' % e)
+            if not self.can_handle_ptr(ptr):
+                skipped += 1
+                logging.info('Cannot handle PTR: %s' % ptr)
+                continue
+            try:
+                if with_ptr:
+                    return ptr, self.__getitem__(ptr.ptr_path, *gi_args)
+                else:
+                    return self.__getitem__(ptr.ptr_path, *gi_args)
+            except PleaseUnlockError:
+                raise
+            except (KeyError, OSError, IOError) as e:
+                logging.info('Loading e-mail failed: %s' % e)
 
         raise KeyError('Not found: %s' % _u(dumb_decode(ptr.ptr_path)))
 
