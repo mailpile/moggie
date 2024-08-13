@@ -14,7 +14,7 @@ mp-virtualenv
 .docker-test-wait
 work_dir
 config.rc
-BRE.notes/
+BRE.*
 mailpile.egg-info/
 mailpile-tmp.py
 static/default/plugins/
