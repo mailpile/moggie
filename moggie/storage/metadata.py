@@ -159,8 +159,9 @@ class MetadataStore(RecordStore):
         import sys
         zdict = dumb_decode(self[0].more['compress_dict'])
         compress_func, decompress_func = _make_cfuncs(zdict)
-        self.encoding_kwargs = lambda: {'comp_bin': (b'm', compress_func)}
-        self.decoding_kwargs = lambda: {'decomp_bin': [('m', b'm', decompress_func)]}
+        self.update_encoding_decoding_kwargs(
+            lambda: {'comp_bin': (b'm', compress_func)},
+            lambda: {'decomp_bin': [('m', b'm', decompress_func)]})
 
     def delete_everything(self, *args):
         super().delete_everything(*args)
@@ -446,7 +447,7 @@ class MetadataStore(RecordStore):
                 return (idx, idx, idx)
 
 
-if __name__ == '__main__':
+def RunTest():
     import random, sys, os
     from ..util.dumbcode import dumb_decode
 
@@ -554,3 +555,7 @@ Subject: Sure, sure
     print('Tests passed OK')
     #time.sleep(30)
     ms.delete_everything(True, False, True)
+
+
+if __name__ == '__main__':
+    RunTest()

@@ -416,6 +416,13 @@ class RecordStoreReadOnly:
     def close(self):
         self.keys_fd.close()
 
+    def update_encoding_decoding_kwargs(self, enc_kwargs, dec_kwargs):
+        self.encoding_kwargs = enc_kwargs
+        self.decoding_kwargs = dec_kwargs
+        for recfile in self.chunks.values():
+            recfile.encoding_kwargs = enc_kwargs
+            recfile.decoding_kwargs = dec_kwargs
+
     def getmtime(self):
         fns = [f for f in os.listdir(self.workdir)
             if (f[:6] in ('chunk-', 'keys')) and ('.' not in f)]
