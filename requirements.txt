@@ -3,6 +3,7 @@ cryptography
 pycryptodomex
 pycrypto
 markdown
+msgpack
 numpy
 urwid
 aiosmtplib

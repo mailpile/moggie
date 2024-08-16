@@ -24,6 +24,7 @@
 import binascii
 import json
 import logging
+import msgpack
 import zlib
 
 from base64 import urlsafe_b64encode as us_b64encode
@@ -62,15 +63,23 @@ def dumb_encode_bin(v,
                 return marker + compressed
         return encoded
 
-    if isinstance(v, bytes):     return (b'b' + v)
-    if isinstance(v, str):       return (b'u' + v.encode('utf-8'))
-    if isinstance(v, bool):      return (b'y' if v else b'n')
-    if isinstance(v, int):       return (b'd%d' % v)
-    if isinstance(v, float):     return (b'f%f' % v)
-    if isinstance(v, bytearray): return (b'b' + bytes(v))
-    if v is None:                return (b'-')
-
+    if v is None:                     return (b'-')
+    if isinstance(v, str):            return (b'u' + v.encode('utf-8'))
+    if isinstance(v, bytes):          return (b'b' + v)
+    if isinstance(v, bytearray):      return (b'b' + bytes(v))
+    if isinstance(v, bool):           return (b'y' if v else b'n')
     if hasattr(v, 'dumb_encode_bin'): return v.dumb_encode_bin()
+
+    # Try to use msgpack for anything more complicated
+    try:
+        if not isinstance(v, (tuple, set)):
+            return (b'p' + msgpack.packb(v))
+    except:
+        logging.exception('FAILED: msgpack.packb(%s)' % (v,))
+
+    # These still get used when values overflow what msgpack can handle
+    if isinstance(v, int):   return (b'd%d' % v)
+    if isinstance(v, float): return (b'f%f' % v)
 
     if isinstance(v, (list, tuple, set)):
         items = [
@@ -178,12 +187,14 @@ def dumb_decode(v,
 
     if isinstance(v, bytes):
         if v[:1] == b' ': v = v.lstrip(b' ')
+        if v[:1] == b'p': return msgpack.unpackb(v[1:])
         if v[:1] == b'b': return v[1:]
         if v[:1] == b'B': return us_b64decode(v[1:])
         if v[:1] == b'u': return str(v[1:], 'utf-8')
         if v[:1] == b'U': return unquote(str(v[1:], 'latin-1'))
     else:
         if v[:1] == ' ': v = v.lstrip(' ')
+        if v[:1] == 'p': return msgpack.unpackb(bytes(v[1:], 'latin-1'))
         if v[:1] == 'b': return v[1:].encode('latin-1')
         if v[:1] == 'B': return us_b64decode(v[1:])
         if v[:1] == 'u': return str(v[1:].encode('latin-1'), 'utf-8')
@@ -235,8 +246,9 @@ def dumb_decode(v,
     try:
         return (v if isinstance(v, str) else str(v, 'utf-8'))
     except:
-        logging.exception(
-            'BOGUS: %s (decomps=%s/%s)' % (v, decomp_bin, decomp_asc))
+        logging.exception('FAILED TO DECODE: %s' % (v,))
+        logging.debug('decompressors: bin=%s asc=%s' % (decomp_bin, decomp_asc))
+        logging.debug('decoders: %s' % (DUMB_DECODERS,))
         raise
 
 

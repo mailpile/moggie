@@ -33,17 +33,17 @@ class DoctestTests(unittest.TestCase):
 
 class DummbCodeTests(unittest.TestCase):
     def test_dumbcode_bin(self):
-        self.assertTrue(dumb_encode_bin(bytearray(b'1')) == b'b1')
         self.assertTrue(dumb_encode_bin(None)            == b'-')
-        self.assertTrue(dumb_encode_bin({'hi':2})        == b'D3,2,uhid2')
+        self.assertTrue(dumb_encode_bin(bytearray(b'1')) == b'b1')
+        self.assertTrue(dumb_encode_bin({'hi':2})[:1]    == b'p')
 
     def test_dumbcode_asc(self):
-        self.assertTrue(dumb_encode_asc(bytearray(b'1')) == 'BMQ==')
         self.assertTrue(dumb_encode_asc(None)            == '-')
+        self.assertTrue(dumb_encode_asc(bytearray(b'1')) == 'BMQ==')
         self.assertTrue(dumb_encode_asc({'hi':2})        == 'D3,2,Uhid2')
 
     def test_dumbcode_roundtrip(self):
-        stuff = {b'hi':[3,4]}
+        stuff = {b'hi': [3, 4, True, False, 'alphabet']}
         self.assertTrue(stuff == dumb_decode(dumb_encode_bin(stuff)))
         self.assertTrue(stuff == dumb_decode(dumb_encode_asc(stuff)))
         for i, o in (
