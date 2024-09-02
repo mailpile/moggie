@@ -38,7 +38,7 @@ class FormatMailzip(FormatBytes):
         if is_dir:
             return False
         try:
-            with cls.Zipfile(parent, key) as zf:
+            with cls.Zipfile(parent, key, mode='r') as zf:
                 for name in zf.namelist():
                     if cls.FILE_RE.search(name):
                         return True
@@ -48,7 +48,7 @@ class FormatMailzip(FormatBytes):
 
     def __init__(self, parent, path, container, **kwargs):
         super().__init__(parent, path, container, **kwargs)
-        self.zf = self.Zipfile(parent, path[0], mode='a')
+        self.zf = self.Zipfile(parent, path[0], mode='r')
         password = kwargs.get('password')
         if password:
             self.unlock(None, password)
