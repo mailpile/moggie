@@ -1023,6 +1023,7 @@ main app worker. Hints:
                     if (r is not result) and r.get('is_dir'):
                         if (rpath not in paths) and (rpath != path):
                             paths.append(rpath)
+                            credmap[rpath] = creds
                     if r.get('magic'):
                         ppol = context.get_path_policies(rpath).get(rpath, {})
                         if only_inboxes and 'inbox' not in ppol['tags']:
