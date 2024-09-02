@@ -7,7 +7,7 @@ import time
 
 import email.utils
 
-from ..util.mailpile import msg_id_hash
+from ..util.mailpile import msg_id_hash, b64c, sha1b64
 from ..security.html import HTMLCleaner
 from .headerprint import HeaderPrints
 from .dates import ts_to_keywords
@@ -194,6 +194,10 @@ class KeywordExtractor:
         # Record the same message-ID-hashes as Mailpile v1 did
         keywords.add('msgid:' + msg_id_hash(
             parsed_email.get('message-id') or metadata.uuid_asc))
+
+        # Record which containers we found the message in
+        for container in metadata.containers:
+            keywords.add('cont:%s' % b64c(sha1b64(container)).lower()[:16])
 
         subject = parsed_email.get('subject')
         if subject:
