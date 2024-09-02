@@ -269,9 +269,9 @@ class FileStorage(BaseStorage, MailboxStorageMixin):
                         username=username, password=password))
                 else:
                     c.append(_utf8(subpath))
-                if (len(c) > 2) and (recurse == 0):
+                if (len(c) > 0) and (recurse == 0):
                     break
-            info['has_children'] = (len(c) > 2)
+            info['has_children'] = (len(c) > 0)
             if (recurse != 0):
                 info['contents'] = c
 
