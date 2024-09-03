@@ -370,7 +370,7 @@ class CommandParse(CLICommand):
 
     @classmethod
     async def Parse(cls, cli_obj, data,
-            settings=None, allow_network=True,
+            settings=None, allow_network=True, metadata=None,
             **kwargs):
         """
         Parse the e-mail according to the settings. Data should be a
@@ -399,7 +399,7 @@ class CommandParse(CLICommand):
         else:
             pass  # data = data!
 
-        md = result.get('metadata')
+        md = result.get('metadata', metadata)
         html_magic = (settings.with_html
             or settings.with_html_text or settings.with_html_clean)
 
@@ -563,7 +563,7 @@ class CommandParse(CLICommand):
                                 del parts[i][key]
         if settings.with_metadata:
             result['metadata'] = result['metadata'].parsed()
-        else:
+        elif 'metadata' in result:
             del result['metadata']
 
         result['_PARSE_TIME_MS'] = int(1000 * (time.time() - t0))

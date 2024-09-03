@@ -142,12 +142,14 @@ class ImportWorker(BaseWorker):
 
     def _mk_parsers(self):
         loop = self._async_loop()
-        async def async_parse(email):
+        async def async_parse(email, metadata=None):
+            # FIXME: We should pass in the container/metadata!
             return await CommandParse.Parse(None, email,
+                metadata=metadata,
                 settings=self.parser_settings,
                 allow_network=self.allow_network)
-        def sync_parse(email):
-            return loop.run_until_complete(async_parse(email))
+        def sync_parse(email, metadata=None):
+            return loop.run_until_complete(async_parse(email, metadata))
         return sync_parse, async_parse
 
     def _fix_tags_and_scope(self, tag_namespace, tags, _all=True):
@@ -241,7 +243,7 @@ class ImportWorker(BaseWorker):
                     eml = self._get_email(md)
                     if eml:
                         checked += 1
-                        kws = moggie_parse(eml)['parsed']['_KEYWORDS']
+                        kws = moggie_parse(eml, md)['parsed']['_KEYWORDS']
                         for at in autotaggers:
                             if at.classify(kws) > at.threshold:
                                 t = add_tags[at.tag] = add_tags.get(at.tag, [])
@@ -352,7 +354,7 @@ class ImportWorker(BaseWorker):
             try:
                 eml = self._get_email(md)
                 if eml:
-                    keywords[md.idx] = moggie_parse(eml)['parsed']['_KEYWORDS']
+                    keywords[md.idx] = moggie_parse(eml, md)['parsed']['_KEYWORDS']
                 else:
                     unloadable.add(md.idx)
             except:
@@ -621,7 +623,7 @@ class ImportWorker(BaseWorker):
 
                 # Parse the e-mail and extract keywords.
                 # This uses the same logic as `moggie parse`.
-                email = (await moggie_parse_async(email))['parsed']
+                email = (await moggie_parse_async(email, md))['parsed']
                 kws = set(email['_KEYWORDS'])
 
                 # 3. Run the filtering logic to mutate keywords/tags
