@@ -212,7 +212,7 @@ class AutoTagger:
         '(^\d+$'
         '|^.{0,3}$'
         '|^[^:]{30,}$'
-        '|^(email|to|from|cc|date|day|month|year|msgid):'
+        '|^(email|to|from|cc|date|day|month|year|msgid|cont):'
         '|.*@'
         ')')
 
@@ -297,9 +297,10 @@ class AutoTagger:
                 (0.5, [('%s:%s' % (self.classifier_type, dbg), 0.5)])
                 if evidence else 0.5)
 
-        special_keywords = [k for k in keywords if ':' in k]
+        keywords = [k.lower() for k in keywords if not self.SKIP_RE.match(k)]
+        special_kws = [k for k in keywords if ':' in k and not k.startswith('subject:')]
         for kws, minkw, confidence in (
-                (special_keywords, 5, 0.95),
+                (special_kws, 3, self.threshold),
                 (keywords, 0, 0)):
             if len(kws) < minkw:
                 continue
