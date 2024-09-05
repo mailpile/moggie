@@ -261,6 +261,7 @@ class Classifier:
 
         clues = self._getclues(wordstream)
         for prob, word, record in clues:
+            prob = max(1e-10, min(prob, 1 - 1e-10))  # Bound our probabilities
             S *= 1.0 - prob
             H *= prob
             if S < 1e-200:  # prevent underflow
