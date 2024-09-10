@@ -214,7 +214,7 @@ class MessagePart(dict):
 
     def _text(self, part):
         ct, ctp = part['content-type']
-        charsets = [ctp.get('charset', 'latin-1'), 'utf-8', 'latin-1']
+        charsets = [ctp.get('charset', 'utf-8'), 'utf-8', 'latin-1']
         for cs in charsets:
             try:
                 text = str(self._bytes(part), cs)
@@ -439,7 +439,7 @@ class MessagePart(dict):
             zip_archives=True,
             zip_passwords=[]):
         """
-        This will examine the contents of recognize archive types and
+        This will examine the contents of recognized archive types and
         add their contents to the list of message parts.
         """
 

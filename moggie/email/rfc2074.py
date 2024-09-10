@@ -110,6 +110,7 @@ if __name__ == '__main__':
     test = 'hello verööld'
     test_b64 = '=?utf-8?b?%s?=' % str(base64.b64encode(test.encode('utf-8')).strip(), 'latin-1')
     assert(rfc2074_unquote('hello =?iso-8859-1?q?ver=F6=F6ld?=') == test)
+    assert(rfc2074_unquote(test) == test)
     assert(rfc2074_unquote(test_b64) == test)
 
     # Make sure we do not explode on invalid UTF-8

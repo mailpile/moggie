@@ -231,13 +231,16 @@ def format_received(fdict):
     return '%s; %s' % (' '.join(emit), fdict['date'])
 
 
-def parse_header(raw_header):
+def parse_header(raw_header, default_charset='utf-8'):
     """
     This will parse an e-mail header into a JSON-serializable dictionary
     of useful information.
     """
     if isinstance(raw_header, (bytes, bytearray)):
-        raw_header = str(raw_header, 'latin-1')
+        try:
+            raw_header = str(raw_header, default_charset)
+        except UnicodeDecodeError:
+            raw_header = str(raw_header, 'latin-1')
 
     # FIXME: This was '' - which is correct?
     unfolded = re.sub(FOLDING_RE, ' ', raw_header)
