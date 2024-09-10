@@ -119,6 +119,7 @@ class Metadata(list):
     idx            = property(lambda s: s[s.OFS_IDX])
     data_type      = property(lambda s: s.TYPE_MAP.get(s[s.OFS_DATA_TYPE], s.TYPE_EMAIL))
     pointers       = property(lambda s: [Metadata.PTR(*p) for p in sorted(s[s.OFS_POINTERS])])
+    containers     = property(lambda s: set(p.get_container() for p in s.pointers))
     parent_id      = property(
                          lambda s: s[s.OFS_PARENT_ID] or s[s.OFS_IDX],
                          lambda s, v: s.__setitem__(s.OFS_PARENT_ID, v))
@@ -151,14 +152,23 @@ class Metadata(list):
         self.more.get(key, default)
 
     def add_pointers(self, pointers):
+        """
+        Add pointers to the metadata, removing any obsolete pointers in
+        the process. Returns False if nothing changed.
+        """
         combined = self.pointers
+        original = sorted(combined)
         by_container = dict((p.container, p) for p in combined)
         for mp in (Metadata.PTR(*p) for p in pointers):
             replacing = by_container.get(mp.container)
             if replacing:
                 combined.remove(replacing)
             combined.append(mp)
-        self[self.OFS_POINTERS] = combined
+        combined.sort()
+        if combined != original:
+            self[self.OFS_POINTERS] = combined
+            return True
+        return False
 
     def get_raw_header(self, header):
         try:
@@ -261,12 +271,15 @@ Junk: blah
     assert(md2.get_raw_header('subject') == 'This is\n Great')
 
     # Make sure that adding pointers works sanely; the first should
-    # be added, the second should merely update the pointer list.
-    md1.add_pointers([Metadata.PTR(0, b'/dev/null', 200)])
-    md1.add_pointers([Metadata.PTR(0, tag_path(*mbx_path), 300)])
+    # be added, the second should merely update the pointer list, the
+    # third should be a no-op and return False.
+    assert(md1.add_pointers([Metadata.PTR(0, b'/dev/null', 200)]))
+    assert(md1.add_pointers([Metadata.PTR(0, tag_path(*mbx_path), 300)]))
+    assert(not md1.add_pointers([Metadata.PTR(0, b'/dev/null', 200)]))
     assert(len(md1.pointers) == 2)
     assert(md1.pointers[1].container == mbx_path[0])
     md1.add_pointers([(0, b'/dev/null', 200)])
     assert(len(md1.pointers) == 2)
+    print('%s' % md1.containers)
 
     print("Tests passed OK")
