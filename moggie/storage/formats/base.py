@@ -22,8 +22,9 @@ class FormatBytes:
         self.parent = parent
         self.path = path
 
-    def _range_to_key(self, beg, end):
-        return self.FMT % (beg, end-beg)
+    @classmethod
+    def RangeToKey(cls, beg, end):
+        return cls.FMT % (beg, end-beg)
 
     def _key_to_range(self, key):
         if isinstance(key, bytes):
@@ -73,7 +74,7 @@ class FormatBytes:
         if hasattr(self.container, 'resize'):
             self.container.resize(eoc + len(data))
         self.container[eoc:eoc+len(data)] = data
-        return self.get_tagged_path(self._range_to_key(eoc, eoc+len(data)))
+        return self.get_tagged_path(self.RangeToKey(eoc, eoc+len(data)))
 
     def get(self, key, default=None, **kwargs):
         try:

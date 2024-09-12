@@ -66,7 +66,8 @@ From: nobody <deleted@example.org>\r\n\
         (beg,), _hash = unpack_idx(int(key[1:], 16), count=1)
         return beg * 32
 
-    def _range_to_key(self, beg, _ignored_end,_data=b''):
+    @classmethod
+    def RangeToKey(cls, beg, _ignored_end=None, _data=b''):
         # mod=6 gives us 6*16 = 96 bits of the hash
         return b'@%x' % mk_packed_idx(_data, (beg // 32), count=1, mod=6)
 
@@ -89,7 +90,7 @@ From: nobody <deleted@example.org>\r\n\
 
             # Verify that we have the correct message
             hend, hdrs = quick_msgparse(self.container, beg)
-            if self._range_to_key(b, 0, _data=hdrs) != key:
+            if self.RangeToKey(b, _data=hdrs) != key:
                 raise KeyError('Message not found')
 
             # Make sure we have the correct message length; it could have
@@ -105,7 +106,7 @@ From: nobody <deleted@example.org>\r\n\
 
         # Message not found: scan the entire mailbox?
         for beg, hend, end, hdrs, rank in self.iter_email_offsets():
-            if self._range_to_key(b, 0, _data=hdrs) == key:
+            if self.RangeToKey(b, _data=hdrs) == key:
                 logging.debug('FIXME: message moved, request a reindex?')
                 return beg, end
 
@@ -180,7 +181,7 @@ From: nobody <deleted@example.org>\r\n\
                 self.parent.need_compacting(tag_path(*self.path))
 
     def keys(self, skip=0):
-        return (self._range_to_key(b, 0, _data=hdrs)
+        return (self.RangeToKey(b, _data=hdrs)
             for r, b, he, e, hdrs in self.iter_email_offsets(skip=skip))
 
     def iter_email_metadata(self,
@@ -197,7 +198,7 @@ From: nobody <deleted@example.org>\r\n\
                 if skip:
                     iterator = list(iterator)[skip:]
             for beg, hend, end, hdrs, rank in iterator:
-                key = self._range_to_key(beg, 0, _data=hdrs)
+                key = self.RangeToKey(beg, _data=hdrs)
                 path = self.get_tagged_path(key)
                 raw_header = obj[beg:hend]
                 lts, md = make_ts_and_Metadata(
@@ -285,11 +286,11 @@ if __name__ == "__main__":
         ofs1 = msgs1[len(msgs1)//2]
 
         # Make a copy!
-        key1 = mbox._range_to_key(ofs1[0], ofs1[1], _data=ofs1[3])
+        key1 = mbox.RangeToKey(ofs1[0], _data=ofs1[3])
         msg1 = copy.copy(mbox[key1])
 
         # Make a copy using an obsolete invalid key!
-        keyX = mbox._range_to_key(0, 0, _data=ofs1[3])
+        keyX = mbox.RangeToKey(0, _data=ofs1[3])
         msgX = copy.copy(mbox[keyX])
 
         ofs2 = msgs1[1]
