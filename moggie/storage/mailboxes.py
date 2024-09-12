@@ -46,7 +46,7 @@ class MailboxStorageMixin:
             username=None, password=None, context=None, secret_ttl=None):
         parser = iter([])
         if (limit is None) or (limit > 0):
-            mailbox = self.get_mailbox(key)
+            mailbox = self.get_mailbox(key, auth=not (username or password))
             if mailbox is None:
                 logging.debug('Failed to open mailbox: %s' % key)
             else:
@@ -156,7 +156,7 @@ class MailboxStorageMixin:
         else:
             gi_args = set()
 
-        mailbox = self.get_mailbox(key)
+        mailbox = self.get_mailbox(key, auth=not (username or password))
         if not mailbox:
             logging.debug('Failed to open mailbox: %s' % key)
             return ([], metadata_list, [], [])  # All ignored

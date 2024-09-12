@@ -255,9 +255,9 @@ class ImapConn:
         self.capabilities = set()
         self.selected = None
         self.host_port = host_port
-        self.debug=debug
+        self.debug = debug
         if username and password:
-            self.connect().unlock(username, password)
+            self.connect(no_auth=True).unlock(username, password)
 
     def _id(self):
         if self.username:
@@ -273,7 +273,11 @@ class ImapConn:
             username=(not self.username),
             password=True)
 
-    def connect(self):
+    def connect(self, no_auth=True):
+        if (not (no_auth or self.password is False)
+                and not (self.username and self.password)):
+            self.please_unlock()
+
         if not self.conn or not self.conn.file:
             conn, caps, info = connect_imap(self.host_port, debug=self.debug)
             self.conn = conn
@@ -295,7 +299,7 @@ class ImapConn:
             self.password = password or self.password or ''
             ok, data = _try_wrap(
                 self.conn, self.conn_info, _parsed_imap,
-                    self.connect().conn.login,
+                    self.connect(no_auth=True).conn.login,
                     self.username, self.password or '')
             if ok:
                 self.authenticated = True

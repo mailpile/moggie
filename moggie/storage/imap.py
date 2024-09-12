@@ -128,10 +128,10 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
 
         return self.conns[_id].connect()
 
-    def get_mailbox(self, key):
+    def get_mailbox(self, key, auth=True):
         try:
             user, host_port, mailbox, message = self.key_to_uhmm(key)
-            conn = self.get_conn(user=user, host_port=host_port, auth=True)
+            conn = self.get_conn(user=user, host_port=host_port, auth=auth)
             return ImapMailbox(conn, mailbox)
         except PleaseUnlockError:
             raise

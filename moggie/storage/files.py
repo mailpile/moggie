@@ -288,7 +288,7 @@ class FileStorage(BaseStorage, MailboxStorageMixin):
     def need_compacting(self, path):
         NEEDS_COMPACTING.add(path)
 
-    def get_mailbox(self, key):
+    def get_mailbox(self, key, auth=None):
         paths = self.key_to_paths(key)
         filepath = paths[0]
         if len(paths) > 1:
