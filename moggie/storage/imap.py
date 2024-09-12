@@ -117,9 +117,9 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
         def connect(user, host_port, password, auth):
             logging.info('Connecting to imap://%s@%s%s'
                 % (user, host_port, ' (authenticated)' if auth else ''))
-            conn = ImapConn(user, host_port) # debug=1
+            conn = ImapConn(user, host_port, debug=1)
             if auth:
-                conn = conn.unlock(user, password)
+                return conn.unlock(user, password)
             return conn
 
         _id = '%s@%s' % (user, host_port)
@@ -131,8 +131,10 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
     def get_mailbox(self, key):
         try:
             user, host_port, mailbox, message = self.key_to_uhmm(key)
-            conn = self.get_conn(user=user, host_port=host_port)
+            conn = self.get_conn(user=user, host_port=host_port, auth=True)
             return ImapMailbox(conn, mailbox)
+        except PleaseUnlockError:
+            raise
         except (KeyError, IOError):
             return None
 
