@@ -6,6 +6,7 @@ import time
 from io import BytesIO
 
 from moggie.email.sync import generate_sync_id, generate_sync_header
+from ..formats.base import FormatBytes
 
 
 class ClosableBytesIO(BytesIO):
@@ -37,10 +38,11 @@ class BaseExporter:
 
     def __init__(self, outfile,
             password=None, moggie_id=None, src=None, dest=None):
-        self.fd = outfile
+        self.fd = self._open_or_create(outfile)
         self.password = password
         self.moggie_id = moggie_id
         self.dest = dest
+        self.written = None
         if (dest or src) and moggie_id:
             self.sync_id = generate_sync_id(moggie_id, src, dest)
             logging.debug('%s: sync_id=%s (src=%s, dest=%s)'
@@ -49,6 +51,20 @@ class BaseExporter:
             logging.debug('No sync ID, how sad!')
             self.sync_id = None
 
+    def _open_or_create(self, fd):
+        mode = 'w'
+        if isinstance(fd, (str, bytes)):
+            try:
+                fd = open(fd, 'r+b')
+                mode = 'a'
+            except OSError:
+                fd = open(fd, 'w+b')
+        try:
+            fd.seek(0, 2)
+        except (IOError, AttributeError):
+            self.written = 0
+        return fd
+ 
     def can_encrypt(self):
         return False
 
@@ -67,12 +83,27 @@ class BaseExporter:
     def delete(self, metadata, filename=None):
         raise IOError('Deletion is unavailable')
 
+    def calculate_idx(self, beg, transformed):
+        return int(FormatBytes.RangeToKey(beg, beg+len(transformed))[1:], 16)
+
     def export(self, metadata, message):
-        self.fd.write(self.transform(metadata, message))
+        beg = self.written if (self.written is not None) else self.fd.tell()
+        data = self.transform(metadata, message)
+        self.fd.write(data)
+        if self.written is not None:
+            self.written += len(data)
+        return self.calculate_idx(beg, data)
 
     def transform(self, metadata, message):
         """Prepare the message for writing out to the archive."""
         return self.Transform(metadata, message, add_moggie_sync=self.sync_id)
+
+    @classmethod
+    def MakeMboxFrom(cls, timestamp=None, address=b'moggie@localhost'):
+        timestamp = timestamp or ((time.time() // 300) * 300)
+        dt = datetime.datetime.fromtimestamp(timestamp)
+        dt = bytes(dt.strftime('%a %b %d %T %Y'), 'utf-8')
+        return b'From %s  %s' % (address, dt)
 
     @classmethod
     def Transform(cls, metadata, message,
@@ -101,9 +132,8 @@ class BaseExporter:
 
         # Add the leading From delimeter, if not already present
         if not message.startswith(b'From ') and add_from:
-            dt = datetime.datetime.fromtimestamp(metadata.timestamp)
-            dt = bytes(dt.strftime('%a %b %d %T %Y'), 'utf-8')
-            message[:0] = bytearray(b'From moggie@localhost  %s%s' % (dt, eol))
+            message[:0] = bytearray(b'%s%s' % (
+                cls.MakeMboxFrom(metadata.timestamp), eol))
 
         # Make sure we end with some newlines
         while not message.endswith(eol * 2):

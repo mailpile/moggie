@@ -373,9 +373,9 @@ class CommandCopy(CommandMailboxes):
     FAIL_MESSAGE = 'failed'
 
     RESULT_KEY  = 'COPY'
-    FMT_COPIED  = 'Copied\t %(uuid)s\t%(subject)s'
-    FMT_SKIPPED = 'Skipped\t%(uuid)s\t%(subject)s'
-    FMT_FAILED  = 'Failed\t%(uuid)s\t%(subject)s'
+    FMT_COPIED  = 'Copied\t%(uuid)s\tid:%(dest_id)s\t%(subject)s'
+    FMT_SKIPPED = 'Skipped\t%(uuid)s\tid:%(dest_id)s\t%(subject)s'
+    FMT_FAILED  = 'Failed\t%(uuid)s\t\t%(subject)s'
 
     def get_emitter(self, fmt=None):
         emitter = super().get_emitter(fmt=fmt)
@@ -416,12 +416,13 @@ class CommandCopy(CommandMailboxes):
 
         plan, metadata = pnm
 
+        dest_id = None
         fmt, status = self.FMT_FAILED, self.FAIL_MESSAGE
         if plan == self.COPY_MESSAGE:
              emails_fmt = self.options['--create='][-1]
              async for (_, data) in self.as_emails(metadata, fmt=emails_fmt):
                 if data:
-                    await self.email_emitter((plan, data), last=False)
+                    dest_id = await self.email_emitter((plan, data), last=False)
                     fmt, status = self.FMT_COPIED, plan
                     self.changed += 1
                     if self.keep_progress:
@@ -432,6 +433,7 @@ class CommandCopy(CommandMailboxes):
         parsed = metadata.parsed()
         parsed['_metadata'] = metadata
         parsed['subject'] = parsed.get('subject', '(unknown)')
+        parsed['dest_id'] = dest_id or '-'
         parsed[self.RESULT_KEY] = status
 
         yield (fmt, parsed)

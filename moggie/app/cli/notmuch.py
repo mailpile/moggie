@@ -851,6 +851,7 @@ Tags: %(t)s
         return self.exporter
 
     def _export(self, exporter, result, first, last):
+        exported = None
         if result is not None:
             try:
                 func, data = result
@@ -860,11 +861,12 @@ Tags: %(t)s
                 else:
                     metadata = data['_metadata']
                     raw_email = base64.b64decode(data['_data'])
-                    exporter.export(metadata, raw_email)
+                    exported = exporter.export(metadata, raw_email)
             except:
                 logging.exception('Export failed')
         if last:
             exporter.close()
+        return exported
 
     async def emit_result_mbox(self, result, first=False, last=False):
         exporter = self._get_exporter(MboxExporter)

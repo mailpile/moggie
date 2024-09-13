@@ -14,6 +14,7 @@ except ImportError:
     HAVE_ZIP_AES = False
 
 from moggie.email.sync import generate_sync_fn_part
+from moggie.email.util import mk_maildir_idx
 
 from .base import *
 from .mbox import MboxExporter
@@ -338,6 +339,7 @@ class MaildirExporter(BaseExporter):
             prefix = filename.rsplit('-', 1)[0]
             self.writer.delete_by_prefix(prefix)
         self.writer.add_file(filename, ts, message)
+        return mk_maildir_idx(filename, 0)
 
     def compact(self):
         self.writer.compact()

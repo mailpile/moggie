@@ -1,5 +1,8 @@
 from .base import *
 
+from ..formats.mbox import FormatMbox
+from ...email.util import quick_msgparse
+
 
 class MboxExporter(BaseExporter):
     """
@@ -9,6 +12,10 @@ class MboxExporter(BaseExporter):
     The format flavor is mboxcl (see https://en.wikipedia.org/wiki/Mbox),
     for maximum interoperability/reliability.
     """
+    def calculate_idx(self, beg, transformed):
+        hend, hdrs = quick_msgparse(transformed, 0)
+        return int(FormatMbox.RangeToKey(beg, _data=hdrs)[1:], 16)
+
     def transform(self, metadata, message):
         return self.MboxTransform(metadata, message,
             add_moggie_sync=self.sync_id)
