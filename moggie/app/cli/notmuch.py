@@ -206,6 +206,11 @@ FIXME: Document html and html formats!
         self.mailboxes, terms = self.remove_mailbox_terms(terms)
         self.terms = self.combine_terms(terms)  # Respects --or
 
+        if self.mailboxes and ('-' in self.mailboxes):
+            mailbox = self.get_tempfile()
+            mailbox.write(self.stdin.read())
+            self.mailboxes[self.mailboxes.index('-')] = mailbox.name
+
         fmt = self.options['--format='][-1]
         if fmt in ('json', 'jhtml'):
             self.mimetype = 'application/json'

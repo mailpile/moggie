@@ -101,6 +101,7 @@ class CLICommand:
         self.context = None
         self.preferences = None
         self.stdin = sys.stdin.buffer
+        self.tempfiles = []
         self.cfg = (appworker and appworker.app and appworker.app.config)
 
         if access is not True and not access and self.ROLES:
@@ -144,6 +145,11 @@ class CLICommand:
         if self.WEBSOCKET and self.app is not None:
             await self._await_connection()
 
+    def get_tempfile(self):
+        import tempfile
+        self.tempfiles.append(tempfile.NamedTemporaryFile())
+        return self.tempfiles[-1]
+
     def remove_mailbox_terms(self, terms):
         mailboxes, terms = (
             [t[8:] for t in terms if t[:8] == 'mailbox:'] or None,
@@ -153,7 +159,7 @@ class CLICommand:
             if terms[0][:1] in ('.', '/') and os.path.exists(terms[0]):
                 mailboxes = [os.path.abspath(terms[0])]
                 terms = []
-            elif terms[0].startswith('imap:/'):
+            elif terms[0].startswith('imap:/') or (terms[0] == '-'):
                 mailboxes = [terms[0]]
                 terms = []
 
@@ -452,6 +458,8 @@ class CLICommand:
                 self.write_reply('', eof=True)
             except:
                 pass
+            for tf in self.tempfiles:
+                tf.close()
 
     async def _run_wrapper(self):
         try:
@@ -459,6 +467,9 @@ class CLICommand:
         except:
             logging.exception('Exception in %s' % (self,))
             raise
+        finally:
+            for tf in self.tempfiles:
+                tf.close()
 
     def sync_run(self):
         task = asyncio.ensure_future(self._run_wrapper())
