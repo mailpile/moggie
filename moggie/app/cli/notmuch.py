@@ -336,6 +336,8 @@ FIXME: Document html and html formats!
                 (m['from']['fn'] or m['from']['address'])
                 for m in msgs.values() if 'from' in m)))
 
+            annotations = dict((k[1:], v) for k,v in md.items() if k[:1] == '=')
+
             info = {
                 '_sep': sep,
                 'thread': '%8.8d' % tid,
@@ -347,7 +349,8 @@ FIXME: Document html and html formats!
                 'authors': authors,
                 'subject': top.get('subject', md.get('subject', '(no subject)')),
                 'query': [self.sign_id('id:%s' % ','.join('%d' % mid for mid in msgs))] + [None],
-                'tags': tags}
+                'tags': tags,
+                'annotations': annotations}
             info['_url_thread'] = '/cli/show/%s' % info['query'][0]
             info['_tag_list'] = '%s(%s)' % (sep, ' '.join(tags)) if tags else ''
             info['_file_count'] = '(%d)' % fc if (fc > len(msgs)) else ''
@@ -991,21 +994,22 @@ Tags: %(t)s
         else:
             query['skip'] = 0
 
+        entire = (self.options.get('--entire-thread=') or ['default'])[-1]
+        entire = entire.lower()
+
         if output == 'summary':
-            query['threads'] = True
+            query['threads'] = (entire != 'false')
             query['only_ids'] = False
             self.batch = 2000
         elif output == 'threads_metadata':
-            query['threads'] = True
+            query['threads'] = (entire != 'false')
         elif output == 'threads':
-            query['threads'] = True
+            query['threads'] = (entire != 'false')
             query['only_ids'] = True
         elif output == 'sync-info':
             self.batch = None
         elif output == 'emails':
-            entire = (self.options.get('--entire-thread=') or ['false'])[-1]
-            if entire != 'false':
-                query['threads'] = True
+            query['threads'] = (entire not in ('false', 'default'))
         elif output in ('tags', 'tag_info'):
             query['uncooked'] = True
             query['mask_tags'] = []
@@ -1435,7 +1439,7 @@ class CommandShow(CommandSearch):
     async def run(self):
         if self.options.get('--part='):
             self.options['--format='] = ['raw']
-        if self.options['--format='][-1] in ('json', 'sexp', 'text'):
+        if self.options['--format='][-1] in ('json', 'sexp', 'text', 'text0'):
             self.options['--entire-thread='][:0] = ['true']
         if self.options['--format='][-1] in ('html', 'jhtml'):
             if self.preferences['display_html'] == 'yes':

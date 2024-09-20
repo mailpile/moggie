@@ -74,6 +74,18 @@ class RequestTag(RequestBase):
         }, req_id=req_id)
 
 
+class RequestAnnotate(RequestBase):
+    def __init__(self, context='',
+            metadata_idxs=[], annotations={},
+            req_id=None):
+        self.update({
+            'req_type': 'annotate',
+            'context': context,
+            'metadata_idxs': metadata_idxs,
+            'annotations': annotations
+        }, req_id=req_id)
+
+
 class RequestAutotag(RequestBase):
     def __init__(self, context='', tags=[], search=None, req_id=None):
         self.update({

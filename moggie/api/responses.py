@@ -104,6 +104,15 @@ class ResponseTag(dict):
             'results': results})
 
 
+class ResponseAnnotate(dict):
+    def __init__(self, request, results):
+        self.update({
+            'req_type': request['req_type'],
+            'req_id': request['req_id'],
+            'context': request['context'],
+            'results': results})
+
+
 class ResponseEmail(dict):
     def __init__(self, request, parsed_email):
         self.update({
