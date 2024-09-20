@@ -394,7 +394,6 @@ class Moggie:
     def __exit__(self, *args, **kwargs):
         (self._mode, self._access, self._input, self._output, self._output_eof
             ) = self.state_stack.pop(-1)
-        return self
 
     def set_mode(self, mode):
         self._mode = mode
