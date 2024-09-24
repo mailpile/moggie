@@ -30,9 +30,9 @@ import time
 import traceback
 import hashlib
 
+from ..email.headers import parse_header
 from ..util.dumbcode import from_json, to_json
 from ..util.spambayes import Classifier
-
 
 DEFAULT_NEW_FILTER_SCRIPT = """\
 # These are the default moggie filter rules. Edit to taste!
@@ -48,6 +48,11 @@ if 'status:o' in keywords:
     add_tags('read')
 
 
+# Process and annotate Delivery Status Notifications
+if annotate_delivery_status_notifications():
+    add_tags('_mp_dsn')
+
+
 # Auto-tag priority messages; this does not remove from the inbox
 run_autotaggers('priority', add_tags=['_mp_autotagged'])
 
@@ -60,6 +65,12 @@ run_autotaggers('priority', add_tags=['_mp_autotagged'])
 if run_autotaggers(add_tags='_mp_autotagged'):
     if 'in:priority' not in keywords:
         remove_tags('inbox')
+
+
+### Unused examples follow ###
+
+# annotate('something', 'information')  # Create a custom metadata annotation
+
 """
 
 
@@ -68,37 +79,44 @@ class FilterError(Exception):
 
 
 class FilterEnv(dict):
-    def __init__(self, rule, **kwargs):
+    def __init__(self, rule, moggie, **kwargs):
         dict.__init__(self, kwargs)
         self.py = rule
-        self.keywords = self.get('keywords')
-        self.tag_namespace = self.get('tag_namespace')
-        self.autotag_done = set()
-        self.called_filter_rule = False
+        self.moggie = moggie
         self.update({
             'FILTER_RULE': self.set_filter_info,
             'logging': logging,
-            'now': time.time(),
+            'moggie': moggie,
             'add_tag': self.add_tags,
             'add_tags': self.add_tags,
             'remove_tag': self.remove_tags,
             'remove_tags': self.remove_tags,
             'add_keyword': self.add,
             'add_keywords': self.add,
+            'annotate': self.add_annotation,
             'remove_keyword': self.remove,
             'remove_keywords': self.remove,
             'ignore_autotagger': self.ignore_autotaggers,
             'ignore_autotaggers': self.ignore_autotaggers,
             'run_autotagger': self.run_autotaggers,
-            'run_autotaggers': self.run_autotaggers})
+            'run_autotaggers': self.run_autotaggers,
+            'parts': self.parts,
+            'parse_header': parse_header,
+            'content_type': self.content_type,
+            'annotate_delivery_status_notifications': self.annotate_DSNs})
+        self.reset(None, None, None, None)
 
-    def reset(self, keywords, tag_namespace):
-        self.keywords = keywords
+    def reset(self, tag_namespace, keywords, metadata, parsed_email):
         self.tag_namespace = tag_namespace
+        self.keywords = keywords
+        self.metadata = copy.deepcopy(metadata)
+        self.parsed_email = parsed_email
         self.autotag_done = set()
         self.called_filter_rule = False
         self.update({
             'now': time.time(),
+            'email': parsed_email,
+            'metadata': metadata,
             'keywords': keywords})
         if 'run' in self:
             del self['run']
@@ -132,6 +150,30 @@ class FilterEnv(dict):
                     tag += '@%s' % self.tag_namespace
             fixed.append(tag)
         return set(fixed)
+
+    def remove(self, *kwsets):
+        for kws in kwsets:
+            self.keywords -= set(kws if isinstance(kws, (list, set)) else [kws])
+
+    def add(self, *kwsets):
+        for kws in kwsets:
+            for kw in (kws if isinstance(kws, list) else [kws]):
+                self.keywords.add(kw.lower())
+
+    def add_tags(self, *tagsets):
+        for ts in tagsets:
+            tags = self._fix_tags(ts)
+            self.keywords |= tags
+
+    def add_annotation(self, key, value):
+        if key[:1] == '=':
+            key = key[1:]
+        self.keywords.add('=%s=%s' % (key.lower().strip(), value))
+
+    def remove_tags(self, *tagsets):
+        for ts in tagsets:
+            tags = self._fix_tags(ts)
+            self.keywords -= tags
 
     def ignore_autotaggers(self, *tags):
         if not self.py or not self.py.engine:
@@ -174,24 +216,28 @@ class FilterEnv(dict):
 
         return tagged
 
-    def remove(self, *kwsets):
-        for kws in kwsets:
-            self.keywords -= set(kws if isinstance(kws, (list, set)) else [kws])
+    def parts(self):
+        return self.parsed_email.get('_PARTS', [])
 
-    def add(self, *kwsets):
-        for kws in kwsets:
-            for kw in (kws if isinstance(kws, list) else [kws]):
-                self.keywords.add(kw.lower())
+    def content_type(self, part=None):
+        return (part or self.parsed_email).get('content-type', [''])[0]
 
-    def add_tags(self, *tagsets):
-        for ts in tagsets:
-            tags = self._fix_tags(ts)
-            self.keywords |= tags
-
-    def remove_tags(self, *tagsets):
-        for ts in tagsets:
-            tags = self._fix_tags(ts)
-            self.keywords -= tags
+    def annotate_DSNs(self):
+        try:
+            if self.content_type() == 'multipart/report':
+                for part in self.parts():
+                    if self.content_type(part) == 'message/rfc822':
+                        data = part.get('_RFC822_HEADERS', '')
+                        msgid = parse_header(data).get('message-id')
+                        if msgid:
+                            logging.debug('DSN is responding to %s' % msgid)
+                            self.add_annotation('dsn', msgid)
+                            return True
+                        else:
+                            logging.debug('DSN: Original Message-Id not found in %s' % data)
+        except Exception as e:
+            logging.exception('DSN parsing failed:')
+        return False
 
 
 class AutoTagger:
@@ -365,7 +411,7 @@ class FilterRule:
         self.tag_namespace = None
 
         self.raw_script = script
-        self.env = FilterEnv(self)
+        self.env = FilterEnv(self, engine.moggie if engine else None)
         self.script = self._compile(filename)
 
     @classmethod
@@ -375,7 +421,7 @@ class FilterRule:
     def _compile(self, filename):
         raw = self.raw_script or DEFAULT_NEW_FILTER_SCRIPT
         script = (
-            'def run(keywords, metadata, email):\n  ' +
+            'def run():\n  ' +
             '\n  '.join(raw.splitlines())
             ).strip().replace('  \n', '\n')
         try:
@@ -402,8 +448,8 @@ class FilterRule:
             raise FilterError('Tag namespace mismatch: %s != %s' % (
                 tag_namespace, self.py.tag_namespace))
         try:
-            self.env.reset(keywords, tag_namespace)
-            self.script(keywords, metadata, parsed_email)
+            self.env.reset(tag_namespace, keywords, metadata, parsed_email)
+            self.script()
         except Exception as e:
             raise FilterError(str(e))
         return keywords

@@ -182,7 +182,9 @@ class MetadataStore(RecordStore):
         self.mtimes.close()
 
     def _get_parent_id(self, idx, metadata):
-        in_reply_to = metadata.get_raw_header('In-Reply-To')
+        in_reply_to = metadata.get_raw_header_str('In-Reply-To')
+        if not in_reply_to:
+            in_reply_to = metadata.more.get('=dsn')
         if not in_reply_to:
             return idx
 
@@ -267,7 +269,7 @@ class MetadataStore(RecordStore):
         return changed
 
     def _msg_keys(self, metadata, imap_keys=False, fs_path_keys=False):
-        msgid = metadata.get_raw_header('Message-Id')
+        msgid = metadata.get_raw_header_str('Message-Id')
         if (msgid is None) or (len(msgid) < 20):
             yield metadata.uuid
         else:
@@ -482,12 +484,12 @@ def RunTest():
     while True:
         t0 = time.time()
         which = ms[random.randint(0, len(ms))]
-        print(' * %d: %s' % (which.idx, which.get_raw_header('Subject')))
+        print(' * %d: %s' % (which.idx, which.get_raw_header_str('Subject')))
         print('   * thread_id=%d mtime=%d siblings=%s'
             % (which.thread_id, which.mtime, ms[which.thread_id].more.get('thread')))
         t1 = time.time()
         for i in ms.get_thread_idxs(which.thread_id):
-            print('%d/%d: %s' % (i, which.thread_id, ms[i].get_raw_header('Subject')))
+            print('%d/%d: %s' % (i, which.thread_id, ms[i].get_raw_header_str('Subject')))
         t2 = time.time()
         print('   * Navigated thread in %.4fs (%.4f, %.4f)' % (t2-t0, t1-t0, t2-t1))
         if which.thread_id != which.idx:

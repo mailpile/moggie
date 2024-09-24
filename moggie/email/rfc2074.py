@@ -72,14 +72,13 @@ def rfc2074_unquote(quoted, strict=False):
             for cs in charsets:
                 try:
                     text.append(str(bytes(payload), cs))
-                    decoded = True
+                    decoded = cs
                     break
-                except (UnicodeDecodeError, LookupError):
-                    if cs == charset:
-                        logging.debug(
-                            'Decode failed for %s (%s)' % (payload, quoted),
-                            exc_info=True)
+                except:
+                    pass
+
             if not decoded:
+                logging.debug('Decode failed for %s (%s)' % (payload, quoted))
                 text.append(op)
 
     return ''.join(text)

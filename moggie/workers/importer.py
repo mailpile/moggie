@@ -82,6 +82,7 @@ class ImportWorker(BaseWorker):
         self.keyword_batch_no = 0
         self.keyword_thread = None
         self.keywords = {}
+        self.annotations = {}
 
         self.parser_settings = CommandParse.Settings(with_keywords=True)
         self.parser_settings.with_openpgp = False
@@ -478,13 +479,28 @@ class ImportWorker(BaseWorker):
         while self.keep_running:
             self.progress['kw'] = ''
             time.sleep(0.25)
-            if not self.keywords and not self.keyword_batches:
+            if not (self.keywords or self.keyword_batches or self.annotations):
                 logging.debug('[import] keyword loop: exiting')
                 return
 
             logging.debug(
-                '[import] keyword loop: Entered loop (keywords=%d)'
-                % len(self.keywords))
+                '[import] keyword loop: Looping (keywords=%d, annotations=%d)'
+                % (len(self.keywords), len(self.annotations)))
+
+            # Annotate messages
+            for msg_idx in list(self.annotations.keys()):
+                annotations = {}
+                for pair in self.annotations.pop(msg_idx):
+                    try:
+                        key, val = pair[1:].split('=', 1)
+                        annotations['=' + key.lower().strip()] = val.strip()
+                    except ValueError:
+                        logging.debug('Invalid annotation: %s' % pair)
+                try:
+                    self.metadata.annotate([msg_idx], annotations)
+                except:
+                    logging.exception('self.metadata.annotate(%s, %s) failed:'
+                        % ([msg_idx], annotations))
 
             # Add/remove results from the search engine
             for what, touch, prefix in (
@@ -621,20 +637,25 @@ class ImportWorker(BaseWorker):
                     logging.warning('[import] Failed to load %s' % (md,))
                     return
 
-                # Parse the e-mail and extract keywords.
+                # Parse the e-mail and extract keywords and annotations.
                 # This uses the same logic as `moggie parse`.
                 email = (await moggie_parse_async(email, md))['parsed']
                 kws = set(email['_KEYWORDS'])
 
-                # 3. Run the filtering logic to mutate keywords/tags
+                # 3. Run the filtering logic to mutate keywords/tags/annotations
                 if not old:
                     self.filters.filter(tag_namespace, kws, md, email)
                 with self.lock:
+                    annotations = []
                     for kw in kws:
-                        if kw in self.keywords:
+                        if kw[:1] == '=':
+                            annotations.append(kw)
+                        elif kw in self.keywords:
                             self.keywords[kw].append(md.idx)
                         else:
                             self.keywords[kw] = [md.idx]
+                    if annotations:
+                        self.annotations[md.idx] = annotations
 
                 added.append(md.idx)
 

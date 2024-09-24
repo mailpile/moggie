@@ -34,8 +34,10 @@ class MetadataWorker(BaseWorker):
         BaseWorker.__init__(self, unique_app_id, status_dir,
             name=name, notify=notify, log_level=log_level)
         self.functions.update({
+            b'annotate':     (True, self.api_annotate),
             b'info':         (True, self.api_info),
             b'compact':      (True, self.api_compact),
+            b'update_ptrs':  (True, self.api_update_ptrs),
             b'add_metadata': (True, self.api_add_metadata),
             b'metadata':     (True, self.api_metadata)})
 
@@ -63,6 +65,9 @@ class MetadataWorker(BaseWorker):
     def add_metadata(self, metadata, update=True):
         return self.call('add_metadata', update, metadata)
 
+    def annotate(self, msgids, annotations):
+        return self.call('annotate', msgids, annotations)
+
     async def async_add_metadata(self, loop, metadata, update=True):
         return await self.async_call(loop, 'add_metadata', update, metadata)
 
@@ -73,18 +78,18 @@ class MetadataWorker(BaseWorker):
         mds = [Metadata(*m) for m in metadatas]
         input_idxs = set(md.idx for md in mds)
         hits = dict(
-            (md.get_raw_header('Message-Id'), i)
+            (md.get_raw_header_str('Message-Id'), i)
             for i, md in enumerate(mds))
 
         wanted = list(hits.keys())
         if threads:
             wanted.extend(h for h
-                in (md.get_raw_header('In-Reply-To') for md in mds) if h)
+                in (md.get_raw_header_str('In-Reply-To') for md in mds) if h)
         res = await self.async_call(loop, 'metadata',
             wanted, False, threads, False, self.SORT_NONE, 0, None)
 
         def _augment_with(md):
-            msgid = md.get_raw_header('Message-Id')
+            msgid = md.get_raw_header_str('Message-Id')
             which = hits.get(msgid) if msgid else None
             if which is None:
                 hits[msgid] = md
@@ -125,7 +130,7 @@ class MetadataWorker(BaseWorker):
             thread['hits'] = []
             for i, md in enumerate(Metadata(*m) for m in thread['messages']):
                 md = thread['messages'][i] = _augment_with(md)
-                msgid = md.get_raw_header('Message-Id')
+                msgid = md.get_raw_header_str('Message-Id')
                 if msgid:
                     mds_by_msgid[msgid] = md
                     threads_by_msgid[msgid] = thread
@@ -136,8 +141,8 @@ class MetadataWorker(BaseWorker):
         #         into its own one-message thread, or merging it into an
         #         existing thread if we have one.
         for md in sorted(mds):
-            msgid = md.get_raw_header('Message-Id')
-            parid = md.get_raw_header('In-Reply-To')
+            msgid = md.get_raw_header_str('Message-Id')
+            parid = md.get_raw_header_str('In-Reply-To')
             mthread = threads_by_msgid.get(msgid)
             pthread = threads_by_msgid.get(parid)
             if mthread is None:
@@ -255,6 +260,82 @@ class MetadataWorker(BaseWorker):
                 else:
                     updated.append(idx)
         self.reply_json({'added': added, 'updated': updated})
+
+    def api_annotate(self, msgids, annotations, **kwas):
+        """
+        Add/remove a set of annotations to a list of messages.
+
+        Arguments:
+
+            msgids: [msgid1, msgid2, ...]
+            annotations: {key: value, ...}
+
+        Returns:
+
+            A list of updated message IDs.
+
+        If an annotation is set to an empty, None or False value, that annotation
+        is deleted from metadata. Annotations keys will be normalized so they are
+        lower-case and start with a '=' character.
+        """
+        updated = []
+        if not (msgids and annotations):
+            self.reply_json(updated)
+            return
+
+        logging.debug('api_annotate(%s, %s)' % (msgids, annotations))
+
+        for msgid in msgids:
+            with self.change_lock:
+                try:
+                    md = self._metadata[msgid]
+                except KeyError:
+                    continue
+
+                for key, val in annotations.items():
+                    key = key.strip().lower()
+                    if not key:
+                        continue
+                    elif key[:1] != '=':
+                        key = '=' + key
+
+                    if val in ('', None, False) and key in md.more:
+                        del md.more[key]
+                    else:
+                        md.more[key] = val
+
+                self._metadata.update_or_add(md)
+            updated.append(msgid)
+
+        self.reply_json(updated)
+
+    def api_update_ptrs(self, msgids_to_ptrs, **kwas):
+        """
+        Update pointers in the metadata index.
+
+        Arguments:
+
+            msgids_to_ptrs: {msgid: [Metadata.PTR.1, PTR.2, ...], ...}
+
+        Returns:
+
+            A list of updated message IDs.
+
+        Any old pointers within the same container will be replaced.
+        If a list of pointers is empty, that implies the message is gone.
+        """
+        updated = []
+        for msgid, pointers in msgids_to_ptrs.items():
+            try:
+                metadata = self._metadata[msgid]
+            except KeyError:
+                continue
+
+            if metadata.add_pointers(pointers):
+                self._metadata.update_or_add(metadata)
+                updated.append(msgid)
+
+        self.reply_json(updated)
 
     def _md_threaded(self, hits, only_ids, sort_order, urgent):
         hits = [self._metadata.thread_sorting_keyfunc(h) for h in hits]
@@ -392,11 +473,11 @@ if __name__ == '__main__':
             md_id = added['added'][0]
 
             m1 = list(mw.metadata([md_id], sort=mw.SORT_DATE_ASC))
-            assert(msgid == m1[0].get_raw_header('Message-ID'))
+            assert(msgid == m1[0].get_raw_header_str('Message-ID'))
 
             iset = dumb_encode_asc(IntSet([md_id]))
             m2 = list(mw.metadata(iset, sort=mw.SORT_DATE_ASC))
-            assert(msgid == m2[0].get_raw_header('Message-ID'))
+            assert(msgid == m2[0].get_raw_header_str('Message-ID'))
 
             if 'wait' not in sys.argv[1:]:
                 mw.quit()

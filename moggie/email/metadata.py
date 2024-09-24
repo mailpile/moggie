@@ -107,7 +107,7 @@ class Metadata(list):
         self.mtime = 0
 
         if not ts:
-            date = self.get_raw_header('Date')
+            date = self.get_raw_header_str('Date')
             if date:
                 try:
                     tt = email.utils.parsedate_tz(date)
@@ -175,10 +175,15 @@ class Metadata(list):
             header = header.lower()
             if header not in self._raw_headers:
                 fre = self.FIND_RE[header]
-                self._raw_headers[header] = fre.search(self.headers).group(1)
+                val = fre.search(self.headers).group(1)
+                self._raw_headers[header] = bytes(val, 'latin-1')
             return self._raw_headers[header]
         except (AttributeError, IndexError, TypeError):
             return None
+
+    def get_raw_header_str(self, header):
+        val = self.get_raw_header(header)
+        return None if (val is None) else str(val, 'latin-1')
 
     @classmethod
     def FromParsed(cls, p):
@@ -203,7 +208,7 @@ class Metadata(list):
                 self._parsed.update({
                     'parent_id': self.parent_id,
                     'thread_id': self.thread_id})
-            self._parsed.update(parse_header(self.headers))
+            self._parsed.update(parse_header(bytes(self.headers, 'latin-1')))
             self._parsed.update(self.more)
             self._parsed['_MORE'] = list(self.more.keys())
         return self._parsed
@@ -261,14 +266,14 @@ Junk: blah
             md_enc = dumb_encode_bin(md)
             print('%s == [%d] %s' % (md.uuid_asc, len(md_enc), md_enc))
             print('%s' % (md.parsed(),))
-            print('%s' % md1.get_raw_header('subject'))
+            print('%s' % md1.get_raw_header_str('subject'))
 
     assert(md1.uuid == md2.uuid)
     assert(md1.pointers[0].container == mbx_path[0])
     assert(md2.pointers[0].container == mdir_path[0])
 
-    assert(md1.get_raw_header('subject') == 'This is\n Great')
-    assert(md2.get_raw_header('subject') == 'This is\n Great')
+    assert(md1.get_raw_header_str('subject') == 'This is\n Great')
+    assert(md2.get_raw_header('subject') == b'This is\n Great')
 
     # Make sure that adding pointers works sanely; the first should
     # be added, the second should merely update the pointer list, the

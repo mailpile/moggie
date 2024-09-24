@@ -332,7 +332,7 @@ if __name__ == "__main__":
         elif os.path.isdir(op):
             op = bytes(op, 'utf-8')
             for md in FormatMaildirWERVD(fs, [op], None).iter_email_metadata():
-                print('Subject: %s' % md.get_raw_header('Subject'))
+                print('Subject: %s' % md.get_raw_header_str('Subject'))
 
         else:
             raise Exception('Error: unknown op: %s' % op)

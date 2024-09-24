@@ -170,11 +170,23 @@ class MessagePart(dict):
             pass
 
         elif ct == 'message/rfc822':
-            # FIXME:
-            #   - Is this a delivery failure report?
-            #   - Is recursively parsing this anything but a recipe for bugs?
-            # FIXME: Obey self.fix_mbox_from ?
-            pass
+            # FIXME: Should we ever offer to recursively parse this?
+            raw = self._raw(parts[-1])
+            try:
+                if b'\r\n' in raw:
+                    hend = raw.index(b'\r\n\r\n')
+                else:
+                    hend = raw.index(b'\n\n')
+            except ValueError:
+                hend = min(1024*8, len(raw))
+            try:
+                hdrs = str(raw[:hend], 'utf-8')
+            except UnicodeDecodeError:
+                hdrs = str(raw[:hend], 'latin-1')
+            self['_RFC822_HEADERS'] = hdrs.replace('\r', '')
+
+        elif ct == 'message/delivery-status':
+            self['_DELIVERY_STATUS'] = str(self._raw(parts[-1]), 'latin-1')
 
         elif self.get('content-id'):
             cid = self['content-id'].strip()
