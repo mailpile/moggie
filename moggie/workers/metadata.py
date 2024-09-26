@@ -62,11 +62,14 @@ class MetadataWorker(BaseWorker):
     def compact(self, full=False, callback_chain=None):
         return self.call('compact', full, callback_chain)
 
-    def add_metadata(self, metadata, update=True):
-        return self.call('add_metadata', update, metadata)
-
     def annotate(self, msgids, annotations):
         return self.call('annotate', msgids, annotations)
+
+    async def async_annotate(self, loop, msgids, annotations):
+        return await self.async_call(loop, 'annotate', msgids, annotations)
+
+    def add_metadata(self, metadata, update=True):
+        return self.call('add_metadata', update, metadata)
 
     async def async_add_metadata(self, loop, metadata, update=True):
         return await self.async_call(loop, 'add_metadata', update, metadata)
@@ -274,8 +277,8 @@ class MetadataWorker(BaseWorker):
 
             A list of updated message IDs.
 
-        If an annotation is set to an empty, None or False value, that annotation
-        is deleted from metadata. Annotations keys will be normalized so they are
+        If an annotation is set to an empty or None value, that annotation is
+        deleted from metadata. Annotations keys will be normalized so they are
         lower-case and start with a '=' character.
         """
         updated = []
@@ -299,10 +302,7 @@ class MetadataWorker(BaseWorker):
                     elif key[:1] != '=':
                         key = '=' + key
 
-                    if val in ('', None, False) and key in md.more:
-                        del md.more[key]
-                    else:
-                        md.more[key] = val
+                    md.more[key] = val
 
                 self._metadata.update_or_add(md)
             updated.append(msgid)

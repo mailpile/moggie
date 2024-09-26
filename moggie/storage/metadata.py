@@ -293,6 +293,9 @@ class MetadataStore(RecordStore):
         for k in self.IGNORE_MORE_KEYS:
             if k in metadata.more:
                 del metadata.more[k]
+        for k in list(metadata.more.keys()):
+            if metadata.more[k] in ('', None):
+                del metadata.more[k]
         return metadata
 
     def set(self, keys, metadata, **kwargs):

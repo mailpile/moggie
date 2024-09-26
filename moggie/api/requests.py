@@ -76,12 +76,12 @@ class RequestTag(RequestBase):
 
 class RequestAnnotate(RequestBase):
     def __init__(self, context='',
-            metadata_idxs=[], annotations={},
+            terms='', annotations={},
             req_id=None):
         self.update({
             'req_type': 'annotate',
             'context': context,
-            'metadata_idxs': metadata_idxs,
+            'terms': terms,
             'annotations': annotations
         }, req_id=req_id)
 
@@ -354,6 +354,7 @@ def to_api_request(_input):
          'search': RequestSearch,
          'browse': RequestBrowse,
          'mailbox': RequestMailbox,
+         'annotate': RequestAnnotate,
          'contexts': RequestContexts,
          'config_set': RequestConfigSet,
          'config_get': RequestConfigGet,

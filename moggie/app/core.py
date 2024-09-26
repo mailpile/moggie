@@ -821,6 +821,29 @@ main app worker. Hints:
 
         return ResponseTag(api_request, results)
 
+    async def api_req_annotate(self, conn_id, access, api_request):
+        ctx = api_request['context']
+        # Will raise ValueError or NameError if access denied
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_TAG_RW)
+
+        if not self.search:
+            return ResponsePleaseUnlock(api_request)
+
+        loop = asyncio.get_event_loop()
+        msgid_result = await self.search.with_caller(conn_id).async_search(
+                loop,
+                api_request['terms'],
+                tag_namespace=tag_ns,
+                more_terms=scope_s,
+                mask_deleted=False,
+                with_tags=False)
+
+        return ResponseAnnotate(api_request,
+            await self.metadata.with_caller(conn_id).async_annotate(
+            loop,
+            list(dumb_decode(msgid_result['hits'])),
+            api_request['annotations']))
+
     async def api_req_email(self, conn_id, access, api_request):
         ctx = api_request.get('context') or self.config.CONTEXT_ZERO
         # Will raise ValueError or NameError if access denied
@@ -1159,6 +1182,8 @@ main app worker. Hints:
             result = await self.api_req_email(conn_id, access, api_req)
         elif type(api_req) == RequestMailbox:
             result = await self.api_req_mailbox(conn_id, access, api_req)
+        elif type(api_req) == RequestAnnotate:
+            result = await self.api_req_annotate(conn_id, access, api_req)
         elif type(api_req) == RequestDeleteEmails:
             result = await self.api_req_delete_emails(conn_id, access, api_req)
         elif type(api_req) == RequestBrowse:

@@ -114,7 +114,7 @@ class CommandAnnotate(CommandSearch):
 
         aReq = RequestAnnotate(
             context=self.context,
-            metadata_idxs=req_idxs,
+            terms=' OR '.join('id:%s' % i for i in req_idxs),
             annotations=self.annotations)
 
         aRes = await self.worker.async_api_request(self.access, aReq)
@@ -123,12 +123,17 @@ class CommandAnnotate(CommandSearch):
         if 'results' not in aRes:
             failed.extend(range(0, len(mdlist_result_pairs)))
         else:
-            annotated = set(aRes['results']['metadata_idxs'])
+            annotated = set(aRes['results'])
             for i, (mdlist, result) in enumerate(mdlist_result_pairs):
                 matched = 0
                 for md in mdlist:
                     if md.idx in annotated:
-                        md.more.update(self.annotations)
+                        for k, v in self.annotations.items():
+                            if v in ('', None):
+                                if k in md.more:
+                                    del md.more[k]
+                            else:
+                                md.more[k] = v
                         matched += 1
                 if not matched:
                     failed.append(i)

@@ -2,8 +2,16 @@ def _lazy_admin(cls):
     import moggie.app.cli.admin as mod
     return getattr(mod, cls)
 
+def _lazy_annotate(cls):
+    import moggie.app.cli.annotate as mod
+    return getattr(mod, cls)
+
 def _lazy_autotag(cls):
     import moggie.app.cli.autotag as mod
+    return getattr(mod, cls)
+
+def _lazy_dev(cls):
+    import moggie.app.cli.dev as mod
     return getattr(mod, cls)
 
 def _lazy_email(cls):
@@ -26,8 +34,8 @@ def _lazy_openpgp(cls):
     import moggie.app.cli.openpgp as mod
     return getattr(mod, cls)
 
-def _lazy_dev(cls):
-    import moggie.app.cli.dev as mod
+def _lazy_sendmail(cls):
+    import moggie.app.cli.sendmail as mod
     return getattr(mod, cls)
 
 
@@ -62,10 +70,13 @@ CLI_COMMANDS = LazyLoader({
     'email': (_lazy_email, 'CommandEmail'),
     'parse': (_lazy_email, 'CommandParse'),
 
+    'annotate': (_lazy_annotate, 'CommandAnnotate'),
+    'send': (_lazy_sendmail, 'CommandSend'),
+
     'copy': (_lazy_mailboxes, 'CommandCopy'),
     'move': (_lazy_mailboxes, 'CommandMove'),
-    'remove': (_lazy_mailboxes, 'CommandRemove'),
-    'sync': (_lazy_mailboxes, 'CommandSync'),
+#   'remove': (_lazy_mailboxes, 'CommandRemove'),
+#   'sync': (_lazy_mailboxes, 'CommandSync'),
 
     'welcome': (_lazy_admin, 'CommandWelcome'),
     'unlock':  (_lazy_admin, 'CommandUnlock'),
