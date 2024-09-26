@@ -31,6 +31,13 @@ from . import tag_path
 from .base import FormatBytes
 
 
+def _index(haystack, needle):
+    try:
+        return haystack.index(needle)
+    except ValueError:
+        return None
+
+
 class FormatMbox(FormatBytes):
     NAME = 'mbox'
     TAG = b'mbx'
@@ -43,11 +50,24 @@ From: nobody <deleted@example.org>\r\n\
     DELETED_FILLER = b"                                                    \r\n"
 
     @classmethod
+    def IsEmail(cls, buffer):
+        eol = b'\r\n' if b'\r\n' in buffer[:128] else b'\n'
+        hend = _index(buffer[:16*1024], eol * 2)
+        if hend is None:
+            return False
+
+        header = eol + buffer[:hend]
+        return (
+            (b'\nDate: ' in header) and
+            (b'\nFrom: ' in header) and
+            (b'\nTo: ' in header))
+
+    @classmethod
     def Magic(cls, parent, key, is_dir=None):
         try:
             if is_dir:
                 return False
-            return (parent[key][:5] == b'From ')
+            return (parent[key][:5] == b'From ') and cls.IsEmail(parent[key])
         except (KeyError, OSError):
             return False
 

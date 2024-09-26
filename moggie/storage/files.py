@@ -13,6 +13,7 @@ from ..util.mailpile import PleaseUnlockError
 from .base import BaseStorage
 from .formats import split_tagged_path, tag_path
 from .formats.base import FormatBytes
+from .formats.eml import FormatEml
 from .formats.mbox import FormatMbox
 from .formats.maildir import FormatMaildir
 from .formats.mailzip import FormatMailzip
@@ -24,6 +25,7 @@ from .mailboxes import MailboxStorageMixin
 # order matters, the first match will be used in case there might be
 # multiple.
 FORMATS = OrderedDict()
+FORMATS[FormatEml.TAG] = FormatEml
 FORMATS[FormatMbox.TAG] = FormatMbox
 FORMATS[FormatMaildirWERVD.TAG] = FormatMaildirWERVD
 FORMATS[FormatMaildir.TAG] = FormatMaildir
