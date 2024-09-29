@@ -20,7 +20,7 @@ _t = lambda b: b if isinstance(b, str) else str(b, 'utf-8')
 def ImportDirectory(basedir, filelist, opener=open, getmtime=os.path.getmtime):
     """
     This reverses the export below, loading the contents of a directory
-    into a messagee parse structure. If there is no structure.json, a sane
+    into a message parse structure. If there is no structure.json, a sane
     default will be assumed.
 
     If the filelist is a string or bytes object, it will be treated as a
@@ -46,11 +46,11 @@ def ImportDirectory(basedir, filelist, opener=open, getmtime=os.path.getmtime):
             structure = json.loads(fd.read())
             generated = getmtime(structure_path)
     except (IOError, OSError):
-        structure = {}
+        structure = {'_PARTS': []}
         generated = 0
 
     # Iterate through _PARTS and load any file data, removing from filelist as we go
-    parts = structure.get('_PARTS', [])
+    parts = structure['_PARTS']
     removing = []
     for i, part in enumerate(parts):
         if '_FILE' in part:
@@ -79,7 +79,7 @@ def ImportDirectory(basedir, filelist, opener=open, getmtime=os.path.getmtime):
     for fn in filelist:
         part = {
             'content-type': ['application/octet-stream', {}],
-            'content-disposition': ['inline', {'filename': _t(fn)}]}
+            'content-disposition': ['attachment', {'filename': _t(fn)}]}
         with opener(os.path.join(basedir, fn), 'rb') as fd:
             part['_DATA'] = _t(base64.b64encode(fd.read()).strip())
         parts.append(part)
@@ -102,15 +102,23 @@ def ImportDirectory(basedir, filelist, opener=open, getmtime=os.path.getmtime):
             # Update message text/html
             new_text = updates['_PARTS'][0]['_TEXT']
             new_html = markdown.markdown(new_text)
+            updated = 0
             for content, ctype in (
                     (new_text, 'text/plain'),
                     (new_html, 'text/html')):
                 for part in parts:
-                    if (part['content-type'][0] == ctype and
-                            part['content-disposition'][0] == 'inline'):
+                    if ((part['content-type'][0] == ctype) and
+                            (part['content-disposition'][0] == 'inline')):
                         if part.get('_UPDATED', 0) < update_ts:
                             part['_TEXT'] = content
-                    break
+                            updated += 1
+                        break
+
+            if not updated:
+                parts[:0] = [{
+                    'content-type': ['text/plain', {'charset': 'utf-8'}],
+                    'content-disposition': ['inline', {}],
+                    '_TEXT': new_text}]
 
     except (IOError, OSError):
         pass
@@ -196,4 +204,4 @@ if __name__ == '__main__':
     import sys
     filepath = os.path.abspath(sys.argv[1])
     base, dn = os.path.split(filepath)
-    print(json.dumps(ImportDirectory(base, dn)))
+    print(json.dumps(ImportDirectory(base, dn), indent=2))

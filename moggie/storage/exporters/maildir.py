@@ -337,6 +337,7 @@ class MaildirExporter(BaseExporter):
         filename, ts, message = self.transform(metadata, message)
         if self.writer.CAN_DELETE:
             prefix = filename.rsplit('-', 1)[0]
+            #logging.debug('Delete by prefix %s, sync_id=%s' % (prefix, self.sync_id))
             self.writer.delete_by_prefix(prefix)
         self.writer.add_file(filename, ts, message)
         return mk_maildir_idx(filename, 0)

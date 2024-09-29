@@ -42,7 +42,6 @@ class BaseExporter:
         self.password = password
         self.moggie_id = moggie_id
         self.dest = dest
-        self.written = None
         if (dest or src) and moggie_id:
             self.sync_id = generate_sync_id(moggie_id, src, dest)
             logging.debug('%s: sync_id=%s (src=%s, dest=%s)'
@@ -52,6 +51,7 @@ class BaseExporter:
             self.sync_id = None
 
     def _open_or_create(self, fd):
+        self.written = None
         mode = 'w'
         if isinstance(fd, (str, bytes)):
             try:
@@ -61,7 +61,8 @@ class BaseExporter:
                 fd = open(fd, 'w+b')
         try:
             fd.seek(0, 2)
-        except (IOError, AttributeError):
+            fd.tell()
+        except:
             self.written = 0
         return fd
  
