@@ -1,3 +1,4 @@
+import logging
 import re
 import time
 import email.utils
@@ -121,8 +122,10 @@ def make_ts_and_Metadata(now, lts, raw_headers, *args):
 
     md[md.OFS_TIMESTAMP] = lts
 
+    raw_headers = (raw_headers
+        if isinstance(raw_headers, str) else str(raw_headers, 'latin-1'))
+
     # Could not parse Date - do we have a From line with a date?
-    raw_headers = str(raw_headers, 'latin-1')
     if raw_headers[:5] == 'From ':
         dt = raw_headers.split('\n', 1)[0].split('  ', 1)[-1].strip()
         try:
@@ -145,6 +148,9 @@ def make_ts_and_Metadata(now, lts, raw_headers, *args):
     if rcvd_ts:
         rcvd_ts.sort()
         md[md.OFS_TIMESTAMP] = rcvd_ts[len(rcvd_ts) // 2]
+
+    if md.timestamp == 0:
+        logging.debug('UHOH! ts=%s/%s md=%s raw_headers=%s' % (lts, md.timestamp, md, raw_headers))
 
     return (max(lts, md.timestamp), md)
 
@@ -174,8 +180,20 @@ This is an e-mail\r\n"""
 
     # FIXME: Write some tests to verify that our timestamp searching
     #        logic is actually sane and useful.
-    # t,m = make_ts_and_Metadata(now, lts, hdrs, [], hdrs)
+    t, m = make_ts_and_Metadata(now, 0, hdrs, [], hdrs)
+    assert(t > 0)
 
+    raw_headers = bytes("""\
+Date: Tue, 13 Aug 2024 12:27:47 +0000
+To: "Ehlen, Stephan" <stephan.ehlen=40bsi.bund.de@dmarc.ietf.org>
+Message-ID: <bW9aKCOk9HHb5xrHdoUlRC2aCpmZ6ZeReYYFFtf4P7TrbqN_q4Pnn-ibbWs9uehRzm6i_tverpxR0yxd3gxWhK8_w-s8lOx1I4B6Gf64Qyg=@protonmail.com>
+In-Reply-To: <845c1aeb783048a6a25329f3fe55f708@bsi.bund.de>
+CC: "openpgp@ietf.org" <openpgp@ietf.org>
+Subject: =?utf-8?q?=5Bopenpgp=5D_Re=3A_WG=3A_BSI_view_on_KEM_combiners?=
+From: Daniel Huigens <d.huigens=40protonmail.com@dmarc.ietf.org>
+""", 'utf-8')
+    t, m = make_ts_and_Metadata(now, 0, raw_headers, [], raw_headers)
+    assert(t > 0)
 
     # FIXME: Write some direct tests for mk_hashed_idx
 

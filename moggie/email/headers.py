@@ -362,7 +362,7 @@ def format_header(hname, data,
         elif isinstance(item, dict):
             if as_received:
                 return [format_received(item)]
-            elif 'fn' in item and 'address' in item and len(fn) == 2:
+            elif 'fn' in item and 'address' in item and len(item) == 2:
                 return _encode(AddressInfo(item['address'], item['fn']))
             else:
                 return _encode(list(item.items()))
