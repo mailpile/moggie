@@ -502,7 +502,7 @@ class HTMLToTextCleaner(HTMLCleaner):
         if t == 'hr':
             return '\n%s\n' % ('-' * wrap)
         if t == 'br':
-            return '\n'
+            return '  \n'
         if t in ('b', 'strong'):
             return (' **%s** ' % b.strip()) if b else ''
         if t == ('i', 'em'):
