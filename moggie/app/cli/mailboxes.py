@@ -22,6 +22,9 @@
 # To make these things efficient, we then make sure that the sync-info
 # search is as fast as possible for mailzip and remote IMAP mailboxes.
 #
+# TODO: Implement zero-arg versions of above commands, which fetch settings
+#       from the context and interate over everything that needs copying.
+#
 # TODO: Gathering sync-info from encrypted mailzips requires decrypting
 #       which needs to be plumbed in. But also we don't want to have to do
 #       all that work, write the short-circuit logic please thank you.
@@ -93,6 +96,7 @@ class CommandMailboxes(CommandSearch):
         ('--remove-after=',    ['0'], 'X=1h, X=2d, ... remove after some time'),
     ],[
         (None, None, 'output'),
+        ('--update',         [False], 'Update existing messages instead of skipping'),
         ('--create=',         [None], 'X=(mailzip|maildir|mbox)'),
         ('--format=',       ['text'], 'X=(text*|text0|json|sexp)'),
         ('--output=',   ['metadata'], None),
@@ -301,6 +305,7 @@ class CommandMailboxes(CommandSearch):
             raise
 
     async def run(self):
+        rv = None
         try:
             self.source_sync_info = await self.get_source_sync_info()
             self.target_sync_info = await self.get_target_sync_info()
@@ -369,11 +374,13 @@ class CommandCopy(CommandMailboxes):
     ROLES = AccessConfig.GRANT_READ
 
     COPY_MESSAGE = 'copied'
+    UPDT_MESSAGE = 'updated'
     SKIP_MESSAGE = 'skipped'
     FAIL_MESSAGE = 'failed'
 
     RESULT_KEY  = 'COPY'
     FMT_COPIED  = 'Copied\t%(uuid)s\tid:%(dest_id)s\t%(subject)s'
+    FMT_UPDATED = 'Updated\t%(uuid)s\tid:%(dest_id)s\t%(subject)s'
     FMT_SKIPPED = 'Skipped\t%(uuid)s\tid:%(dest_id)s\t%(subject)s'
     FMT_FAILED  = 'Failed\t%(uuid)s\t\t%(subject)s'
 
@@ -401,8 +408,11 @@ class CommandCopy(CommandMailboxes):
         for result in results:
             md = Metadata(*result)
             want_copy = (md.uuid_asc not in existing_uuids)
-            plan.append(
-                (self.COPY_MESSAGE if want_copy else self.SKIP_MESSAGE, md))
+            if (not want_copy) and self.options['--update'][-1]:
+                plan.append((self.UPDT_MESSAGE, md))
+            else:
+                plan.append(
+                    (self.COPY_MESSAGE if want_copy else self.SKIP_MESSAGE, md))
 
         return plan
 
@@ -418,12 +428,13 @@ class CommandCopy(CommandMailboxes):
 
         dest_id = None
         fmt, status = self.FMT_FAILED, self.FAIL_MESSAGE
-        if plan == self.COPY_MESSAGE:
+        if plan in (self.COPY_MESSAGE, self.UPDT_MESSAGE):
              emails_fmt = self.options['--create='][-1]
              async for (_, data) in self.as_emails(metadata, fmt=emails_fmt):
                 if data:
                     dest_id = await self.email_emitter((plan, data), last=False)
-                    fmt, status = self.FMT_COPIED, plan
+                    fmt = self.FMT_COPIED if (plan == self.COPY_MESSAGE) else self.FMT_UPDATED
+                    status = plan
                     self.changed += 1
                     if self.keep_progress:
                         self.target_sync_info.append({'uuid': metadata.uuid_asc})
@@ -569,6 +580,8 @@ class CommandMove(CommandCopy):
 
                 if copied_ts and (copied_ts <= self.remove_max_ts):
                     plan.append((self.REM_MESSAGE, md))
+                elif self.options['--update'][-1]:
+                    plan.append((self.UPDT_MESSAGE, md))
                 else:
                     plan.append((self.SKIP_MESSAGE, md))
 

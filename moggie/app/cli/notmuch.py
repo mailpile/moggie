@@ -210,6 +210,8 @@ FIXME: Document html and html formats!
             mailbox = self.get_tempfile()
             mailbox.write(self.stdin.read())
             self.mailboxes[self.mailboxes.index('-')] = mailbox.name
+            if not self.options.get('--sync-src=', [None])[-1]:
+                self.options['--sync-src='] = ['stdin']
 
         fmt = self.options['--format='][-1]
         if fmt in ('json', 'jhtml'):
@@ -1541,7 +1543,10 @@ class CommandCount(CLICommand):
 
 
 class CommandReply(CommandEmail):
-    """
+    """moggie reply [options] <terms>
+
+    FIXME: Finish this?
+
     Generate headers and optionally a message template for replying
     to a set of messages.
 
