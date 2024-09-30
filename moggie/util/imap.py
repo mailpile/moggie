@@ -3,6 +3,7 @@ import logging
 import re
 import socket
 import ssl
+import threading
 import traceback
 import time
 from imaplib import IMAP4, IMAP4_SSL
@@ -256,6 +257,7 @@ class ImapConn:
         self.selected = None
         self.host_port = host_port
         self.debug = debug
+        self.lock = threading.RLock()
         if username and password:
             self.connect(no_auth=True).unlock(username, password)
 
@@ -266,46 +268,49 @@ class ImapConn:
 
     def please_unlock(self, err=None):
         _id = self._id()
-        err = err or 'Need username and password for %(id)s'
+        err = (err or 'Need username and password for %(id)s') % {'id': _id}
         self.shutdown()
-        raise PleaseUnlockError(err % {'id': _id},
+        logging.debug('PleaseUnlockError: %s' % err)
+        raise PleaseUnlockError(err,
             resource=_id,
             username=(not self.username),
             password=True)
 
     def connect(self, no_auth=True):
-        if (not (no_auth or self.password is False)
-                and not (self.username and self.password)):
-            self.please_unlock()
+        with self.lock:
+            if (not (no_auth or self.password is False)
+                    and not (self.username and self.password)):
+                self.please_unlock()
 
-        if not self.conn or not self.conn.file:
-            conn, caps, info = connect_imap(self.host_port, debug=self.debug)
-            self.conn = conn
-            self.capabilities = caps
-            self.conn_info = info
-            if self.authenticated:
-                self.authenticated = False
-                self.unlock(self.username, self.password)
-            self.selected = None
-        return self
+            if not self.conn or not self.conn.file:
+                conn, caps, info = connect_imap(self.host_port, debug=self.debug)
+                self.conn = conn
+                self.capabilities = caps
+                self.conn_info = info
+                if self.authenticated:
+                    self.authenticated = False
+                    self.unlock(self.username, self.password)
+                self.selected = None
+            return self
 
     def unlock(self, username=None, password=None, ask_key=None, set_key=None):
-        if self.authenticated:
-            return self
-        if password is None and self.password is None:
-            self.please_unlock('Please login %(id)s')
-        try:
-            self.username = username or self.username or ''
-            self.password = password or self.password or ''
-            ok, data = _try_wrap(
-                self.conn, self.conn_info, _parsed_imap,
-                    self.connect(no_auth=True).conn.login,
-                    self.username, self.password or '')
-            if ok:
-                self.authenticated = True
+        with self.lock:
+            if self.authenticated:
                 return self
-        except PleaseUnlockError:
-            self.please_unlock('Login incorrect for %(id)s')
+            if password is None and self.password is None:
+                self.please_unlock('Please login %(id)s')
+            try:
+                self.username = username or self.username or ''
+                self.password = password or self.password or ''
+                ok, data = _try_wrap(
+                    self.conn, self.conn_info, _parsed_imap,
+                        self.connect(no_auth=True).conn.login,
+                        self.username, self.password or '')
+                if ok:
+                    self.authenticated = True
+                    return self
+            except PleaseUnlockError:
+                self.please_unlock('Login incorrect for %(id)s')
 
     def _gather_responses(self, decode=True):
         # We convert server-suppied values to upper-case.
@@ -329,24 +334,23 @@ class ImapConn:
         if isinstance(mailbox, str):
             mailbox = codecs.encode(mailbox, 'imap4-utf-7')
 
-        # Caching this causes us to miss UIDVALIDITY changes, and mail
-        # gets badly mixed up. So, goodbye optimization!
-        #
-        # if self.selected and self.selected.get('mailbox') == mailbox:
-        #     return self
+        # Note: Caching this would cause us to miss UIDVALIDITY changes,
+        #       and mail get badly mixed up.
 
-        ok, data = _try_wrap(
-            self.conn, self.conn_info, _parsed_imap,
-                self.unlock().conn.select, mailbox)
-        if ok:
-            self.selected = self._gather_responses()
-            self.selected['mailbox'] = mailbox
-            return self
+        with self.lock:
+            ok, data = _try_wrap(
+                self.conn, self.conn_info, _parsed_imap,
+                    self.unlock().conn.select, mailbox)
+            if ok:
+                self.selected = self._gather_responses()
+                self.selected['mailbox'] = mailbox
+                return self
         raise KeyError('Failed to select %s' % mailbox)
 
     def uids(self, mailbox, skip=0):
-        ok, data = _try_wrap(self.conn, self.conn_info,
-            _parsed_imap, self.select(mailbox).conn.uid, 'SEARCH', None, 'ALL')
+        with self.lock:
+            ok, data = _try_wrap(self.conn, self.conn_info,
+                _parsed_imap, self.select(mailbox).conn.uid, 'SEARCH', None, 'ALL')
         if ok:
             return [int(i) for i in data]
         return []
@@ -356,12 +360,14 @@ class ImapConn:
         # some of the parsing work and reducing network traffic.
         imap_headers = (
             'BODY.PEEK[HEADER.FIELDS %s]' % (Metadata.IMAP_HEADERS,))
-        ok, data = _try_wrap(self.conn, self.conn_info,
-            self.select(mailbox).conn.uid, 'FETCH',
-                (','.join('%d' % i for i in uids)),
-                '(RFC822.SIZE FLAGS UID %s)' % (imap_headers,))
-        if not ok:
-            return
+        with self.lock:
+            ok, data = _try_wrap(self.conn, self.conn_info,
+                self.select(mailbox).conn.uid, 'FETCH',
+                    (','.join('%d' % i for i in uids)),
+                    '(RFC822.SIZE FLAGS UID %s)' % (imap_headers,))
+            if not ok:
+                return
+
         hkey = bytes(imap_headers.replace('.PEEK', ''), 'utf-8')
         for lines in data:
             if lines and lines[0] == 41:  # This is an imaplib bug
@@ -384,15 +390,17 @@ class ImapConn:
                 else:
                     raise ValueError('Flags or size not found')
             except (ValueError, IndexError) as e:
-                logging.debug('Bogus data: %s, %s' % (lines, exc))
+                logging.debug('Bogus data: %s, %s' % (lines, e))
 
     def fetch_messages(self, mailbox, uids):
-        ok, data = _try_wrap(self.conn, self.conn_info,
-            self.select(mailbox).conn.uid, 'FETCH',
-                (','.join('%d' % i for i in uids)),
-                '(BODY[])')
-        if (not ok) or (not data) or (data[0] is None):
-            raise KeyError('Not found: %s' % uids)
+        with self.lock:
+            ok, data = _try_wrap(self.conn, self.conn_info,
+                self.select(mailbox).conn.uid, 'FETCH',
+                    (','.join('%d' % i for i in uids)),
+                    '(BODY[])')
+            if (not ok) or (not data) or (data[0] is None):
+                raise KeyError('Not found: %s' % uids)
+
         for lines in data:
             if lines and lines[0] == 41:  # This is an imaplib bug
                 continue
@@ -407,10 +415,11 @@ class ImapConn:
                 logging.debug('Bogus data: %s, %s' % (lines, exc))
 
     def close(self):
-        if self.conn and self.selected:
-            ok, data = _try_wrap(self.conn, self.conn_info,
-                _parsed_imap, self.conn.close)
-            self.selected = None
+        with self.lock:
+            if self.conn and self.selected:
+                ok, data = _try_wrap(self.conn, self.conn_info,
+                    _parsed_imap, self.conn.close)
+                self.selected = None
         return self
 
     def ls(self, prefix=None, recurse=False, limit=1000):
@@ -420,9 +429,10 @@ class ImapConn:
             prefix = b''
 
         folders = []
-        ok, data = _try_wrap(
-            self.conn, self.conn_info, _parsed_imap,
-                self.unlock().conn.list, prefix or b'""', b'%')
+        with self.lock:
+            ok, data = _try_wrap(
+                self.conn, self.conn_info, _parsed_imap,
+                    self.unlock().conn.list, prefix or b'""', b'%')
         while ok:
             while len(data) >= 3:
                 (flags, sep, path), data[:3] = data[:3], []
@@ -439,9 +449,10 @@ class ImapConn:
                 if recurse and '\\NOINFERIORS' not in flags:
                     folders.append((path + sep))
             if folders:
-                ok, data = _try_wrap(
-                    self.conn, self.conn_info, _parsed_imap,
-                        self.conn.list, folders.pop(0), b'%')
+                with self.lock:
+                    ok, data = _try_wrap(
+                        self.conn, self.conn_info, _parsed_imap,
+                            self.conn.list, folders.pop(0), b'%')
             else:
                 break
 
@@ -455,14 +466,15 @@ class ImapConn:
                         return
 
     def shutdown(self):
-        if self.conn:
-            try:
-                self.close()
-                self.conn.socket().close()
-                self.conn.file.close()
-            except (OSError, IOError):
-                pass
-            self.conn = None
+        with self.lock:
+            if self.conn:
+                try:
+                    self.close()
+                    self.conn.socket().close()
+                    self.conn.file.close()
+                except (OSError, IOError):
+                    pass
+                self.conn = None
 
 
 ##[ Test code follows ]#######################################################
