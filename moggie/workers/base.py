@@ -78,7 +78,7 @@ class BaseWorker(Process):
             log_level=logging.ERROR, shutdown_idle=None):
         Process.__init__(self)
 
-        self.unique_app_id = unique_app_id or b'moggie'
+        self.unique_app_id = unique_app_id or 'moggie'
         self.name = name or self.KIND
         self.keep_running = True
         self.url = None
@@ -97,6 +97,7 @@ class BaseWorker(Process):
             b'status':    (False, self.api_status)}
 
         # Support mutt-style log levels, convert to Pythonish
+        log_level = int(log_level)
         if 0 <= log_level <= 4:
             log_level = [
                 logging.CRITICAL,
@@ -855,6 +856,7 @@ class BaseWorker(Process):
     def common_rpc_handler(self,
             fn, method, args, qs_pairs, prep, uploaded):
         t0 = time.time()
+        kwargs = None
         argdecode_and_func = self.functions.get(fn)
         fn = str(fn, 'latin-1')
         if argdecode_and_func is not None:
@@ -907,11 +909,16 @@ class BaseWorker(Process):
 
 
 class WorkerPool:
+    MAX_WORKERS = 5
+
     def __init__(self, unique_app_id, workers):
         self.unique_app_id = unique_app_id
         self.lock = threading.RLock()
         self.count = 0
+        self.counts = {}
         self.workers = []
+        self.max_workers = self.MAX_WORKERS
+        self.max_cap_workers = {}
         self.caller_lock = threading.Lock()
         self.caller_info = None
         self.quit = lambda: self._proxy_all('quit')
@@ -920,22 +927,45 @@ class WorkerPool:
         for caps, cls, args, kwargs in workers:
             self.add_worker(caps, cls, args, kwargs)
 
+    class WEntry:
+        def __init__(self, name, cap, worker, w_cls, w_args, w_kwargs, ts):
+            self.name = name
+            self.capabilities = cap
+            self.worker = worker
+            self.w_cls = w_cls
+            self.w_args = w_args
+            self.w_kwargs = w_kwargs
+            self.ts = ts
+
+        def __repr__(self):
+            return "<%s[%s]=%s/%x>" % (
+                self.name, self.capabilities, self.worker, self.ts)
+
+        def create_worker(self):
+            self.worker = self.w_cls(*self.w_args, **self.w_kwargs)
+            return self.worker
+
     def housekeeping(self):
         with self.lock:
-            for w_tuple in self.workers:
-                worker = w_tuple[2]
+            done = []
+            for i, wEntry in enumerate(self.workers):
+                worker = wEntry.worker
                 if worker and (worker.exitcode is not None):
                     try:
                         worker.join()
                     except:
                         pass
-                    w_tuple[2] = None
+                    wEntry.worker = None
+                    done.append(i)
+            for i in reversed(done):
+                wEntry = self.workers.pop(i)
+                self.counts[wEntry.capabilities] -= 1
 
     def forked(self):
         with self.lock:
-            for i, (name, cap, worker, cak, ts) in enumerate(self.workers):
-                if worker:
-                    self.workers[i][2] = None
+            for i, wEntry in enumerate(self.workers):
+                if wEntry.worker:
+                    wEntry.worker = None
 
     def add_worker(self, caps, cls, args, kwargs):
         with self.lock:
@@ -949,27 +979,29 @@ class WorkerPool:
             worker = cls(*args, **kwargs)
             if name is None:
                 name = '%s_%d_%d' % (worker.name, os.getpid(), self.count)
-
-            self.workers.append([name, caps, worker, (cls, args, kwargs), 0])
             self.count += 1
+
+            wEntry = self.WEntry(name, caps, worker, cls, args, kwargs, 0)
+            self.workers.append(wEntry)
+            self.counts[wEntry.capabilities] = 1 + self.counts.get(wEntry.capabilities, 0)
 
     def auto_add_worker(self, pop, which, capabilities):
         logging.error('Worker not found: %s/%s' % (which, capabilities))
         return None
 
     def with_worker(self, which=None, capabilities='', pop=False, wait=False):
+        max_workers = self.max_cap_workers.get(capabilities, self.max_workers)
         for tries in range(0, 50):
-            worker = name = cap = None
+            worker = name = None
             with self.lock:
-                for i, (name, cap, worker, cak, ts) in enumerate(self.workers):
-                    if (((not which) or name.startswith(which))
-                            and (capabilities in cap)):
+                for i, wEntry in enumerate(self.workers):
+                    if (((not which) or wEntry.name.startswith(which))
+                            and (capabilities in wEntry.capabilities)):
+                        worker = wEntry.worker
                         if worker:
-                            worker = worker.connect(quick=(ts > 0))
+                            worker = wEntry.worker.connect(quick=(wEntry.ts > 0))
                         if not worker:
-                            cls, args, kwargs = cak
-                            worker = cls(*args, **kwargs)
-                            self.workers[i][2] = worker
+                            worker = wEntry.create_worker()
                             worker = worker.connect(quick=False)
 
                         if worker:
@@ -978,15 +1010,23 @@ class WorkerPool:
                             else:
                                 return worker
 
-            logging.debug('Adding new worker: %s/%s' % (which, capabilities))
-            worker = self.auto_add_worker(pop, which, capabilities)
-            if worker or not wait:
-                w = (worker[2] if pop else worker).connect(quick=False)
-                if w or not wait:
-                    return worker
+            if self.counts.get(capabilities, 0) >= max_workers:
+                logging.debug(
+                    'Have max count(%d) for %s, not adding worker'
+                    % (max_workers, capabilities))
+            else:
+                logging.debug('Adding new worker for %s' % (capabilities,))
+                worker = self.auto_add_worker(pop, which, capabilities)
+                if worker or not wait:
+                    w = (worker.worker if pop else worker).connect(quick=False)
+                    if w or not wait:
+                        return worker
 
             # Busy waits are bad...?
             time.sleep(min(0.25, 0.01 * tries))
+
+        self.housekeeping()
+        raise OSError('Failed to find worker for: %s/%s' % (which, capabilities))
 
     def choose_worker(self, pop, wait, fn, args, kwargs):
         """
@@ -1017,35 +1057,38 @@ class WorkerPool:
 
     def call(self, fn, *args, **kwa):
         caller = self.get_caller()
-        w_tuple = None
+        wEntry = None
         for tries in range(0, 2):
             try:
-                w_tuple = self.choose_worker(True, True, fn, args, kwa)
-                worker = w_tuple[2]
-                if caller:
+                wEntry = self.choose_worker(True, True, fn, args, kwa)
+                worker = wEntry.worker
+                if caller and worker:
                     return worker.with_caller(caller).call(fn, *args, **kwa)
                 else:
                     return worker.call(fn, *args, **kwa)
             except socket.error as e:
                 logging.exception('socket.error in WorkerPool.call')
-                w_tuple[2] = None
+                wEntry.worker = None
             finally:
-                if w_tuple:
-                    w_tuple[-1] = time.time()
-                    self.workers.append(w_tuple)
+                if wEntry:
+                    if wEntry.worker:
+                        wEntry.ts = time.time()
+                        self.workers.append(wEntry)
+                    else:
+                        self.counts[wEntry.capabilities] -= 1
 
     async def async_call(self, loop, fn, *args, **kwa):
         caller = self.get_caller()
-        w_tuple = None
+        wEntry = None
         for t1 in range(0, 2):
             try:
                 for t2 in range(0, 50):
-                    w_tuple = self.choose_worker(True, False, fn, args, kwa)
-                    if w_tuple:
+                    wEntry = self.choose_worker(True, False, fn, args, kwa)
+                    if wEntry:
                         break
                     await asyncio.sleep(0.05)
-                worker = w_tuple[2]
-                if caller:
+                worker = wEntry.worker
+                if caller and worker:
                     return await worker.with_caller(caller).async_call(
                         loop, fn, *args, **kwa)
                 else:
@@ -1053,25 +1096,30 @@ class WorkerPool:
             except socket.error as e:
                 logging.exception(
                     '[%s] socket.error in WorkerPool.async_call' % self.name)
-                w_tuple[2] = None
+                if wEntry:
+                    wEntry.worker = None
             finally:
-                if w_tuple:
-                    w_tuple[-1] = time.time()
-                    self.workers.append(w_tuple)
+                if wEntry:
+                    wEntry.ts = time.time()
+                    if wEntry.worker:
+                        # Only put it back if it is usable!
+                        self.workers.append(wEntry)
+                    else:
+                        self.counts[wEntry.capabilities] -= 1
 
     def is_alive(self):
         with self.lock:
-            for name, _, worker, _, _ in self.workers:
-                if worker and worker.is_alive():
+            for wEntry in self.workers:
+                if wEntry.worker and wEntry.worker.is_alive():
                     return True
         return False
 
     def _proxy_all(self, method, autostart=False, args=set(), kwargs={}):
         with self.lock:
-            for name, _, worker, _, _ in self.workers:
-                func = getattr(worker, method) if worker else None
+            for wEntry in self.workers:
+                func = getattr(wEntry.worker, method) if wEntry.worker else None
                 if func is not None:
-                    if worker.connect(autostart=autostart, quick=True):
+                    if wEntry.worker.connect(autostart=autostart, quick=True):
                         try:
                             func(*args, **kwargs)
                         except (IOError, OSError):
@@ -1100,8 +1148,8 @@ if __name__ == '__main__':
                     logging.exception('Ping failed!')
             self.reply_json({pong: args})
 
-    tw = WorkerPool([
-            ('test', TestWorker, ('/tmp',), {'name': 'moggie-test-worker'}),
+    tw = WorkerPool('tpool', [
+            ('test', TestWorker, ('t', '/tmp'), {'name': 'moggie-testing'}),
         ]).connect()
     if tw:
         try:

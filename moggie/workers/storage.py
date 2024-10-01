@@ -422,6 +422,8 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
 
 
 class StorageWorkers(WorkerPool, StorageWorkerApi):
+    MAX_IMAP_WORKERS = 2
+
     def __init__(self, unique_app_id, worker_dir, storage=None, **kwargs):
         if storage is None:
             storage = FileStorage(
@@ -456,32 +458,39 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
         if 'write' in capabilities:
             return None  # There can be only one!
         with self.lock:
-            if 'imap' in capabilities:
-                self.add_worker(*self.imap_worker_spec)
+            if capabilities.startswith('imap'):
+                self.add_worker(capabilities, *self.imap_worker_spec[1:])
             else:
                 self.add_worker(*self.fs_worker_spec)
             # Set all our read-only and IMAP workers to be daemons.
             # The FS writer is excluded from this policy.
-            self.workers[-1][2].daemon = True
+            self.workers[-1].worker.daemon = True
             if pop:
                 return self.workers.pop(-1)
             else:
-                return self.workers[-1][2]
+                return self.workers[-1].worker
+
+    def _imap_caps_from_arg(self, a0, default='imap'):
+        a0 = a0 if isinstance(a0, bytes) else bytes(a0, 'utf-8')
+        if a0.startswith(b'imap:'):
+            caps = str(a0, 'utf-8').replace('://', ':').split('/')[0]
+            self.max_cap_workers[caps] = self.MAX_IMAP_WORKERS
+            return caps
+        return default
 
     def choose_worker(self, pop, wait, fn, args, kwargs):
         caps = 'read'
         if fn in ('set', 'append', 'delete'):
             caps = 'write'
 
-        if args and isinstance(args[0], str) and args[0].startswith('imap:'):
-            caps = 'imap'
-        if args and isinstance(args[0], bytes) and args[0].startswith(b'imap:'):
-            caps = 'imap'
+        if args and isinstance(args[0], (str, bytes)):
+            caps = self._imap_caps_from_arg(args[0], caps)
 
         if fn == 'email' and isinstance(args[0], list):
             md = Metadata(*(args[0][:Metadata.OFS_HEADERS] + [b'']))
-            if md.pointers[0].ptr_type == Metadata.PTR.IS_IMAP:
-                caps = 'imap'
+            ptr = md.pointers[0]
+            if ptr.ptr_type == Metadata.PTR.IS_IMAP:
+                caps = self._imap_caps_from_arg(dumb_decode(ptr.ptr_path))
 
         return self.with_worker(capabilities=caps, pop=pop, wait=wait)
 
