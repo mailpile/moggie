@@ -8,9 +8,16 @@ exec bash --init-file <(sed -e '1,/^exec/ d' $0) -i
 
 MOGGIE_SH_HOMEDIR=${MOGGIE_SH_HOMEDIR:-~/.local/share/Moggie/moggie.sh}
 MOGGIE_SH_VIEWER=${MOGGIE_SH_VIEWER:-"less -F -X -s"}
+MOGGIE_SH_EDITOR=${MOGGIE_SH_EDITOR:-${EDITOR:-${VISUAL:-vi}}}
 MOGGIE_SH_CHOOSER=${MOGGIE_SH_CHOOSER:-"fzf -i -e --layout=reverse-list --no-sort"}
 MOGGIE_SH_MAILLIST=${MOGGIE_SH_MAILLIST:-"$MOGGIE_SH_CHOOSER --multi --with-nth=2.."}
+
 MOGGIE_TMP=$(mktemp)
+MOGGIE_TMPDIR=$(mktemp -d)
+cleanup() {
+  rm -rf "$MOGGIE_TMP" "$MOGGIE_TMPDIR"
+}
+trap cleanup EXIT
 
 GREEN="\033[1;32m"
 YLLOW="\033[1;33m"
@@ -97,7 +104,8 @@ tac
     rm -f draft.txt
     SUBJECT=$(grep ^Subject: message.txt \
         |head -1 \
-        |cut -f2 -d:)
+        |cut -f2- -d: \
+        |perl -npe 's,[$\\\\/:"]*,,g')
 
     popd >/dev/null 2>&1
     if [ "$SUBJECT" != "" ]; then
@@ -116,7 +124,62 @@ d() {
     moggie_sh_done download
 }
 
+f() {
+    # FIXME: This should come from settings?
+    echo -n 'Forward from: '
+    read FWD_FROM
+
+    echo -n 'Forward to: '
+    read FWD_TO
+
+    echo -n 'Your comments: '
+    read FWD_MESSAGE
+
+    IDS=$(echo $(echo "$MOGGIE_CHOICE" |cut -f1) |sed -e s'/ id:/ +id:/g' -e s'/ thread:/ +thread:/g')
+    moggie email \
+        --forward="$MOGGIE_SEARCH $IDS" \
+        --to="$FWD_TO" \
+        --from="$FWD_FROM" \
+        --message="$FWD_MESSAGE" \
+        --format=mbox \
+        >"$MOGGIE_TMP"
+
+    # Convert to msgdir
+    MOGGIE_SH_DRAFT="$MOGGIE_SH_HOMEDIR/Drafts/$(date +%Y%m%d-%H%M)"
+    (
+        mkdir -p "$MOGGIE_SH_DRAFT"
+        cd "$MOGGIE_SH_DRAFT"
+        moggie search mailbox:$MOGGIE_TMP --format=msgdirs --indent='' \
+            |tar xfz - --strip-components=3
+    )
+    c $MOGGIE_SH_DRAFT
+}
+
 alias q=exit
+
+r() {
+    # FIXME: This should come from settings?
+    echo -n 'Reply from: '
+    read REPLY_FROM
+
+    IDS=$(echo $(echo "$MOGGIE_CHOICE" |cut -f1) |sed -e s'/ id:/ +id:/g' -e s'/ thread:/ +thread:/g')
+    moggie email \
+        --reply="$MOGGIE_SEARCH $IDS" \
+        --from="$REPLY_FROM" \
+        --html=N \
+        --format=mbox \
+        >"$MOGGIE_TMP"
+
+    # Convert to msgdir
+    MOGGIE_SH_DRAFT="$MOGGIE_SH_HOMEDIR/Drafts/$(date +%Y%m%d-%H%M)"
+    (
+        mkdir -p "$MOGGIE_SH_DRAFT"
+        cd "$MOGGIE_SH_DRAFT"
+        moggie search mailbox:$MOGGIE_TMP --format=msgdirs --indent='' \
+            |tar xfz - --strip-components=3
+    )
+    c $MOGGIE_SH_DRAFT
+}
 
 s() {
     MOGGIE_SEARCH="$@"
@@ -153,7 +216,6 @@ drafts() {
         ls -1
     fi
 }
-
 
 
 ##[ Main ]####################################################################
