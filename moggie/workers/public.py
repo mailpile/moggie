@@ -288,8 +288,8 @@ class PublicWorker(BaseWorker):
             args[didx:didx+2] = []
 
         if log_level is None:
-            log_level = cfg.get(cfg.GENERAL, 'log_level',
-                fallback=logging.ERROR)
+            log_level = int(cfg.get(cfg.GENERAL, 'log_level',
+                fallback=logging.ERROR))
 
         if cls.CONFIG_SECTION:
             port = cfg.get(cls.CONFIG_SECTION, 'port', fallback=port)

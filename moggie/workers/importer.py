@@ -119,8 +119,8 @@ class ImportWorker(BaseWorker):
                 email = email.get('email', {})
             if email:
                 return base64.b64decode(email.get('_RAW', b''))
-        except Exception as e:
-            logging.error('[import] Failed to load %s: %s' % (metadata.idx, e))
+        except:
+            logging.exception('[import] Failed to load %s' % (metadata.idx,))
             return None
 
         logging.info('[import] Failed to load %s [%s]'
