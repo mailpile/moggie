@@ -55,7 +55,7 @@ clear in the config file until I've figured out the UX and integrated
 
 First, brace yourself for nothing working: see Project Status above.
 
-Install Moggie on recent Debian/Ubuntu:
+Install Moggie on recent Debian:
 
    1. apt install git python3-{numpy,cryptography,pycryptodome,urwid,msgpack}
                       python3-{appdirs,setproctitle,pyqrcode,packaging}
@@ -69,6 +69,10 @@ Install Moggie on Raspbian 11:
                       python3-{pip,aiodns,dkim,pgpy,pgpdump,markdown}
    2. python3 -m pip install aiosmtplib
    3. git clone --recurse-submodules https://github.com/mailpile/moggie
+
+*This also works for the latest Ubuntu, but you will need to give scary
+sounding arguments to pip. Using the hybrid virtualenv method discussed below,
+instead of system-wide pip, may be a better approach.*
 
 Or, if you use nix:
 
