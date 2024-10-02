@@ -344,7 +344,7 @@ class AutoTagger:
                 if evidence else 0.5)
 
         keywords = [k.lower() for k in keywords if not self.SKIP_RE.match(k)]
-        special_kws = [k for k in keywords if ':' in k and not k.startswith('subject:')]
+        special_kws = [k for k in keywords if ':' in k]
         for kws, minkw, confidence in (
                 (special_kws, 3, self.threshold),
                 (keywords, 0, 0)):
