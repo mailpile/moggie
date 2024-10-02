@@ -267,15 +267,24 @@ class StorageWorker(BaseWorker, StorageWorkerApi):
         except PleaseUnlockError as pue:
             raise self.pue_to_needinfo(pue)
 
+        def update_metadata_pointers():
+            # FIXME: We've just collected a list of all the messages in the
+            #        mailbox. Should we check/update the metadata pointers?
+            if collect:
+                logging.debug(
+                    'FIXME: check/update pointers, collected=%d' % len(collect))
+
         # Finish in background thread
         if limit and (len(result) >= limit) and not wanted_ids:
             def finish():
                 logging.debug('%s: Background completing scan' % key)
                 collect.extend(msg for msg in parser)
+                update_metadata_pointers()
                 parse_cache[1] = True
                 self.background_thread = None
             self._background(finish)
         else:
+            self._background(update_metadata_pointers)
             parse_cache[1] = True
 
     def api_email(self,
