@@ -5,6 +5,7 @@ import moggie.email.addresses
 import moggie.email.headers
 import moggie.email.parsemime
 import moggie.email.sync
+import moggie.email.util
 
 
 class DoctestTests(unittest.TestCase):
@@ -20,13 +21,17 @@ class DoctestTests(unittest.TestCase):
     def test_doctests_sync(self):
         self.run_doctests(moggie.email.sync)
 
+    def test_doctests_util(self):
+        self.run_doctests(moggie.email.util)
+
 
 class HeaderFormattingTests(unittest.TestCase):
     E1 = """\
-From: "Bjarni R. Einarsson" <bre@example.org>
-To: Somebody <somebody@example.org>
 Subject: Hello world
-"""
+From: "Bjarni R. Einarsson" <bre@example.org>
+To: "Somebody" <somebody@example.org>
+
+""".replace('\n', '\r\n')
 
     E2 = """\
 """
@@ -35,5 +40,5 @@ Subject: Hello world
         self.assertEquals(self.E1, moggie.email.headers.format_headers({
             'from': {'address': 'bre@example.org', 'fn': 'Bjarni R. Einarsson'},
             'to': [{'address': 'somebody@example.org', 'fn': 'Somebody'}],
-            }))
+            'subject': 'Hello world'}))
 
