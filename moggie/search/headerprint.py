@@ -37,7 +37,7 @@ MUA_ID_HEADERS = ('x-mailer', 'user-agent', 'x-mimeole')
 
 HP_MUA_ID_SPACE = re.compile(r'(\s+)')
 HP_MUA_ID_IGNORE = re.compile(r'(\[[a-fA-F0-9%:]+\]|<\S+@\S+>'
-                              '|(mail|in)-[^\.]+|\d+)')
+                              r'|(mail|in)-[^\.]+|\d+)')
 HP_MUA_ID_SPLIT = re.compile(r'[\s,/;=()]+')
 HP_RECVD_PARSE = re.compile(r'(by\s+)'
                             r'[a-z0-9_\.-]*?([a-z0-9_-]+\.[a-z0-9_-]+\s+.*'

@@ -8,7 +8,7 @@ def clean_filename(fn):
     """
     Replace potentially risky substrings in filenames with underscores.
 
-    >>> clean_filename('this\\is/..:evil.txt')
+    >>> clean_filename('this\\\\is/..:evil.txt')
     'this_is___evil.txt'
 
     >>> clean_filename('trojan.dll')
