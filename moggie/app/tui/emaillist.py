@@ -523,7 +523,7 @@ class EmailList(urwid.Pile):
         self.want_emails += max(500, self.tui.max_child_rows() * 2)
 
         if self.is_mailbox:
-            self.search(limit=self.want_emails)
+            self.search(limit=None)
         else:
             self.search(limit=self.want_emails)
             if self.total_available is None:

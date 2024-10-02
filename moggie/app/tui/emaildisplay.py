@@ -326,6 +326,8 @@ Technical details:
         else:
             error = details.get('error') or '(unknown error)'
             self.email_display = [self.no_body(self.MESSAGE_GONE % error)]
+            # FIXME: Give the user the option to reindex mailboxes, which
+            #        should then update the metadata if successful.
         self.update_content()
 
     def incoming_parse(self, mog_ctx, message, cached=False):
