@@ -72,8 +72,11 @@ class OnlineMoggieTest(unittest.TestCase):
     ensure our API stays unbroken as development proceeds!
     """
     def setUpClass():
+        tmpdir = os.path.join(os.path.dirname(__file__), '..', 'tmp')
+        if not os.path.exists(tmpdir):
+            os.mkdir(tmpdir, 0o700)
         OnlineMoggieTest.work_dir = wd = os.path.abspath(os.path.join(
-            os.path.dirname(__file__), '..', 'tmp', 'moggie-test'))
+            tmpdir, 'moggie-test'))
         OnlineMoggieTest.test_email_dir = os.path.abspath(os.path.join(
             os.path.dirname(__file__), '..', 'test-data', 'emails'))
 

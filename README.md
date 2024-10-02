@@ -57,14 +57,14 @@ First, brace yourself for nothing working: see Project Status above.
 
 Install Moggie on recent Debian/Ubuntu:
 
-   1. apt install git python3-{numpy,cryptography,pycryptodome,urwid}
+   1. apt install git python3-{numpy,cryptography,pycryptodome,urwid,msgpack}
                       python3-{appdirs,setproctitle,pyqrcode,packaging}
                       python3-{aiosmtplib,aiodns,dkim,pgpy,pgpdump,markdown}
    2. git clone --recurse-submodules https://github.com/mailpile/moggie
 
 Install Moggie on Raspbian 11:
 
-   1. apt install git python3-{numpy,cryptography,pycryptodome,urwid}
+   1. apt install git python3-{numpy,cryptography,pycryptodome,urwid,msgpack}
                       python3-{appdirs,setproctitle,pyqrcode,packaging}
                       python3-{pip,aiodns,dkim,pgpy,pgpdump,markdown}
    2. python3 -m pip install aiosmtplib
@@ -75,7 +75,7 @@ Or, if you use nix:
    1. nix-shell -p python3Packages.{numpy,cryptography,pycryptodomex,urwid}
                    python3Packages.{appdirs,setproctitle,pyqrcode,packaging}
                    python3Packages.{aiosmtplib,aiodns,dkimpy,pgpy,pgpdump}
-                   python3Packages.markdown openssl git
+                   python3Packages.{markdown,msgpack} openssl git
    2. git clone --recurse-submodules https://github.com/mailpile/moggie
 
 Or, if you prefer a virtualenv:
