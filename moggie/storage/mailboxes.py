@@ -43,7 +43,8 @@ class MailboxStorageMixin:
 
     def iter_mailbox(self, key,
             skip=0, limit=None, ids=None, reverse=False, sync_id=None,
-            username=None, password=None, context=None, secret_ttl=None):
+            username=None, password=None, context=None, secret_ttl=None,
+            search_terms=None):
         parser = iter([])
         if (limit is None) or (limit > 0):
             mailbox = self.get_mailbox(key, auth=not (username or password))
@@ -55,6 +56,9 @@ class MailboxStorageMixin:
                         mailbox, username, password, context, secret_ttl)
                 parser = mailbox.iter_email_metadata(
                     skip=skip, ids=ids, reverse=reverse, sync_id=sync_id)
+                    # FIXME: Pass in search terms, so we can leverage
+                    #        server-side searching. Local mailboxes should
+                    #        implement some kind of grep functionality.
 
         if (limit is None) and (ids is None):
             yield from parser
