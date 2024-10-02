@@ -100,7 +100,7 @@ class ZipEncryptedSQLite3:
                 if fn == 'sqlite.sql':
                     self.db.executescript(str(data, 'utf-8'))
                     self.saved_at = self.db.total_changes
-                elif ifn == 'sqlite.sq3':
+                elif fn == 'sqlite.sq3':
                     self.db.deserialize(data)
                     self.saved_at = self.db.total_changes
 
