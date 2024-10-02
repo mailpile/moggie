@@ -31,7 +31,7 @@ class Cron:
     An SQL-backed scheduler that supports crontab(5)-like rules and syntax.
     """
 
-    FLAGS_RE = re.compile('^([^\s:]*):\s+')
+    FLAGS_RE = re.compile('^([^\\s:]*):\\s+')
 
     def __init__(self, moggie, encryption_keys, eval_env=None):
         ext = 'sqz' if encryption_keys else 'sq3'

@@ -44,7 +44,7 @@ def friendly_time_ago_to_timestamp(word, now=None):
     return now - friendly_time_to_seconds(word)
 
 def friendly_caps(word):
-    parts = re.split('[\s_\.-]', word)
+    parts = re.split('[\\s_\\.-]', word)
     return ' '.join('%s%s' % (p[:1].upper(), p[1:]) for p in parts if p)
 
 def friendly_date(ts):

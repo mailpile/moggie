@@ -206,8 +206,8 @@ class SearchEngine:
     IDX_HISTORY_END = 2000
     IDX_MAX_RESERVED = 2000
 
-    IGNORE_SPECIAL_KW_RE = re.compile('(^\d+|[:@%"\'<>?!\._-]+)')
-    IGNORE_NONLATIN_RE = re.compile('(^\d+|[\s:@%"\'<>?!\._-]+|'
+    IGNORE_SPECIAL_KW_RE = re.compile(r'(^\d+|[:@%"\'<>?!\._-]+)')
+    IGNORE_NONLATIN_RE = re.compile(r'(^\d+|[\s:@%"\'<>?!\._-]+|'
         + '[^\u0000-\u007F\u0080-\u00FF\u0100-\u017F\u0180-\u024F])')
 
     def __init__(self, workdir,

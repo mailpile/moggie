@@ -255,7 +255,7 @@ class AutoTagger:
     DEF_TRAINING_AUTO = True
 
     SKIP_RE = re.compile(
-        '(^\d+$'
+        '(^\\d+$'
         '|^.{0,3}$'
         '|^[^:]{30,}$'
         '|^(email|to|from|cc|date|day|month|year|msgid|cont):'

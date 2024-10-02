@@ -55,7 +55,7 @@ OPENSSL_MD_ALG = 'md5'
 
 GNUPG_COMMAND = moggie.platforms.GetDefaultGnuPGCommand
 
-WHITESPACE_RE_B = re.compile(b'\s+')
+WHITESPACE_RE_B = re.compile(b'\\s+')
 
 
 def _proc_decrypt(command, secret, ciphertext, _debug):

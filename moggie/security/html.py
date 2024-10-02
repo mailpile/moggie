@@ -27,15 +27,15 @@ class HTMLCleaner(HTMLParser):
        * Do something smart when we see links?
     """
     ALLOW = lambda v: True
-    RE_WEBSITE = re.compile('(https?:/+)?(([a-z0-9]+\.[a-z0-9]){2,}[a-z0-9]*)')
-    CHECK_TARGET = re.compile('^(_blank)$').match
-    CHECK_VALIGN = re.compile('^(top|bottom|center)$').match
-    CHECK_HALIGN = re.compile('^(left|right|center)$').match
-    CHECK_DIGIT = re.compile('^\d+$').match
-    CHECK_SIZE = re.compile('^\d+(%|px)?$').match
-    CHECK_LANG = re.compile('^[a-zA-Z-]+$').match
-    CHECK_DIR = re.compile('^(ltr|rtl)$').match
-    CHECK_CLASS = re.compile('^(mHtmlBody|mRemoteImage|mInlineImage|mso[a-z]+|wordsection\d+)$', re.IGNORECASE).match
+    RE_WEBSITE = re.compile(r'(https?:/+)?(([a-z0-9]+\.[a-z0-9]){2,}[a-z0-9]*)')
+    CHECK_TARGET = re.compile(r'^(_blank)$').match
+    CHECK_VALIGN = re.compile(r'^(top|bottom|center)$').match
+    CHECK_HALIGN = re.compile(r'^(left|right|center)$').match
+    CHECK_DIGIT = re.compile(r'^\d+$').match
+    CHECK_SIZE = re.compile(r'^\d+(%|px)?$').match
+    CHECK_LANG = re.compile(r'^[a-zA-Z-]+$').match
+    CHECK_DIR = re.compile(r'^(ltr|rtl)$').match
+    CHECK_CLASS = re.compile(r'^(mHtmlBody|mRemoteImage|mInlineImage|mso[a-z]+|wordsection\d+)$', re.IGNORECASE).match
     ALLOWED_ATTRIBUTES = {
         'alt':         ALLOW,
         'title':       ALLOW,

@@ -1303,7 +1303,7 @@ main app worker. Hints:
             key = str(m.group(2), 'utf-8')
             val = bytes(self.theme.get(key, ''), 'utf-8') or m.group(1)
             return b': %s;' % (val,)
-        return re.sub(b': +([^\n;]+); +/\* *@(\S+) *\*/', _replacer, data)
+        return re.sub(b': +([^\n;]+); +/\\* *@(\\S+) *\\*/', _replacer, data)
 
     def get_static_asset(self, path, themed=False):
         mimetype = self.EXT_TO_MIME.get(path.rsplit('.', 1)[-1])

@@ -13,9 +13,9 @@ from .headerprint import HeaderPrints
 from .dates import ts_to_keywords
 
 
-WORD_REGEXP = re.compile('[\w’\']{2,}')
+WORD_REGEXP = re.compile(r'[\w’\']{2,}')
 WORD_STRIP = re.compile(r'[’\']+')
-MIXED_REGEXP = re.compile('^([a-zA-Z]+\d|\d+[a-zA-Z])')
+MIXED_REGEXP = re.compile(r'^([a-zA-Z]+\d|\d+[a-zA-Z])')
 
 EXTENSION_REGEXP = re.compile(r'[a-zA-Z0-9]+')
 

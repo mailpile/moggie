@@ -36,7 +36,7 @@ from ..util.intset import IntSet
 
 
 def greedy_parse_terms(terms, magic_map={}):
-    terms = re.sub('["\'\s]+' , ' ',
+    terms = re.sub(r'["\'\s]+' , ' ',
         terms.replace('(', ' ( ').replace(')', ' ) ')
              .replace(' +', ' + ').replace('+ ', ' + ')
              .replace(' -', ' - ').replace('- ', ' - ').strip()

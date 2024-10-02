@@ -688,7 +688,7 @@ class AppConfig(ConfigParser):
 
 """ % (APPNAME_UC, APPVER, APPNAME_UC)
 
-    DIGIT_RE = re.compile('\d')
+    DIGIT_RE = re.compile(r'\d')
 
     ALLOWED_SECTIONS = [GENERAL, SECRETS, PASSCROW]
     ALLOWED_SECTION_PREFIXES = [

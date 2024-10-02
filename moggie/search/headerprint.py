@@ -40,8 +40,8 @@ HP_MUA_ID_IGNORE = re.compile(r'(\[[a-fA-F0-9%:]+\]|<\S+@\S+>'
                               '|(mail|in)-[^\.]+|\d+)')
 HP_MUA_ID_SPLIT = re.compile(r'[\s,/;=()]+')
 HP_RECVD_PARSE = re.compile(r'(by\s+)'
-                             '[a-z0-9_\.-]*?([a-z0-9_-]+\.[a-z0-9_-]+\s+.*'
-                             'with\s+E?SMTPS?).*$',
+                            r'[a-z0-9_\.-]*?([a-z0-9_-]+\.[a-z0-9_-]+\s+.*'
+                            r'with\s+E?SMTPS?).*$',
                             flags=(re.MULTILINE + re.DOTALL))
 
 HP_DOM_AT_DOM = re.compile(r'^(\S+)@\1\.')

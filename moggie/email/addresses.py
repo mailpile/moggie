@@ -141,7 +141,7 @@ class AddressHeaderParser(list):
     RE_ESCAPES = re.compile('\\\\([\\\\"\'])')
     RE_QUOTED = re.compile(TXT_RE_QUOTE)
     RE_SHOULD_ESCAPE = re.compile('([\\\\"\'])')
-    RE_SHOULD_QUOTE = re.compile('[^a-zA-Z0-9()\.:/_ \'"+@-]')
+    RE_SHOULD_QUOTE = re.compile('[^a-zA-Z0-9()\\.:/_ \'"+@-]')
 
     # This is how we normally break a header line into tokens
     RE_TOKENIZER = re.compile('(<[^<>]*>'                    # <stuff>
@@ -157,7 +157,7 @@ class AddressHeaderParser(list):
                               ')')
 
     # Where to insert spaces to help the tokenizer parse bad data
-    RE_MUNGE_TOKENSPACERS = (re.compile('(\S)(<)'), re.compile('(\S)(=\\?)'))
+    RE_MUNGE_TOKENSPACERS = (re.compile('(\\S)(<)'), re.compile('(\\S)(=\\?)'))
 
     # Characters to strip aware entirely when tokenizing munged data
     RE_MUNGE_TOKENSTRIPPERS = (re.compile('[<>"]'),)
@@ -167,7 +167,7 @@ class AddressHeaderParser(list):
 
     # Things we strip out to try and un-mangle e-mail addresses when
     # working with bad data.
-    RE_MUNGE_STRIP = re.compile('(?i)(?:\\bmailto:|[\\s"\']|\?$)')
+    RE_MUNGE_STRIP = re.compile('(?i)(?:\\bmailto:|[\\s"\']|\\?$)')
 
     # This a simple regular expression for detecting e-mail addresses.
     RE_MAYBE_EMAIL = re.compile('^[^()<>@,;:\\\\"\\[\\]\\s\000-\031]+'
