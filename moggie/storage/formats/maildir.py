@@ -17,7 +17,7 @@ class FormatMaildir:
     NAME = 'maildir'
     TAG = b'md'
 
-    MAGIC_CHECKS = (b'cur', b'new', b'tmp')
+    MAGIC_CHECKS = (b'cur', b'new')  # Not bothering with tmp
 
     @classmethod
     def Magic(cls, parent, key, info=None, is_dir=None):
