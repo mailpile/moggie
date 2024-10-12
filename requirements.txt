@@ -12,3 +12,7 @@ dkimpy
 aiodns
 PGPy
 pgpdump
+sop
+upagekite
+pyzipper
+websockets
