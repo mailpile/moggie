@@ -3,7 +3,7 @@ import base64
 import re
 
 from .headers import parse_header
-from .rfc2074 import quoted_printable_to_bytearray
+from .rfc2074 import quoted_printable_decode
 
 
 class MessagePart(dict):
@@ -213,8 +213,10 @@ class MessagePart(dict):
             pass  # FIXME
 
         if encoding == 'quoted-printable':
-            return bytes(
-                quoted_printable_to_bytearray(str(raw_data, 'latin-1')))
+            # Using latin-1 here should be a 1:1 mapping.
+            _s = lambda b: str(b, 'latin-1')
+            _b = lambda s: bytes(s, 'latin-1')
+            return _b(quoted_printable_decode(_s(raw_data), _s))
 
         return raw_data
 

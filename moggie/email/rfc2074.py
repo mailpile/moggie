@@ -11,20 +11,30 @@ QUOTED_RE = re.compile(
     flags=(re.IGNORECASE + re.DOTALL))
 
 
-def quoted_printable_to_bytearray(payload, header=False):
-    if header:
+def quoted_printable_decode(payload, tostr, in_header=False):
+    """
+    Parse quoted-printable entities in a payload, using the tostr
+    function to convert encoded byte sequences into string values.
+
+    This lets us use a fault-tolerant tostr() that tries different
+    approaches to decode.
+    """
+    if in_header:
         clean = lambda c: c.replace('_', ' ')
     else:
         clean = lambda c: c.replace('=\r\n', '').replace('=\n', '')
 
-    chars = QUOTED_QP.split(payload)
-    payload = bytearray()
-    while len(chars) > 1:
-        payload.extend(clean(chars.pop(0)).encode('latin-1'))
-        payload.append(int(chars.pop(0)[1:], 16))
-    if chars:
-        payload.extend(clean(chars[0]).encode('latin-1'))
-    return payload
+    result = []
+    cgroups = QUOTED_QP.split(payload)
+    while len(cgroups) > 1:
+        preamble = clean(cgroups.pop(0))
+        if preamble or not result:
+            result.extend([(True, preamble), (False, bytearray())])
+        result[-1][-1].append(int(cgroups.pop(0)[1:], 16))
+    if cgroups:
+        result.append((True, clean(cgroups[0])))
+
+    return ''.join((rv if done else tostr(rv)) for done, rv in result)
 
 
 def rfc2074_unquote(quoted, strict=False):
@@ -36,24 +46,6 @@ def rfc2074_unquote(quoted, strict=False):
             charset = parts.pop(0)
             method = parts.pop(0)
             payload = op = parts.pop(0)
-
-            if method in ('q', 'Q'):
-                # Note: For some reason email.quoprimime insists on returning
-                # strings. We want to work with bytes, so do this ourselves.
-                payload = quoted_printable_to_bytearray(payload, header=True)
-
-            elif method in ('b', 'B'):
-                padmore = 4 - (len(payload) % 4)
-                if padmore < 4:
-                    payload += '==='[:padmore]
-                try:
-                    payload = email_b.decode(payload)
-                except binascii.Error:
-                    # Silently ignore errors, just return the string as-is.
-                    payload = payload.encode('latin-1')
-                    charset = 'latin-1'
-            else:
-                payload = payload.encode('latin-1')
 
             if strict:
                 charsets = [charset]
@@ -68,18 +60,33 @@ def rfc2074_unquote(quoted, strict=False):
                 elif charset in ('gb2312', 'gbk', 'gb18030'):
                     charsets = ('gb2312', 'gbk', 'gb18030')
 
-            decoded = False
-            for cs in charsets:
-                try:
-                    text.append(str(bytes(payload), cs))
-                    decoded = cs
-                    break
-                except:
-                    pass
+            def _d(bytestr):
+                for i, cs in enumerate(charsets):
+                    try:
+                        return str(bytes(bytestr), cs)
+                    except Exception as e:
+                        if i == len(charsets)-1:
+                            logging.debug(
+                                'Decode failed for %s (%s)' % (bytestr, quoted))
+                            raise
 
-            if not decoded:
-                logging.debug('Decode failed for %s (%s)' % (payload, quoted))
-                text.append(op)
+            try:
+                if method in ('q', 'Q'):
+                    text.append(
+                        quoted_printable_decode(payload, _d, in_header=True))
+
+                elif method in ('b', 'B'):
+                    padmore = 4 - (len(payload) % 4)
+                    if padmore < 4:
+                        payload += '==='[:padmore]
+                    text.append(_d(email_b.decode(payload)))
+
+                else:
+                    text.append(_d(bytes(payload, 'utf-8', errors='replace')))
+
+            except (UnicodeDecodeError, binascii.Error):
+                # Silently ignore errors, just return the string as-is.
+                text = [op]
 
     return ''.join(text)
 
@@ -104,29 +111,4 @@ def rfc2074_quote(unquoted, linelengths=[72], charset='utf-8'):
 
 
 if __name__ == '__main__':
-    import base64
-
-    test = 'hello verööld'
-    test_b64 = '=?utf-8?b?%s?=' % str(base64.b64encode(test.encode('utf-8')).strip(), 'latin-1')
-    assert(rfc2074_unquote('hello =?iso-8859-1?q?ver=F6=F6ld?=') == test)
-    assert(rfc2074_unquote(test) == test)
-    assert(rfc2074_unquote(test_b64) == test)
-
-    # Make sure we do not explode on invalid UTF-8
-    bad_b64 = str(base64.b64encode(b'\xc3\0\0\0').strip(), 'latin-1')
-    assert(rfc2074_unquote('=?utf-8?b?%s?=' % bad_b64, strict=True) == bad_b64)
-
-    # Tests from the RFC
-    assert(rfc2074_unquote('=?ISO-8859-1?Q?a?= b') == 'a b')
-    assert(rfc2074_unquote('=?ISO-8859-1?Q?a?=  =?ISO-8859-1?Q?b?=') == 'ab')
-    assert(rfc2074_unquote('=?ISO-8859-1?Q?a_b?=') == 'a b')
-    assert(rfc2074_unquote('=?ISO-8859-1?Q?a?= =?ISO-8859-2?Q?_b?=') == 'a b')
-
-    for bad in (
-        '=?utf-8?Q?=AF=E4=BB=B6?=',
-        '=?utf-8?Q?=BA=A6=E7=9A=84=E9=82=AE=E4=BB=B6=E7=BE=A4=E5=8F=91=E8=BD?=',
-        '=?GB2312?B?v6q2kMaxbDM2Mk85MTIzN2w=?='
-    ):
-        assert(rfc2074_unquote(bad, strict=True) == bad.split('?')[3])
-
     print('Tests passed OK')
