@@ -151,6 +151,13 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE, unspace=False):
             return [None, {'_JUNK': hdr}]
         m0 = m0.group(0)
 
+    def _unicode_unescape(s):
+        if '\\x' in s:
+            r = 'replace'
+            return bytes(s, 'latin-1', r).decode('unicode-escape', r)
+        else:
+            return s
+
     params = {}
     hdr = hdr[len(m0):]
     while hdr:
@@ -159,11 +166,7 @@ def parse_parameters(hdr, value_re=HWP_VALUE_RE, unspace=False):
             hdr = hdr[len(p.group(0)):]
             val = p.group(3)
             if val[:1] == '"':
-                try:
-                    val = bytes(val[1:-1], 'latin-1').decode('unicode-escape')
-                except UnicodeDecodeError:
-                    logging.error('UNDECODABLE: %s in %s' % (val, ohdr))
-                    raise
+                val = _unicode_unescape(val[1:-1])
             elif unspace:
                 val = val.replace(' ', '')
             else:
