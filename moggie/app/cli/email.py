@@ -710,6 +710,7 @@ class CommandParse(CLICommand):
     uuid=%s
     ts=%d, id=%s, parent=%s, thread=%s
     %s
+    annotations=%s
     extras=%s""" % (msg,
                     msg_headers,
                     md['data_type'],
@@ -719,7 +720,8 @@ class CommandParse(CLICommand):
                     md.get('parent_id', '(none)'),
                     md.get('thread_id', '(none)'),
                     msg_pointers,
-                    dict((k, md[k]) for k in md['_MORE'])))
+                    md['annotations'],
+                    dict((k, md[k]) for k in md['_MORE'] if k[:1] != '=')))
 
         if 'error' in parsed:
             report.append(
@@ -2340,7 +2342,7 @@ class CommandEmail(CLICommand):
         fmt = self.options['--format='][-1]
         if fmt in ('text', 'rfc822', 'rfc2822'):
             self.print(as_tree['_RFC822'])
-        if fmt == 'mbox':
+        elif fmt == 'mbox':
             from moggie.storage.exporters.mbox import MboxExporter
             self.print('%s\r\n%s' % (
                 str(MboxExporter.MakeMboxFrom(), 'utf-8'),
