@@ -36,6 +36,10 @@ class EmailDisplay(urwid.ListBox):
         VIEW_REPORT: 'E-mail Analysis',
         VIEW_SOURCE: 'E-mail Source'}
 
+    MIMETYPE_FILENAMES = {
+        'message/rfc822': ('message', 'eml'),
+        'image/jpeg': ('attachment', 'jpg')}
+
     MESSAGE_MISSING = """\
 Message is missing
 
@@ -210,6 +214,13 @@ Technical details:
 
                 disp = part.get('content-disposition', ['', {}])
                 filename = ctype[1].get('name') or disp[1].get('filename')
+
+                if (not filename) and ctype[0] in self.MIMETYPE_FILENAMES:
+                    fn, ext = self.MIMETYPE_FILENAMES[ctype[0]]
+                    filename = '%s.%s' % (
+                        part.get('content-description', [fn])[0],
+                        ext)
+
                 if filename:
                     yield line('att', att_label, filename, cstate,
                         action=_on_attachment(part, filename))
