@@ -11,22 +11,33 @@ from .messagedialog import MessageDialog
 class SaveOrOpenDialog(MessageDialog):
     DEFAULT_TARGET = '~/Downloads'
 
+    SUPPORTED_EXTENSIONS = set(['.eml', '.mbx', '.mdz'])
+
     def __init__(self, tui, title, parent, part, filename, target=None):
         self.parent = parent
         self.part = part
-  
+
         filename = os.path.basename(filename)
+        extension = os.path.splitext(filename)[-1]
+
         self.filename = filename
         self.target = os.path.join(target or self.DEFAULT_TARGET, filename)
 
         self.overwrite = None
+        self.create_dirs = None
+        self.open_in_moggie = None
 
         self.save_dest_input = None
         self.save_to = None
         self.want_open = False
 
-        super().__init__(tui,
-            message='Note: The directory must already exist.')
+        if extension in self.SUPPORTED_EXTENSIONS:
+            self.open_in_moggie = urwid.CheckBox('Open in moggie', True)
+            message = None
+        else:
+            message = 'Note: The directory must already exist.'
+
+        super().__init__(tui, message=message)
 
     def make_buttons(self):
         return [
@@ -47,19 +58,40 @@ class SaveOrOpenDialog(MessageDialog):
         urwid.connect_signal(
             self.save_dest_input, 'enter', lambda b: self.focus_next())
 
-        widgets = [self.save_dest_input]
+        widgets = [self.save_dest_input, urwid.Divider()]
+
         if self.overwrite is not None:
             widgets.append(self.overwrite)
-        widgets.append(urwid.Divider())
+        if self.create_dirs is not None:
+            widgets.append(self.create_dirs)
+        if self.open_in_moggie is not None:
+            widgets.append(self.open_in_moggie)
 
         return widgets
 
     def validate(self):
         dest_file = os.path.expanduser(self.save_dest_input.edit_text)
         dest_dir = os.path.dirname(dest_file)
+
+        create_dirs = self.create_dirs and self.create_dirs.get_state()
         if not os.path.exists(dest_dir):
-            self.update_pile(message='Directory does not exist!')
-            return False
+            message = 'Directory does not exist!'
+            if create_dirs:
+                try:
+                    os.makedirs(dest_dir, exist_ok=True)
+                except OSError as e:
+                    create_dirs = False
+                    message = '%s' % e
+
+            if not create_dirs:
+                if self.create_dirs is None:
+                    self.message = None
+                    self.create_dirs = urwid.CheckBox(
+                        'Create parent directories', False)
+                    self.widgets.append(self.create_dirs)
+                self.update_pile(message=message)
+                return False
+
         overwrite = self.overwrite and self.overwrite.get_state()
         if os.path.exists(dest_file) and not overwrite:
             if self.overwrite is None:
@@ -69,7 +101,16 @@ class SaveOrOpenDialog(MessageDialog):
                 self.widgets.append(self.overwrite)
             self.update_pile(message='File already exists!')
             return False
+
         return dest_file
+
+    def open_attachment(self):
+        internal = self.open_in_moggie and self.open_in_moggie.get_state()
+        if internal:
+            logging.error(
+                'FIXME: Create a search pane displaying the created file')
+        else:
+            subprocess.Popen(['xdg-open', self.save_to])
 
     def on_save(self):
         self.save_to = self.validate()
@@ -97,7 +138,7 @@ class SaveOrOpenDialog(MessageDialog):
                 with open(self.save_to, 'wb') as fd:
                     fd.write(base64.b64decode(self.part['_DATA']))
                 if self.want_open:
-                    subprocess.Popen(['xdg-open', self.save_to])
+                    self.open_attachment()
                 self.update_pile(message='Saved!')
                 emit_soon(self, 'close', seconds=1)
                 return True
