@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import logging
 import re
 import sys
@@ -20,6 +21,9 @@ from .openurldialog import OpenURLDialog
 
 
 RESULT_CACHE = {}
+
+def _h16(stuff):
+    return hashlib.md5(bytes(stuff, 'utf-8')).hexdigest()[:12]
 
 
 class EmailDisplay(urwid.ListBox):
@@ -374,8 +378,10 @@ Technical details:
         self.tui.update_topbar()
         self.update_content()
 
+    PLAINTEXT_URL_RE = re.compile(
+        r'((?:https?://|mailto:|www\.)[a-zA-Z0-9\._-]+[^\s)>]*)')
     MARKDOWN_URL_RE = re.compile(
-        r'((?:[\*-] +|#+ +)?\!?\[.*?\])(\(\s*#\d+\.[a-f0-9]+\s*\))([\.\? ]*)',
+        r'((?:[\*-] +|#+ +|\[\d+\] +)?\!?(?:\[.*?\]|))(\(\s*#\d+\.[a-f0-9]{12}\s*\)|\<#\d+\.[a-f0-9]{12}\>)([\.\? ]*)',
         re.DOTALL)
 
     def parsed_email_to_widget_list(self):
@@ -393,13 +399,7 @@ Technical details:
         def _on_click_url(url):
             return lambda e: self.on_click_url(url)
 
-        def _to_md(txt):
-            wrap_at = min(self.COLUMN_WANTS, self.rendered_width-1)
-            txt, urls = html_to_markdown(txt,
-                extract_urls=True,
-                no_images=True,
-                wrap=wrap_at)
-
+        def _render_urls(txt, urls, wrap_at):
             # We do a lot of fiddling with the whitespace here to get things
             # to look nice - this would get much cleaner if we didn't need
             # to always dedicate an entire line to each URL. Need to learn
@@ -420,7 +420,6 @@ Technical details:
                 url_id = t2[1:-1].strip()
                 url = urls.get(url_id)
                 if url:
-                    logging.debug('Have URL: %s=%s' % (url_id, url))
                     post = t3.lstrip()
                     text = t1.lstrip().replace('\n', ' ')
 
@@ -440,11 +439,32 @@ Technical details:
 
             return text_cb_pairs
 
+        def _to_md(txt):
+            wrap_at = min(self.COLUMN_WANTS, self.rendered_width-1)
+            txt, urls = html_to_markdown(txt,
+                extract_urls=True,
+                no_images=True,
+                wrap=wrap_at)
+            return _render_urls(txt, urls, wrap_at)
+
+        def _linkify_urls(txt):
+            wrap_at = min(self.COLUMN_WANTS, self.rendered_width-1)
+            urls = {}
+            def _u(m):
+                url = m.group(0)
+                if url.startswith('www.'):
+                    url = 'https://' + url
+                url_id = '#%d.%s' % (len(urls), _h16(url))
+                urls[url_id] = url
+                return '<%s>' % url_id
+            txt = self.PLAINTEXT_URL_RE.sub(_u, _compact(txt))
+            return _render_urls(txt, urls, wrap_at)
+
         email_txts = {'text/plain': [], 'text/html': []}
         email_lens = {'text/plain': 0, 'text/html': 0}
         have_cstate = False
         for ctype, fmt in (
-                ('text/plain', lambda t: [(_compact(t), None)]),
+                ('text/plain', _linkify_urls),
                 ('text/html',  _to_md)):
             for part in MessagePart.iter_parts(self.email):
                 try:
