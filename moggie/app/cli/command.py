@@ -5,6 +5,8 @@ import os
 import time
 import sys
 
+from moggie import get_shared_moggie
+
 from ... import config
 from ...api.exceptions import APIException, NeedInfoException
 from ...config import AccessConfig
