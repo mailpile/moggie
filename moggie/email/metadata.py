@@ -132,6 +132,7 @@ class Metadata(list):
     uuid           = property(lambda s: hashlib.sha1(
             b''.join(sorted(s.headers.strip().encode('latin-1').splitlines()))
         ).digest())
+    annotations    = property(lambda s: dict(kv for kv in s.more.items() if kv[0][:1] == '='))
 
     def __str__(self):
         return ('%d=%s@%s %d %d/%d %s\n%s\n' % (
@@ -210,6 +211,9 @@ class Metadata(list):
                     'thread_id': self.thread_id})
             self._parsed.update(parse_header(bytes(self.headers, 'latin-1')))
             self._parsed.update(self.more)
+            self._parsed['annotations'] = self.annotations
+            for k in self._parsed['annotations']:
+                del self._parsed[k]
             self._parsed['_MORE'] = list(self.more.keys())
         return self._parsed
 

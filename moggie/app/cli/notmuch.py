@@ -209,6 +209,7 @@ FIXME: Document html and html formats!
         if self.mailboxes and ('-' in self.mailboxes):
             mailbox = self.get_tempfile()
             mailbox.write(self.stdin.read())
+            mailbox.flush()
             self.mailboxes[self.mailboxes.index('-')] = mailbox.name
             if not self.options.get('--sync-src=', [None])[-1]:
                 self.options['--sync-src='] = ['stdin']

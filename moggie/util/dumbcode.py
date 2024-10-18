@@ -75,7 +75,7 @@ def dumb_encode_bin(v,
         if not isinstance(v, (tuple, set)):
             return (b'p' + msgpack.packb(v))
     except Exception as e:
-        logging.debug('FAILED: msgpack.packb(%s): %s' % (v, e))
+        pass
 
     # These still get used when values overflow what msgpack can handle
     if isinstance(v, int):   return (b'd%d' % v)
