@@ -4,6 +4,7 @@ import os
 import subprocess
 import urwid
 import threading
+import webbrowser
 
 from .widgets import *
 from .messagedialog import MessageDialog
@@ -42,6 +43,7 @@ it may be a scam.
              urwid.Text(self.WARNING.strip(), align='center')]
 
     def on_clipboard(self):
+        # FIXME: Switch to pyperclip for cross-platform goodness?
         xclip = subprocess.Popen(['xclip', '-selection', 'c', '-silent'],
             stdin=subprocess.PIPE)
         xclip.stdin.write(bytes(self.url, 'utf-8'))
@@ -54,7 +56,7 @@ it may be a scam.
         self._emit('close')
 
     def on_browser(self):
-        subprocess.Popen(['xdg-open', self.url])
+        webbrowser.open(self.url)
         self._emit('close')
 
     def on_cancel(self):
