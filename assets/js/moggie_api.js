@@ -110,9 +110,8 @@ moggie_api = (function() {
       add_command_css(command, function() {
         callback('prep');
         moggie_ws.send_json({
-          prototype: 'cli',
+          req_type: 'cli:'+command,
           req_id: req_id,
-          command: command,
           args: args
         });
       });
