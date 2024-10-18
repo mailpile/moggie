@@ -375,7 +375,7 @@ Technical details:
         self.update_content()
 
     MARKDOWN_URL_RE = re.compile(
-        r'((?:[\*-] +|#+ +)?\[.*?\])(\(\s*#\d+\.[a-f0-9]+\s*\))([\.\? ]*)',
+        r'((?:[\*-] +|#+ +)?\!?\[.*?\])(\(\s*#\d+\.[a-f0-9]+\s*\))([\.\? ]*)',
         re.DOTALL)
 
     def parsed_email_to_widget_list(self):
