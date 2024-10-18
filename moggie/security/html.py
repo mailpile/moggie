@@ -7,6 +7,10 @@ from html.parser import HTMLParser
 from moggie.security.mime import magic_part_id
 
 
+def _h16(stuff):
+    return hashlib.md5(bytes(stuff, 'utf-8')).hexdigest()[:12]
+
+
 class HTMLCleaner(HTMLParser):
     """
     This class will attempt to consume an HTML document and emit a new
@@ -387,8 +391,6 @@ class HTMLCleaner(HTMLParser):
                 if self.css_cleaner else '')
 
     def _make_html_keywords(self):
-        def _h16(stuff):
-            return hashlib.md5(bytes(stuff, 'utf-8')).hexdigest()[:12]
         inline_images = len([i for i in self.img_srcs if i[:4] == 'cid:'])
         remote_images = len([i for i in self.img_srcs if i[:4] != 'cid:'])
         self.keywords.add(
@@ -430,7 +432,12 @@ class HTMLToTextCleaner(HTMLCleaner):
         self.all_images = kwargs.get('all_images', False)
         self.no_images = kwargs.get('no_images', False)
 
-        for k in ('all_links', 'all_images', 'no_images', 'wrap'):
+        self.extract_urls = kwargs.get('extract_urls', False)
+        self.urls = {}
+
+        for k in (
+                'all_links', 'all_images', 'no_images', 'extract_urls',
+                'wrap'):
             if k in kwargs:
                 del kwargs[k]
 
@@ -469,6 +476,38 @@ class HTMLToTextCleaner(HTMLCleaner):
 
         elif data:
             self.cleaned.append(data)
+
+    def record_url(self, url):
+        url_id = '#%d.%s' % (len(self.urls) + 1, _h16(url))
+        self.urls[url_id] = url
+        if self.extract_urls:
+            return url_id
+        else:
+            return url
+
+    def format_a(self, href, text, wrap):
+        br = '\n' if (len(href+text) > wrap or ' ' not in text) else ''
+        if href in ('', '#'):
+            return text + ' '
+        elif text and (text != href):
+            tsp = ' ' if (len(href) < wrap-3) else ''
+            return '%s[ %s ]( %s%s) ' % (br, text, self.record_url(href), tsp)
+        elif text or self.all_links:
+            return '%s<%s> ' % (br, self.record_url(href))
+        else:
+            return ''
+
+    def format_img(self, src, txt):
+        br = '\n' if (len(src) + len(txt) > self.wrap/2) else ''
+        if self.all_images and not txt:
+            txt = 'IMG'
+        if not self.no_images and (len(txt) > 1 or self.all_images):
+            tsp = ' ' if (len(src) < 40) else ''
+            return '%s![ %s ]( %s%s)' % (br, txt, self.record_url(src), tsp)
+        elif txt:
+            return txt
+        else:
+            return ''
 
     def rerender_tag(self, t, a, b):
         indents = {
@@ -511,30 +550,12 @@ class HTMLToTextCleaner(HTMLCleaner):
         if t == 'img':
             src = adict.get('data-m-src', '')
             txt = (_alt('alt') or _alt('title') or '').strip()
-            br = '\n' if (len(src) + len(txt) > self.wrap/2) else ''
-            if self.all_images and not txt:
-                txt = 'IMG'
-            if not self.no_images and (len(txt) > 1 or self.all_images):
-                tsp = ' ' if (len(src) < 40) else ''
-                return '%s![ %s ]( %s%s)' % (br, txt, src, tsp)
-            elif txt:
-                return txt
-            else:
-                return ''
+            return self.format_img(src, txt)
 
         if t == 'a':
             href = adict.get('href', '')
             text = b.strip()
-            br = '\n' if (len(href+text) > wrap or ' ' not in text) else ''
-            if href in ('', '#'):
-                return text + ' '
-            elif text and (text != href):
-                tsp = ' ' if (len(href) < wrap-3) else ''
-                return '%s[ %s ]( %s%s) ' % (br, text, href, tsp)
-            elif text or self.all_links:
-                return '%s<%s> ' % (br, href)
-            else:
-                return ''
+            return self.format_a(href, text, wrap)
 
         if t in ('h1', 'h2', 'h3', 'h4', 'h5', 'h6'):
             hashes = '#' * int(t[1])
@@ -593,9 +614,10 @@ class HTMLToTextCleaner(HTMLCleaner):
 
 def html_to_markdown(html, **kwargs):
     from .css import CSSCleaner
+    extract_urls = kwargs.get('extract_urls', False)
     cleaner = HTMLToTextCleaner(html, **kwargs, css_cleaner=CSSCleaner())
-    return re.sub(r'\n[\s]+\n', '\n\n', cleaner.close(), flags=re.DOTALL)
-
+    md_text = re.sub(r'\n[\s]+\n', '\n\n', cleaner.close(), flags=re.DOTALL)
+    return (md_text, cleaner.urls) if extract_urls else md_text
 
 
 def clean_email_html(metadata, email, part,

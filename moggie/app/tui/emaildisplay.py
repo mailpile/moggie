@@ -16,6 +16,7 @@ from .widgets import *
 from .messagedialog import MessageDialog
 from .decorations import EMOJI, ENVELOPES
 from .saveoropendialog import SaveOrOpenDialog
+from .openurldialog import OpenURLDialog
 
 
 RESULT_CACHE = {}
@@ -373,21 +374,77 @@ Technical details:
         self.tui.update_topbar()
         self.update_content()
 
+    MARKDOWN_URL_RE = re.compile(
+        r'((?:[\*-] +|#+ +)?\[.*?\])(\(\s*#\d+\.[a-f0-9]+\s*\))([\.\? ]*)',
+        re.DOTALL)
+
     def parsed_email_to_widget_list(self):
         from moggie.security.html import html_to_markdown
-        def _to_md(txt):
-            return html_to_markdown(txt,
-                no_images=True,
-                wrap=min(self.COLUMN_WANTS, self.rendered_width-1))
+
+        def _compact(text):
+            t = re.sub(
+                r'\n\s*\n', '\n\n', text.replace('\r', ''), flags=re.DOTALL
+                ).strip()
+            return (t + '\n\n') if t else t
 
         def _on_att(att, filename):
             return lambda e: self.on_attachment(att, filename)
+
+        def _on_click_url(url):
+            return lambda e: self.on_click_url(url)
+
+        def _to_md(txt):
+            wrap_at = min(self.COLUMN_WANTS, self.rendered_width-1)
+            txt, urls = html_to_markdown(txt,
+                extract_urls=True,
+                no_images=True,
+                wrap=wrap_at)
+
+            # We do a lot of fiddling with the whitespace here to get things
+            # to look nice - this would get much cleaner if we didn't need
+            # to always dedicate an entire line to each URL. Need to learn
+            # to urwid better!
+
+            text_cb_pairs = []
+            cgroups = self.MARKDOWN_URL_RE.split(_compact(txt))
+            while len(cgroups) >= 3:
+                preamble = cgroups.pop(0)
+                if not preamble.endswith('\n\n'):
+                    preamble = preamble.rstrip()
+                while preamble[:2] == '\n\n':
+                    preamble = preamble[1:]
+                text_cb_pairs.append((preamble, None))
+
+                t1, t2, t3 = cgroups.pop(0), cgroups.pop(0), cgroups.pop(0)
+
+                url_id = t2[1:-1].strip()
+                url = urls.get(url_id)
+                if url:
+                    logging.debug('Have URL: %s=%s' % (url_id, url))
+                    post = t3.lstrip()
+                    text = t1.lstrip().replace('\n', ' ')
+
+                    vurl = url[:wrap_at - len(text) - len(post) - 6]
+                    text_cb_pairs.append((
+                        '%s( %s%s )%s' % (
+                            text,
+                            vurl,
+                            '..' if vurl != url else '',
+                            post),
+                        _on_click_url(url)))
+                else:
+                    logging.debug('Missing URL: %s' % url_id)
+                    text_cb_pairs.append((text + target, None))
+            while cgroups:
+                text_cb_pairs.append((cgroups.pop(0), None))
+
+            return text_cb_pairs
 
         email_txts = {'text/plain': [], 'text/html': []}
         email_lens = {'text/plain': 0, 'text/html': 0}
         have_cstate = False
         for ctype, fmt in (
-                ('text/plain', lambda t: t),
+                ('text/plain', lambda t: [(_compact(t), None)]),
                 ('text/html',  _to_md)):
             for part in MessagePart.iter_parts(self.email):
                 try:
@@ -396,17 +453,20 @@ Technical details:
                         part['content-disposition'][1].get('filename'))
                 except (KeyError, IndexError):
                     filename = None
+
                 if part['content-type'][0] == ctype:
-                    text = fmt(part.get('_TEXT', ''))
+                    text_cb_pairs = fmt(part.get('_TEXT', ''))
                     cstate = self.describe_crypto_state(part).strip()
                     have_cstate = have_cstate or cstate
-                    email_txts[ctype].append((cstate, text, None))
-                    email_lens[ctype] += len(text)
+                    for text, callback in text_cb_pairs:
+                        email_txts[ctype].append((cstate, text, callback))
+                        email_lens[ctype] += len(text)
+
                 elif filename:
                     cstate = self.describe_crypto_state(part).strip()
                     email_txts[ctype].append((
                         cstate,
-                        '%s %s' % (
+                        ' %s %s' % (
                             EMOJI.get('attachment', '- Attachment:'), filename),
                         _on_att(part, filename)))
 
@@ -421,9 +481,6 @@ Technical details:
         widgets = []
         last_cstate = ''
         for cstate, text, callback in email_text:
-            text = re.sub(
-                r'\n\s*\n', '\n\n', text.replace('\r', ''), flags=re.DOTALL
-                ).strip()
             if text:
                 if cstate != last_cstate:
                     label = cstate
@@ -434,12 +491,11 @@ Technical details:
                     last_cstate = cstate
                 bg = '' if (cstate or not have_cstate) else '_bg'
                 if callback:
-                    widgets.append(Selectable(urwid.Text(
-                            ('email_body' + bg, ' ' + text.strip())),
+                    widgets.append(Selectable(
+                        urwid.Text(('email_body' + bg, text)),
                         on_select={'enter': callback}))
                 else:
-                    widgets.append(urwid.Text(
-                        ('email_body' + bg, text + '\n\n')))
+                    widgets.append(urwid.Text(('email_body' + bg, text)))
 
         if widgets:
             return widgets
@@ -451,6 +507,9 @@ Technical details:
         return urwid.BoxAdapter(
             SplashCat(decoration=ENVELOPES, message=message),
             rows)
+
+    def on_click_url(self, url):
+        self.tui.topbar.open_with(OpenURLDialog, 'Open URL', self, url)
 
     def on_attachment(self, att, filename):
         self.tui.topbar.open_with(SaveOrOpenDialog,
