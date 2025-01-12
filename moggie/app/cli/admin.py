@@ -64,7 +64,7 @@ class CommandContext(CLICommand):
     WEB_EXPOSE = True
     OPTIONS = [[
         ('--format=',      ['text'], 'X=(text*|json)'),
-        ('--output=',            [], 'X=(accounts|ids|identities|scope), add details to listings'),
+        ('--output=',            [], 'X=(ids|scope|details), add details to output'),
         ('--with-standard-tags', [], 'Add common tags to a new context'),
         ('--name=',              [], 'X="Context name"'),
         ('--description=',       [], 'X="Context description"'),
@@ -896,8 +896,7 @@ class CommandImport(CLICommand):
             if isinstance(raw_json, list):
                 policies = raw_json
             else:
-                import json
-                policies = json.loads(raw_json.strip())
+                policies = from_json(raw_json.strip())
             for pol in policies:
                 path = pol.pop('path')
                 policy = self.validate_policy(pol)
@@ -1365,7 +1364,7 @@ def CommandEnableEncryption(wd, args):
         print('# oops: %s' % e)
 
 
-def CommandConfig(wd, args):
+def unusedCommandConfig(wd, args):  #FIXME
     from ...config import AppConfig
     cfg = AppConfig(wd)
     if len(args) < 1:
