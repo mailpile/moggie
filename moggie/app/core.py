@@ -784,6 +784,7 @@ main app worker. Hints:
 
         loop = asyncio.get_event_loop()
 
+        mbx_id_map = None
         tag_op_sets = api_request.get('tag_ops', [])
         for i, tagops_hits_mailboxes in enumerate(tag_op_sets):
             if len(tagops_hits_mailboxes) > 2:
@@ -805,6 +806,7 @@ main app worker. Hints:
                     r2 = await md.with_caller(conn_id).async_add_metadata(
                         loop, r1['emails'], update=True)
                     hits = r2['added'] + r2['updated']
+                    mbx_id_map = r2.get('ids')
                     logging.info(
                         '[api/tag] Added %d messages to index' % len(hits))
 
@@ -818,6 +820,8 @@ main app worker. Hints:
             tag_redo_id=api_request.get('tag_redo_id'),
             record_history=api_request.get('undoable', 'Tagging'),
             mask_deleted=api_request.get('mask_deleted', True))
+        if mbx_id_map:
+            results['metadata_ids'] = mbx_id_map
 
         return ResponseTag(api_request, results)
 

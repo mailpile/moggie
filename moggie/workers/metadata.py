@@ -247,7 +247,7 @@ class MetadataWorker(BaseWorker):
         self.reply_json({'running': True})
 
     def api_add_metadata(self, update, metadata, **kwas):
-        added, updated = [], []
+        added, updated, id_map = [], [], {}
         for m in sorted(metadata):
             if isinstance(m, list):
                 m = Metadata(*m)
@@ -262,7 +262,14 @@ class MetadataWorker(BaseWorker):
                     added.append(idx)
                 else:
                     updated.append(idx)
-        self.reply_json({'added': added, 'updated': updated})
+                if m.idx:
+                    id_map[str(m.idx)] = idx
+                else:
+                    ptrs = m.pointers
+                    if ptrs:
+                         id_map[ptrs[0].ptr_path] = idx
+
+        self.reply_json({'added': added, 'updated': updated, 'ids': id_map})
 
     def api_annotate(self, msgids, annotations, **kwas):
         """
