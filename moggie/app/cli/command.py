@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import copy
 import logging
 import os
@@ -8,9 +9,11 @@ import sys
 from moggie import get_shared_moggie
 
 from ... import config
-from ...api.exceptions import APIException, NeedInfoException
+from ...api.exceptions import *
+from ...api.requests import *
 from ...config import AccessConfig
 from ...util.dumbcode import to_json, from_json
+from ...util.mailpile import tag_unquote
 
 from .exceptions import *
 
@@ -399,7 +402,7 @@ class CLICommand:
                 options[name] = []
             options[name].append(val)
         while args:
-            arg = args.pop(0)
+            arg = args.pop(0).strip('\n')
             if arg == '--':
                 leftovers.extend(args)
                 break
@@ -407,7 +410,7 @@ class CLICommand:
                 _setopt(arg, True)
             elif arg+'=' in options:
                 if args and args[0][:2] != '--':
-                    _setopt(arg+'=', args.pop(0))
+                    _setopt(arg+'=', args.pop(0).strip('\n'))
                 else:
                     _setopt(arg+'=', True)
             elif arg[:2] == '--':
@@ -426,6 +429,115 @@ class CLICommand:
         if auto_context and ('--context=' in self.options):
             self.context = self.get_context()
         return leftovers
+
+    @classmethod
+    def read_file_or_stdin(cls, cli_obj, path, _bytes=False):
+        if path == '-':
+            if cli_obj.options['--stdin=']:
+                if _bytes:
+                    return bytes(cli_obj.options['--stdin='].pop(0), 'utf-8')
+                return cli_obj.options['--stdin='].pop(0)
+            else:
+                if _bytes:
+                    return sys.stdin.buffer.read()
+                return str(sys.stdin.buffer.read(), 'utf-8')
+        else:
+            with open(path, 'rb' if _bytes else 'r') as fd:
+                return fd.read()
+
+    def validate_and_normalize_tagops(self, tagops):
+        for idx, tagop in enumerate(tagops):
+            otagop = tagop
+            if tagop[:1] not in ('+', '-'):
+                raise Nonsense(
+                    'Tag operations must start with + or -: %s' % otagop)
+            if tagop[1:4] in ('in:',):
+                tagop = tagops[idx] = tagop[:1] + tagop[4:]
+            elif tagop[1:5] in ('tag:',):
+                tagop = tagops[idx] = tagop[:1] + tagop[5:]
+            if not tagop[1:]:
+                raise Nonsense('Missing tag: %s' % otagop)
+            tagops[idx] = tag_unquote(tagop).lower()
+        if self.options.get('--remove-all') and '-*' not in tagops:
+            tagops.insert(0, '-*')
+
+    async def gather_emails(self,
+            mailbox_and_search_lists,
+            with_text=False,
+            with_data=False,
+            with_full_raw=False,
+            with_missing=False,
+            decode_raw=False,
+            username=None,
+            password=None):
+
+        if username is None:
+            username = self.options.get('--username=', [None])[-1]
+        if password is None:
+            password = self.options.get('--password=', [None])[-1]
+
+        for mailboxes, search in mailbox_and_search_lists:
+          for mailbox in (mailboxes or [None]):
+            worker = self.connect()
+
+            metadata = None
+            if isinstance(search, (dict, list)):
+                # Metadata as dict!
+                metadata = search
+            elif search[:1] in ('{', '[') and search[-1:] in (']', '}'):
+                metadata = search
+
+            if metadata:
+                result = {'emails': [Metadata.FromParsed(metadata)]}
+            else:
+                if mailbox:
+                    request = RequestMailbox(
+                        context=self.context,
+                        mailboxes=[mailbox],
+                        username=username,
+                        password=password,
+                        terms=search)
+                else:
+                    request = RequestSearch(context=self.context, terms=search)
+                result = await self.repeatable_async_api_request(
+                    self.access, request)
+
+            if result and result.get('emails'):
+                for metadata in result['emails']:
+                    msg = None
+                    req = RequestEmail(
+                            metadata=metadata,
+                            text=with_text,
+                            data=with_data,
+                            full_raw=(with_full_raw or decode_raw),
+                            username=username,
+                            password=password)
+                    md = Metadata(*metadata)
+                    try:
+                        msg = await worker.async_api_request(self.access, req)
+                    except APIException:
+                        if not with_missing:
+                            raise
+                    if msg and 'email' in msg:
+                        r = {
+                            'email': msg['email'],
+                            'metadata': md,
+                            'mailbox': mailbox,
+                            'search': search}
+                        if decode_raw:
+                            r['data'] = base64.b64decode(msg['email']['_RAW'])
+                        yield r
+                    else:
+                        yield {
+                            'error': 'Not found',
+                            'metadata': md,
+                            'mailbox': mailbox,
+                            'search': search}
+            else:
+                yield {
+                    'error': 'Not found',
+                    'mailbox': mailbox,
+                    'search': search}
 
     def configure(self, args):
         return args

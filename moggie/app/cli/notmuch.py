@@ -1771,23 +1771,8 @@ class CommandTag(CLICommand):
         ('--redo=',         [None], 'X=<id>, redo an undone tag operation'),
     ],[
         ('--format=',       [None], ''),
+        ('--output=',           [], 'X=ids, Expand int-sets to ID lists'),
         ('--stdin=',            [], '')]]  # Internal: lots stdin hack
-
-    def _validate_and_normalize_tagops(self, tagops):
-        for idx, tagop in enumerate(tagops):
-            otagop = tagop
-            if tagop[:1] not in ('+', '-'):
-                raise Nonsense(
-                    'Tag operations must start with + or -: %s' % otagop)
-            if tagop[1:4] in ('in:',):
-                tagop = tagops[idx] = tagop[:1] + tagop[4:]
-            elif tagop[1:5] in ('tag:',):
-                tagop = tagops[idx] = tagop[:1] + tagop[5:]
-            if not tagop[1:]:
-                raise Nonsense('Missing tag: %s' % otagop)
-            tagops[idx] = tag_unquote(tagop).lower()
-        if self.options['--remove-all'] and '-*' not in tagops:
-            tagops.insert(0, '-*')
 
     def _batch_configure(self, ifd):
         import shlex
@@ -1797,7 +1782,7 @@ class CommandTag(CLICommand):
                 tagops, terms = line.split('--', 1)
                 terms = terms.strip()
                 tagops = shlex.split(tagops)
-                self._validate_and_normalize_tagops(tagops)
+                self.validate_and_normalize_tagops(tagops)
                 if terms.startswith('META={'):
                     yield (tagops, from_json(terms[5:]), None)
                 else:
@@ -1837,7 +1822,7 @@ class CommandTag(CLICommand):
                 or self.options['--undo='][-1]):
             while tags and tags[-1][:1] not in ('+', '-'):
                 terms[:0] = [tags.pop(-1)]
-            self._validate_and_normalize_tagops(tags)
+            self.validate_and_normalize_tagops(tags)
 
             if not tags or not terms:
                 raise Nonsense('Nothing to do?')

@@ -139,6 +139,14 @@ class FriendlyTests(unittest.TestCase):
         self.assertEqual(friendly_bytes(11*1024*1024*1024), '11G')
         self.assertEqual(friendly_bytes(None), '?')
 
+    def test_friendly_date_formats(self):
+        ts = 1696845623
+        fmts = friendly_date_formats(ts)
+        self.assertEquals(fmts['yyyy_mm_dd'], '2023-10-09')
+        self.assertEquals(fmts['yyyy_mm'], '2023-10')
+        self.assertEquals(fmts['yyyy'], '2023')
+        self.assertEquals(fmts['ts'], ts)
+
 
 class HttpTests(unittest.TestCase):
     def test_url_parts(self):

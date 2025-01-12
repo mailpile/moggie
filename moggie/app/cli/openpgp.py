@@ -174,17 +174,6 @@ Hash: %s
                     cli_obj.options[opt][i] = getpass.getpass(prompt)
 
     @classmethod
-    def read_file_or_stdin(cls, cli_obj, path):
-        if path == '-':
-            if cli_obj.options['--stdin=']:
-                return cli_obj.options['--stdin='].pop(0)
-            else:
-                return str(sys.stdin.buffer.read(), 'utf-8')
-        else:
-            with open(path, 'r') as fd:
-                return fd.read()
-
-    @classmethod
     def load_key_from_file(cls, cli_obj, arg):
         if arg[:1] not in ('.', '/') and arg != '-':
             return None

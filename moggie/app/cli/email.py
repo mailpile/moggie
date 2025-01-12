@@ -611,8 +611,6 @@ class CommandParse(CLICommand):
                     'data': data})
                 return True
             elif t[:7] == 'base64:':
-                # FIXME: This logic should be shared with other methods.
-                #        Bump up to the CLICommand class?
                 target.append({
                     'base64': True,
                     'data': base64.b64decode(t[7:])})
@@ -655,6 +653,7 @@ class CommandParse(CLICommand):
         self.searches.extend(
             _mailbox_and_terms(i) for i in self.options['--input='])
         self.options['--input='] = []
+
         return []
 
     def generate_markdown(self, parsed):
@@ -1025,62 +1024,11 @@ system should have learned new things since then.
             self.emitted += 1
 
     async def gather_emails(self):
-        for mailboxes, search in self.searches:
-          for mailbox in (mailboxes or [None]):
-            worker = self.connect()
-
-            metadata = None
-            if isinstance(search, (dict, list)):
-                # Metadata as dict!
-                metadata = search
-            elif search[:1] in ('{', '[') and search[-1:] in (']', '}'):
-                metadata = search
-
-            if metadata:
-                result = {'emails': [Metadata.FromParsed(metadata)]}
-            else:
-                if mailbox:
-                    request = RequestMailbox(
-                        context=self.context,
-                        mailboxes=[mailbox],
-                        terms=search)
-                else:
-                    request = RequestSearch(context=self.context, terms=search)
-                result = await self.repeatable_async_api_request(
-                    self.access, request)
-
-            if result and result.get('emails'):
-                for metadata in result['emails']:
-                    msg = None
-                    req = RequestEmail(
-                            metadata=metadata,
-                            full_raw=True,
-                            username=self.options['--username='][-1],
-                            password=self.options['--password='][-1])
-                    md = Metadata(*metadata)
-                    try:
-                        msg = await self.worker.async_api_request(
-                            self.access, req)
-                    except APIException:
-                        if not self.settings.with_missing:
-                            raise
-                    if msg and 'email' in msg:
-                        yield {
-                            'data': base64.b64decode(msg['email']['_RAW']),
-                            'metadata': md,
-                            'mailbox': mailbox,
-                            'search': search}
-                    else:
-                        yield {
-                            'error': 'Not found',
-                            'metadata': md,
-                            'mailbox': mailbox,
-                            'search': search}
-            else:
-                yield {
-                    'error': 'Not found',
-                    'mailbox': mailbox,
-                    'search': search}
+        async for result in super().gather_emails(
+                self.searches,
+                decode_raw=True,
+                with_missing=self.settings.with_missing):
+            yield result
 
     def get_emitter(self):
         if self.options['--format='][-1] == 'sexp':
