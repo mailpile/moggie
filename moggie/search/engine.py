@@ -816,12 +816,12 @@ class SearchEngine:
                 for _id in elems:
                     if '..' in _id:
                         b, e = _id.split('..')
-                        ids.extend(range(int(b), int(e)+1))
+                        ids.extend(range(int(b), min(self.maxint, int(e)+1)))
                     else:
                         ids.append(int(_id))
         except ValueError:
             ids = []
-        return ids
+        return [i for i in ids if 0 <= i <= self.maxint]
 
     def _search(self, term, tag_ns):
         if isinstance(term, tuple):
