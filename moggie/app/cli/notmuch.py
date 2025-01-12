@@ -261,7 +261,8 @@ FIXME: Document html and html formats!
                 self.with_result_meta = True
                 output.remove('result-meta')
             if len(output) > 1:
-                output.remove('default')
+                if 'default' in output:
+                    output.remove('default')
             if len(output) > 1:
                 raise Nonsense('Please only request one type of output')
 
@@ -775,7 +776,7 @@ Tags: %(t)s
         result = self._json_sanitize(result)
         if first:
             self.print_json_list_start(nl='')
-            if self.options['--json-ui-state']:
+            if self.options.get('--json-ui-state'):
                 self.print_json(self.webui_state)
                 if result:
                     self.print_json_list_comma()
@@ -989,8 +990,8 @@ Tags: %(t)s
         else:
             query = RequestSearch(context=self.context, terms=self.terms)
 
-        query['username'] = self.options['--username='][-1]
-        query['password'] = self.options['--password='][-1]
+        query['username'] = self.options.get('--username=', [None])[-1]
+        query['password'] = self.options.get('--password=', [None])[-1]
 
         if self.options.get('--offset=', [None])[-1]:
             query['skip'] = int(self.options['--offset='][-1])
@@ -1124,6 +1125,7 @@ class CommandAddress(CommandSearch):
 
         moggie address to:bre dates:2022-09
         moggie address --output=recipients from:bre dates:2022-09
+        moggie address --output=score --output=count bjarni* einars*
 
     ### Search options
 
@@ -1137,8 +1139,13 @@ class CommandAddress(CommandSearch):
     When `sender` is requested, the output will include all senders. The
     output from `recipients` includes the messages in To: and Cc: headers.
     Requesting `--output=address` will omit the names from e-mail addresses,
-    and `--output=count` will include a count of how often each address was
-    seen.
+    `--output=count` will include a count of how often each address was
+    seen and `--output=score` will include a score showing how well the
+    name/address match the search terms provided.
+
+    Output is unsorted (for performance reasons), unless `--output=count` is
+    requested, as that requires buffering all results anyway. The counted sort
+    order is descending by (score, count), so the best matches should be first.
 
     See also `moggie help search` and `moggie help how-to-search` for details
     about how to search for mail. This command should be compatible with its
@@ -1153,10 +1160,12 @@ class CommandAddress(CommandSearch):
         ('--context=',     ['default'], 'The context for scope and settings'),
         ('--q=',                    [], 'Search terms (used by web API)'),
         ('--deduplicate=', ['mailbox'], 'X=(no|mailbox|address)'),
+        ('--offset=',          ['0'], 'Skip the first X results'),
+        ('--limit=',            [''], 'Output at most X results'),
     ],[
         (None, None, 'output'),
         ('--format=',   ['text'], 'X=(text*|text0|json|sexp)'),
-        ('--output=',         [], 'X=(sender*|recipients|address|count)'),
+        ('--output=',         [], 'X=(sender*|recipients|address|count|score)'),
     # These are notmuch options which we currently ignore
         ('--sort=',           ['newest-first'], ''),
         ('--format-version=', [], ''),
@@ -1166,6 +1175,8 @@ class CommandAddress(CommandSearch):
         self.address_only = False
         self.result_cache = {}
         self.counts = False
+        self.scores = False
+        self.term_substrings = set()
         super().__init__(*args, **kwargs)
 
     def configure(self, args):
@@ -1175,7 +1186,20 @@ class CommandAddress(CommandSearch):
         if (self.options['--deduplicate='][-1] == 'no'
                 and 'count' in self.options['--output=']):
             raise Nonsense('Counting requires deduplication')
+
+        terms = set([
+            t.rstrip('*').lstrip('-').lstrip('+') for t in self.terms.split()])
+        maxlen = max(4, min(len(t) for t in terms))
+        for term in terms:
+            self.term_substrings.add(term + '$')
+            for ln in range(max(2, len(term) - 4), len(term)-1):
+                for idx in range(0, len(term) - ln):
+                    self.term_substrings.add(term[idx:min(maxlen, idx+ln)])
+
         return args
+
+    def validate_configuration(self, output=True, zip_encryption=True):
+        return True
 
     def is_new(self, addr, output):
         dedup = self.options['--deduplicate='][-1]
@@ -1194,27 +1218,44 @@ class CommandAddress(CommandSearch):
                 self.result_cache[d] = output
             return True
 
-    async def emit_sender(self, md):
-        addr = Metadata(*md).parsed().get('from')
-        result = {
-            'address': addr.address,
-            'name': addr.fn,
-            'name-addr': '%s <%s>' % (addr.fn, addr.address)}
-        if addr and self.is_new(addr, result):
-            yield (self.fmt, result)
+    def calc_score(self, result):
+        name_score = sum(10 if ('$' in sub) else 1
+                for sub in self.term_substrings
+                if sub.rstrip('$') in result['name'])
+        addr_score = sum(10 if ('$' in sub) else 1
+                for sub in self.term_substrings
+                if sub.rstrip('$') in result['address'])
 
-    async def emit_recipients(self, md):
-        mdp = Metadata(*md).parsed()
-        for hdr in ('to', 'cc', 'bcc'):
-            for addr in mdp.get(hdr, []):
+        result['score'] = name_score + addr_score
+
+    async def emit_sender(self, md, first=False, last=False):
+        if md is not None:
+            addr = Metadata(*md).parsed().get('from')
+            if addr and addr.address:
                 result = {
                     'address': addr.address,
                     'name': addr.fn,
-                    'name-addr': (
-                        ('%s <%s>' % (addr.fn, addr.address)) if addr.fn else
-                        ('<%s>' % (addr.address)))}
+                    'name-addr': '%s <%s>' % (addr.fn, addr.address)}
                 if self.is_new(addr, result):
+                    if self.scores:
+                        self.calc_score(result)
                     yield (self.fmt, result)
+
+    async def emit_recipients(self, md, first=False, last=False):
+        if md is not None:
+            mdp = Metadata(*md).parsed()
+            for hdr in ('to', 'cc', 'bcc'):
+                for addr in mdp.get(hdr, []):
+                    result = {
+                        'address': addr.address,
+                        'name': addr.fn,
+                        'name-addr': (
+                            ('%s <%s>' % (addr.fn, addr.address)) if addr.fn else
+                            ('<%s>' % (addr.address)))}
+                    if self.is_new(addr, result):
+                        if self.scores:
+                            self.calc_score(result)
+                        yield (self.fmt, result)
 
     def get_formatter(self):
         fmt = self.options['--format='][-1]
@@ -1229,12 +1270,19 @@ class CommandAddress(CommandSearch):
                 self.address_only = True
             elif out == 'count':
                 self.counts = True
+            elif out == 'score':
+                self.scores = True
             else:
                 raise Nonsense('Unknown output type: %s' % out)
         if not formatters:
             formatters.append(self.emit_sender)
 
         self.fmt = '%(address)s' if self.address_only else '%(name-addr)s'
+        if self.counts:
+            self.fmt = '%(count)s\t' + self.fmt
+        if self.scores:
+            self.fmt = '%(score)s\t' + self.fmt
+
         async def _formatter(md):
             if md is not None:
                 for _fmt in formatters:
@@ -1243,10 +1291,14 @@ class CommandAddress(CommandSearch):
         if not self.counts:
             return _formatter
 
-        self.fmt = '%(count)s\t' + self.fmt
         async def _counter(md):
             if md is None:
-                for key, count in self.displayed.items():
+                key_counts = list(self.displayed.items())
+                key_counts.sort(key=lambda k_c: (
+                    -self.result_cache[k_c[0]].get('score', 0),
+                    -k_c[1],
+                    self.result_cache[k_c[0]].get('name-addr', '')))
+                for key, count in key_counts:
                     r = self.result_cache[key]
                     r['count'] = count
                     yield (self.fmt, r)
