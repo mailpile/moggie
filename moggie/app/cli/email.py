@@ -596,9 +596,11 @@ class CommandParse(CLICommand):
         if not self.allow_network and self.settings.verify_dkim:
              raise Nonsense('Cannot verify DKIM without network access')
 
+        # FIXME: This logic should be shared with other methods.
+        #        Bump up to the CLICommand class?
         def _load(t, target):
             if t[:1] == '-':
-                if self.options['--stdin=']:
+                if self.options.get('--stdin='):
                     # FIXME: This logic should be shared with other methods.
                     #        Bump up to the CLICommand class?
                     data = self.options['--stdin='].pop(0)
@@ -1065,10 +1067,9 @@ system should have learned new things since then.
 class CommandEmail(CLICommand):
     """moggie email [<options> ...]
 
-    This command will generate (and optionally send) an e-mail, in
-    accordance with the command-line options, Moggie settings, and relevant
-    standards. It can be used as a stand-alone tool, but some features
-    depend on having a live moggie backend.
+    This command will generate an e-mail, as described by the command-line
+    options and relevant standards. It can be used as a stand-alone tool,
+    but some features depend on having a live moggie backend.
 
     ## General options
 
@@ -1078,23 +1079,6 @@ class CommandEmail(CLICommand):
 
     %(moggie)s
 
-    Note that by default the e-mail is generated but neither sent nor saved.
-
-    If you want to save (and tag) the e-mail, or handle errors/retries, you
-    must specify `--save-to=` and optionally `--save-tags=`.
-
-    If you want the e-mail to be sent you must specify `--send-at=` and/or
-    `--send-via=`. Delayed sending requires the message be saved and the
-    moggie backend be running at the requested time.
-
-    The `--send-via=` command takes either server address, formatted as
-    a URI (e.g. `smtp://user:pass@hostname:port/`), or the path to a
-    local command to pipe the output too. Recognized protocols are `smtp`,
-    `smtps` (SMTP over TLS) and `smtptls` (SMTP, requiring STARTTLS). The
-    command specification can include Python `%%(...)s` formatting, for
-    variables `from`, `to` (a single-argument comma-separated list) or
-    `to_list` (one argument per recipient).
-
     ### Examples:
 
         # Generate an e-mail and dump to stdout, encapsulated in JSON:
@@ -1103,26 +1087,16 @@ class CommandEmail(CLICommand):
         # Use an alternate context for loading from, signature etc.
         moggie email --context='Work' --subject='meeting times' ...
 
-        # Send a message via SMTP to root@localhost
-        moggie email [...] \\
-            --send-via=smtp://localhost:25 \\
-            --send-to=root@localhost
-
-        # Send a message using /usr/bin/sendmail
-        moggie email [...] \\
-            --send-via='/usr/bin/sendmail -f%%(from)s -- %%(to_list)s'
-
 
     ## Message headers
 
-    Message headers can be specified on the command-line, using these
+    Message headers must be specified on the command-line, using these
     options:
 
     %(headers)s
 
-    If omitted, defaults are either loaded from the moggie configuration
-    (for the active Context), derived from the headers of messages being
-    forwarded or replied to or a best-effort combination of the two.
+    Note that you can use `moggie plan` to generate these arguments using
+    Moggie settings and/or a message being replied to.
 
     ### Examples:
 
@@ -1207,10 +1181,10 @@ class CommandEmail(CLICommand):
 
     %(searches)s
 
-    The `--reply=` option is part of the high-level content generation;
-    depending on the `--quoting=` option some or all of the text/HTML
-    content of the replied-to messages will be included as quotes in the
-    output message.
+    Note that the `--quote=` option will quote the specified e-mail, but
+    not necesssarily set the correct headers for replying. Use `moggie plan`
+    for that. The `--quoting=` option can be used to decide whether to
+    include some or all of the text/HTML content of the message.
 
     When forwarding, the `inline` style (the `--forwarding=` option)
     is the default, where message text will be quoted in the message body,
@@ -1222,7 +1196,7 @@ class CommandEmail(CLICommand):
     indicating it has been resent. Note that bounce forwarding (resending)
     is incompatible with most other `moggie email` features.
 
-    **NOTE:** Be careful when using search terms with `--reply=` and
+    **NOTE:** Be careful when using search terms with `--quote=` and
     `--forward=`, since searches matching multiple e-mails can result
     in very large output with unexpected contents. Sticking with
     `id:...` and/or tag-based searches is probably wise. If you are
@@ -1311,12 +1285,6 @@ class CommandEmail(CLICommand):
         (None, None, 'moggie'),
         ('--context=', ['default'], 'Context to use for default settings'),
         ('--format=',   ['rfc822'], 'X=(rfc822*|text|json|sexp)'),
-        ('--send-to=',          [], 'Address(es) to send to (igores headers)'),
-        ('--send-at=',          [], 'X=(NOW|+seconds|a Unix timestamp)'),
-        ('--send-via=',         [], 'X=(smtp|smtps)://[user:pass@]host:port'),
-        ('--no-bcc-self',       [], 'Disable sending a (blind) copy to the From address'),
-        ('--save-to=X',         [], 'X=/path/to/mailbox, save copy of e-mail to mailbox'),
-        ('--save-tags=X',       [], 'X=tag1,tag2,.. tags for saved e-mails'),
         ('--stdin=',            [], None), # Allow lots to send stdin (internal)
     ],[
         (None, None, 'headers'),
@@ -1338,10 +1306,9 @@ class CommandEmail(CLICommand):
     ],[
         (None, None, 'searches'),
         ('--draft=',          [], 'Search terms, filesystem path or - for stdin'),
-        ('--reply=',          [], 'Search terms, filesystem path or - for stdin'),
+        ('--quote=',          [], 'Search terms, filesystem path or - for stdin'),
         ('--forward=',        [], 'Search terms, filesystem path or - for stdin'),
 #FIXME: ('--template=',       [], 'Search terms, filesystem path or - for stdin'),
-        ('--reply-to=',  ['all'], 'X=(all*|sender)'),
         ('--forwarding=',     [], 'X=(inline*|attachment|bounce)'),
         ('--quoting=',        [], 'X=(html*|text|trim*|below), many allowed'),
         ('--username=',   [None], 'Username with which to access email'),
@@ -1363,7 +1330,7 @@ class CommandEmail(CLICommand):
     def __init__(self, *args, **kwargs):
         self.email_tree = {'_ORDER': [], '_PARTS': []}
         self.drafts = []
-        self.replying_to = []
+        self.quoting = []
         self.forwarding = []
         self.attachments = []
         self.headers = {}
@@ -1395,6 +1362,7 @@ class CommandEmail(CLICommand):
     def configure(self, args):
         args = self.strip_options(args)
 
+        # FIXME: use common --stdin/file logic
         def as_file(key, i, t, target, file_reader, dir_reader=None):
             if t[:1] == '-':
                 # FIXME: Is this how we handle stdin?
@@ -1409,13 +1377,13 @@ class CommandEmail(CLICommand):
                 self.options[key][i] = None
             # FIXME: Allow in-place base64 encoded data?
 
-        # This lets the caller provide messages for forwarding or replying to
+        # This lets the caller provide messages for forwarding or quoting to
         # directly, instead of searching. Anything left in the reply/forward
         # options after this will be treated as a search term.
         for target, key in (
                   (self.drafts, '--draft='),
-                  (self.replying_to, '--reply='),
-                  (self.forwarding,  '--forward=')):
+                  (self.quoting, '--quote='),
+                  (self.forwarding, '--forward=')):
             current = self.options.get(key, [])
             for i, t in enumerate(current):
                 as_file(key, i, t, target, self._load_email, self._load_msgdir)
@@ -1451,12 +1419,15 @@ class CommandEmail(CLICommand):
                 if val and opt not in (
                         '--context=', '--format=',
                         '--forwarding=', '--forward=',
-                        '--reply-to=', '--draft=',
-                        '--from=', '--send-to=', '--send-at=', '--send-via='):
+                        '--quote=', '--draft=',
+                        '--from=', '--to=', '--cc=', '--subject=',
+                        '--date=', '--header='):
                     raise Nonsense('Bounced messages cannot be modified (%s%s)'
                         % (opt, val))
-            if not self.options.get('--send-to='):
-                raise Nonsense('Please specify --send-to= when bouncing')
+
+        else:
+            if not self.options.get('--from='):
+                raise Nonsense('Please specify a From address')
 
         # Parse any supplied dates...
         import datetime
@@ -1469,7 +1440,7 @@ class CommandEmail(CLICommand):
 
         # Parse and expand convert e-mail address options
         from moggie.email.addresses import AddressHeaderParser
-        for opt in ('--from=', '--to=', '--cc=', '--bcc=', '--send-to='):
+        for opt in ('--from=', '--to=', '--cc=', '--bcc='):
             if self.options[opt]:
                 new_opt = []
                 for val in self.options[opt]:
@@ -1929,7 +1900,7 @@ class CommandEmail(CLICommand):
             text.append(t)
             html.append(self.wrap_text(h))
 
-        for msg in self.replying_to:
+        for msg in self.quoting:
             strategy, q_txt, q_htm = self.collect_quotations(msg)
             if q_txt and q_htm:
                 if 'below' in strategy:
@@ -2004,6 +1975,8 @@ class CommandEmail(CLICommand):
                 ('subject', '--subject=')):
             h = self.headers[hdr] = self.headers.get(hdr, [])
             for v in self.options.get(opt, []):
+                if isinstance(v, str):
+                    v = v.strip()
                 # Someone should spank me for playing golf
                 (h.extend if isinstance(v, list) else h.append)(v)
             if not h:
@@ -2123,19 +2096,6 @@ class CommandEmail(CLICommand):
         self.headers.update(header)
         return ''.join([format_headers(self.headers), body])
 
-    def _reply_addresses(self):
-        senders = {}
-        recipients = {}
-        def _add(_hash, _ai):
-             if not isinstance(_ai, AddressInfo):
-                 _ai = AddressInfo(**_ai)
-             _hash[_ai['address']] = _ai
-        for email in self.replying_to:
-             _add(senders, email['from'])
-             for ai in email.get('to', []) + email.get('cc', []):
-                 _add(recipients, ai)
-        return senders, recipients
-
     def gather_draft_data(self):
         from moggie.email.headers import format_header
 
@@ -2196,10 +2156,6 @@ class CommandEmail(CLICommand):
             return s if (w1 == 'fwd:') else 'Fwd: %s' % s
 
         subjects = []
-        for msg in self.replying_to:
-            subj = msg.get('subject')
-            if subj:
-                 subjects.append(_re(subj))
         for msg in self.forwarding:
             subj = msg.get('subject')
             if subj:
@@ -2211,63 +2167,20 @@ class CommandEmail(CLICommand):
                 subject += ' (+%d more)' % (len(subjects) - 1)
             self.options['--subject='] = [subject]
 
-    def gather_from(self, senders_and_recipients=None):
-        senders, recipients = senders_and_recipients or self._reply_addresses()
-
-        # Check the current context for addresses that were on the
-        # recipient list. If none are found, use the main address for
-        # the context. If we are replying to ourself, prefer that!
-        ctx = self.cfg.contexts[self.context]
-        ids = self.cfg.identities
-        for _id in (ids[i] for i in ctx.identities):
-            if _id.address in senders:
-                self.options['--from='] = [_id.as_address_info()]
-                return
-        for _id in (ids[i] for i in ctx.identities):
-            if _id.address in recipients:
-                self.options['--from='] = [_id.as_address_info()]
-                return
-
-        # Default to our first identity (falls through if there are none)
-        for _id in (ids[i] for i in ctx.identities):
-            self.options['--from='] = [_id.as_address_info()]
-            return
-
-        raise Nonsense('No from address, aborting')
-
-    def gather_to_cc(self, senders_and_recipients=None):
-        senders, recipients = senders_and_recipients or self._reply_addresses()
-
-        frm = self.options['--from='][0].address
-
-        self.options['--to='].extend(
-            a.normalized() for a in senders.values() if a.address != frm)
-        if self.options['--reply-to='][-1] == 'all':
-            self.options['--cc='].extend(
-                a.normalized() for a in recipients.values()
-                if a.address != frm and a.address not in senders)
-
-    async def gather_emails(self, searches, with_data=False):
+    async def gather_emails(self, key, searches, with_data=False):
         emails = []
-        for search in searches:
-            worker = self.connect()
-            result = await self.worker.async_api_request(self.access,
-                RequestSearch(context=self.context, terms=search))
-            if result and 'emails' in result:
-                for metadata in result['emails']:
-                    msg = await self.worker.async_api_request(self.access,
-                        RequestEmail(
-                            metadata=metadata,
-                            text=True,
-                            data=with_data,
-                            username=self.options['--username='][-1],
-                            password=self.options['--password='][-1],
-                            full_raw=with_data))
-                    if msg and 'email' in msg:
-                        emails.append(msg['email'])
+        async for result in super().gather_emails(
+                [([], search) for search in searches],
+                with_text=True,
+                with_data=with_data,
+                with_missing=True):
+            if result and 'email' in result:
+                emails.append(result['email'])
+            else:
+                logging.debug('gather_emails(%s) failed: %s' % (key, result))
         return emails
 
-    async def gather_attachments(self, searches):
+    async def gather_attachments(self, key, searches):
         atts = []
         for search in searches:
             logging.debug('Unsupported attachment searches: %s' % searches)
@@ -2276,7 +2189,6 @@ class CommandEmail(CLICommand):
 
     def gather_recipients(self):
         recipients = []
-        recipients.extend(self.options.get('--send-to=', []))
         if not recipients:
             recipients.extend(self.options.get('--to=', []))
             recipients.extend(self.options.get('--cc=', []))
@@ -2307,29 +2219,6 @@ class CommandEmail(CLICommand):
         logging.exception('wat')
         raise
 
-    async def do_send(self, render=None, recipients=None):
-        recipients = recipients or self.gather_recipients()
-        if render is None:
-            render = await self.render()
-
-        via = (self.options.get('--send-via=') or [None])[-1]
-        if not via:
-            raise Nonsense('FIXME: Get via from config')
-
-        transcript = []
-        def _progress(happy, code, details, message):
-            transcript.append((happy, code, details, message))
-            return True
-
-        from moggie.util.sendmail import sendmail
-        frm = self.options['--from='][0].address
-        await sendmail(render, [
-                (via, frm, [r.address for r in recipients])
-            ],
-            progress_callback=_progress)
-
-        self.print_json(transcript)
-
     async def do_bounce(self):
         recipients = self.gather_recipients()
 
@@ -2351,24 +2240,19 @@ class CommandEmail(CLICommand):
                 'resent-from': self.options['--from='][0]},
             eol=str(eol, 'utf-8')), 'utf-8')[:-len(eol)]
 
-        return await self.do_send(
-             render=(resent_info + header + sep + body),
-             recipients=recipients)
+        return await self.do_render_result()
 
     async def run(self):
         for target, key, gather, args in (
                 (self.drafts,      '--draft=',   self.gather_emails, [True]),
-                (self.replying_to, '--reply=',   self.gather_emails, []),
+                (self.quoting    , '--quote=',   self.gather_emails, []),
                 (self.forwarding,  '--forward=', self.gather_emails, [True]),
                 (self.attachments, '--attach=',  self.gather_attachments, [])):
             if self.options.get(key):
-                target.extend(await gather(self.options[key], *args))
+                target.extend(await gather(key, self.options[key], *args))
 
         if self.drafts:
             self.gather_draft_data()
-
-        if not self.options.get('--from='):
-            self.gather_from()
 
         if 'bounce' in self.options.get('--forwarding='):
             if (len(self.forwarding) > 1
@@ -2377,13 +2261,7 @@ class CommandEmail(CLICommand):
 
             return await self.do_bounce()
 
-        if not self.options.get('--to=') and not self.options.get('--cc='):
-            self.gather_to_cc()
-
         if not self.options.get('--subject='):
             self.gather_subject()
 
-        if self.options.get('--send-to=') or self.options.get('--send-at='):
-            await self.do_send()
-        else:
-            await self.do_render_result()
+        await self.do_render_result()
