@@ -126,8 +126,8 @@ class FormatMailzip(FormatBytes):
             iterator = reversed(list(iterator))
 
         obj = ''
-        try:
-            for i, key in iterator:
+        for i, key in iterator:
+            try:
                 if skip > 0:
                     skip -= 1
                     continue
@@ -144,9 +144,8 @@ class FormatMailzip(FormatBytes):
                     if sync_info:
                         md.more['sync_info'] = sync_info
                 yield(md)
-        except (KeyError, ValueError, TypeError) as e:
-            logging.exception('Failed to read mailbox')
-            return
+            except (KeyError, ValueError, TypeError) as e:
+                logging.exception('Failed to read mailbox')
 
 
 if __name__ == "__main__":

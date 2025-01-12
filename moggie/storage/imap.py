@@ -61,16 +61,21 @@ class ImapMailbox:
             for uid, size, _, msg in self.conn.fetch_metadata(
                     self.path,
                     uids[beg:beg+batch]):
-                hend, hdrs = quick_msgparse(msg, 0)
-                path = self.make_path(uid)
-                lts, md = make_ts_and_Metadata(
-                    now, lts, msg[:hend],
-                    [Metadata.PTR(Metadata.PTR.IS_IMAP, path, size, uid)],
-                    hdrs)
-                md[Metadata.OFS_IDX] = mk_packed_idx(
-                    hdrs, uid, self.conn.selected['UIDVALIDITY'],
-                    count=2, mod=6)
-                yield md
+                try:
+                    hend, hdrs = quick_msgparse(msg, 0)
+                    path = self.make_path(uid)
+                    lts, md = make_ts_and_Metadata(
+                        now, lts, msg[:hend],
+                        [Metadata.PTR(Metadata.PTR.IS_IMAP, path, size, uid)],
+                        hdrs)
+                    md[Metadata.OFS_IDX] = mk_packed_idx(
+                        hdrs, uid, self.conn.selected['UIDVALIDITY'],
+                        count=2, mod=6)
+                    yield md
+                except GeneratorExit:
+                    raise
+                except:
+                    logging.exception('Failed to parse %s' % msg)
 
 
 class ImapStorage(BaseStorage, MailboxStorageMixin):

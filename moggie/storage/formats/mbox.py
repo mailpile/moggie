@@ -56,11 +56,12 @@ From: nobody <deleted@example.org>\r\n\
         if hend is None:
             return False
 
+        # These are the only two mandatory header fields in an e-mail,
+        # as defined in RFC2822, section 3.6.
         header = eol + buffer[:hend]
         return (
             (b'\nDate: ' in header) and
-            (b'\nFrom: ' in header) and
-            (b'\nTo: ' in header))
+            (b'\nFrom: ' in header))
 
     @classmethod
     def Magic(cls, parent, key, is_dir=None):
@@ -121,7 +122,7 @@ From: nobody <deleted@example.org>\r\n\
             end += 1
 
             return beg, end
-        except KeyError:
+        except (KeyError, TypeError):
             pass
 
         # Message not found: scan the entire mailbox?

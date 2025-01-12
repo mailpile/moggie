@@ -49,7 +49,7 @@ class MailboxStorageMixin:
         if (limit is None) or (limit > 0):
             mailbox = self.get_mailbox(key, auth=not (username or password))
             if mailbox is None:
-                logging.debug('Failed to open mailbox: %s' % key)
+                logging.debug('%s: Failed to open mailbox: %s' % (self, key))
             else:
                 if username or password:
                     self.unlock_mailbox(

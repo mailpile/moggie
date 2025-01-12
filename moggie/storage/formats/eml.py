@@ -30,8 +30,11 @@ class FormatEml(FormatMbox):
             raise KeyError('Message not found')
 
         # Verify that we have the correct message
-        hend, hdrs = quick_msgparse(self.container, 0)
-        if self.RangeToKey(b, _data=hdrs) != key:
+        try:
+            hend, hdrs = quick_msgparse(self.container, 0)
+            if self.RangeToKey(b, _data=hdrs) != key:
+                raise KeyError('Message not found')
+        except TypeError:
             raise KeyError('Message not found')
 
         return 0, len(self.container)
