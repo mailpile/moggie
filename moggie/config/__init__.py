@@ -25,6 +25,7 @@ from ..crypto.openpgp.keystore.registry import DEFAULT_LOCAL_KEYSTORES
 from ..crypto.openpgp.keystore.registry import DEFAULT_KEYSTORES
 from ..crypto.openpgp.sop import DEFAULT_SOP_CONFIG
 from ..util.dumbcode import dumb_decode, dumb_encode_asc, to_json, from_json
+from ..util.friendly import friendly_date_formats
 from ..email.addresses import AddressInfo
 from .helpers import cfg_bool, ListItemProxy, EncodingListItemProxy
 from .helpers import DictItemProxy, ConfigSectionProxy
@@ -294,6 +295,7 @@ class AccountConfig(ConfigSectionProxy):
         'sendmail_password': str, # unset=no pass, special: ==password
         'mailbox_server': str,    # imap[s]://username@server:port
         'mailbox_password': str,  # unset=no pass, special: ==password
+        'write_to_mailbox': str,  # Mailbox to write drafts/sent messages to
         'description': str}
     _EXTRA_KEYS = ['addresses']
 
@@ -312,14 +314,33 @@ class AccountConfig(ConfigSectionProxy):
             tags += self.OUTGOING_TAGS
         return tags
 
+    def as_dict(self):
+        d = super().as_dict()
+        if '%' in d.get('write_to_mailbox', ''):
+            d['write_to_mailbox'] = (
+                d['write_to_mailbox'] % friendly_date_formats())
+        return d
+
 
 class IdentityConfig(ConfigSectionProxy):
     _KEYS = {
-        'name': str,
-        'address': str}
+        'name': str,       # From: Name
+        'address': str,    # From: Address (must have a matching Account)
+                           # FIXME: Add things to do with crypto! policy, keys
+        'signature': str}  # Signature appended to e-mail message body
 
     def as_address_info(self):
         return AddressInfo(address=self.address, fn=self.name)
+
+    def as_dict(self):
+        d = super().as_dict()
+        if d.get('signature', '').startswith('/'):
+            try:
+                with open(d['signature'], 'r') as fd:
+                    d['signature'] = fd.read().rstrip()
+            except (OSError, IOError):
+                pass
+        return d
 
 
 class ContextConfig(ConfigSectionProxy):
@@ -347,8 +368,9 @@ class ContextConfig(ConfigSectionProxy):
         #tags: [...],             # List of tags this context has access to
         #ui_tags: [...],          # List of tags shown in the user interface
         # Optional...
-        'default_identity': str,     # Default identity when composing mail
         'default_ui_tags': cfg_bool, # Show default app tags in UI?
+        'default_identity': str,     # Default identity when composing mail
+        'default_send_at': str,      # Default delay when sending mail
         'scope_search': str,         # Access: Additional search scoping terms
         'tag_namespace': str,        # Access: Tag namespace for this context
         'remote_context_url': str,
@@ -466,6 +488,7 @@ class ContextConfig(ConfigSectionProxy):
                  for i in self.identities if i),
             'tags': list(tags),
             'default_ui_tags': self.default_ui_tags,
+            'default_send_at': self.default_send_at or '+120',
             'ui_tags': list(utags),
             'key': self.config_key}
 

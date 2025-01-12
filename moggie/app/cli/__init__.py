@@ -30,6 +30,10 @@ def _lazy_notmuch(cls):
     import moggie.app.cli.notmuch as mod
     return getattr(mod, cls)
 
+def _lazy_plan(cls):
+    import moggie.app.cli.plan as mod
+    return getattr(mod, cls)
+
 def _lazy_openpgp(cls):
     import moggie.app.cli.openpgp as mod
     return getattr(mod, cls)
@@ -86,7 +90,8 @@ CLI_COMMANDS = LazyLoader({
     'new':     (_lazy_admin, 'CommandNew'),
     'browse':  (_lazy_admin, 'CommandBrowse'),
     'encrypt': (_lazy_admin, 'CommandEnableEncryption'),
-    'config':  (_lazy_admin, 'CommandConfig'),
+
+    'plan':    (_lazy_plan, 'CommandPlan'),
 
     'autotag': (_lazy_autotag, 'CommandAutotag'),
     'autotag-train': (_lazy_autotag, 'CommandAutotagTrain'),
