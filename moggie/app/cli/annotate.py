@@ -30,8 +30,6 @@ class CommandAnnotate(CommandSearch):
 
     """
     NAME = 'annotate'
-
-    # FIXME: Which option is missing for search to work? BLEH.
     OPTIONS = [[
         (None, None, 'search'),
         ('--context=',   ['default'], 'The context for scope and settings'),
@@ -100,6 +98,13 @@ class CommandAnnotate(CommandSearch):
     def _md_from_summary(self, result):
         return [Metadata(*r) for r in result['messages']]
 
+    async def annotate_messages(self, idxs, annotations):
+        aReq = RequestAnnotate(
+            context=self.context,
+            terms=' OR '.join('id:%s' % i for i in idxs),
+            annotations=annotations)
+        return await self.worker.async_api_request(self.access, aReq)
+
     async def act_on_results(self, results):
         """
         Attempt to annotate a set of metadata results; return those that were
@@ -112,12 +117,7 @@ class CommandAnnotate(CommandSearch):
         for mdlist, result in mdlist_result_pairs:
             req_idxs.extend(md.idx for md in mdlist)
 
-        aReq = RequestAnnotate(
-            context=self.context,
-            terms=' OR '.join('id:%s' % i for i in req_idxs),
-            annotations=self.annotations)
-
-        aRes = await self.worker.async_api_request(self.access, aReq)
+        aRes = await self.annotate_messages(req_idxs, self.annotations)
 
         failed = []
         if 'results' not in aRes:
