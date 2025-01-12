@@ -23,7 +23,7 @@ import threading
 
 from moggie import Moggie
 from ..storage.sqlite_zip import ZipEncryptedSQLite3
-from ..util.friendly import friendly_date, friendly_datetime
+from ..util.friendly import friendly_date_formats
 
 
 class Cron:
@@ -207,15 +207,11 @@ class Cron:
             action))
 
     def _eval_env(self, ts):
-        now_ts = int(ts)
-        now = datetime.datetime.now()
-        fdate = friendly_date(now_ts)
-        env = {
-            'yyyy_mm_dd': fdate,
-            'yyyy_mm': fdate.rsplit('-', 1)[0],
-            'yyyy': fdate.split('-', 1)[0],
-            'now_ts': now_ts,
-            'now': now}
+        env = friendly_date_formats(ts)
+        env.update({
+            'now_ts': env['ts'],
+            'now': datetime.datetime.now()})  # FIXME: Are we sure about this?
+
         if self._eval_env_extra:
             env.update(self._eval_env_extra)
         if 'moggie' not in env:
