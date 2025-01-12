@@ -263,7 +263,8 @@ class ImapConn:
 
     def _id(self):
         if self.username:
-            return 'imap://%s@%s' % (self.username.replace('@', '%40'), self.host_port)
+            return 'imap://%s@%s' % (
+                self.username.replace('@', '%40'), self.host_port)
         return 'imap://' + self.host_port
 
     def please_unlock(self, err=None):
@@ -340,7 +341,7 @@ class ImapConn:
         with self.lock:
             ok, data = _try_wrap(
                 self.conn, self.conn_info, _parsed_imap,
-                    self.unlock().conn.select, mailbox)
+                    self.unlock().conn.select, mailbox, readonly=readonly)
             if ok:
                 self.selected = self._gather_responses()
                 self.selected['mailbox'] = mailbox
@@ -350,7 +351,8 @@ class ImapConn:
     def uids(self, mailbox, skip=0):
         with self.lock:
             ok, data = _try_wrap(self.conn, self.conn_info,
-                _parsed_imap, self.select(mailbox).conn.uid, 'SEARCH', None, 'ALL')
+                _parsed_imap, self.select(mailbox).conn.uid,
+                'SEARCH', None, 'ALL')
         if ok:
             return [int(i) for i in data]
         return []
@@ -394,10 +396,12 @@ class ImapConn:
 
     def fetch_messages(self, mailbox, uids):
         with self.lock:
+            # Note: Selecting with readonly=True, so fetching does
+            # not mark the messages as seen as a side-effect.
             ok, data = _try_wrap(self.conn, self.conn_info,
-                self.select(mailbox).conn.uid, 'FETCH',
+                self.select(mailbox, readonly=True).conn.uid, 'FETCH',
                     (','.join('%d' % i for i in uids)),
-                    '(BODY[])')
+                    '(BODY.PEEK[])')
             if (not ok) or (not data) or (data[0] is None):
                 raise KeyError('Not found: %s' % uids)
 
@@ -409,6 +413,8 @@ class ImapConn:
                 data = _imap_dict(data)
                 if 'BODY[]' in data:
                     yield (int(uid), data['BODY[]'])
+                elif 'BODY.PEEK[]' in data:
+                    yield (int(uid), data['BODY.PEEK[]'])
                 else:
                     raise ValueError('Message not found')
             except (ValueError, IndexError) as e:

@@ -5,6 +5,7 @@ import time
 
 
 _time_multipliers = {
+    's':  1,
     'M':  60,
     'H':  60 * 60,
     'h':  60 * 60,
@@ -12,6 +13,7 @@ _time_multipliers = {
     'w':  60 * 60 * 24 * 7,
     'm': (60 * 60 * 24 * (30 + 31)) // 2,
     'y': (60 * 60 * 24 * (365 + 365 + 365 + 366)) // 4}
+
 
 def friendly_time_to_seconds(word):
     mul = _time_multipliers.get(word[-1:])
@@ -88,3 +90,12 @@ def friendly_path(path, maxlen=40):
         parts.pop(0)
         path = '.../%s' % os.path.join(*parts)
     return path
+
+def friendly_date_formats(ts=None):
+    now_ts = int(ts or time.time())
+    fdate = friendly_date(now_ts)
+    return {
+        'yyyy_mm_dd': fdate,
+        'yyyy_mm': fdate.rsplit('-', 1)[0],
+        'yyyy': fdate.split('-', 1)[0],
+        'ts': now_ts}
