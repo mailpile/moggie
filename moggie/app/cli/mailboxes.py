@@ -80,8 +80,10 @@ class CommandMailboxes(CommandSearch):
     OPTIONS = [[
         (None, None, 'common'),
         ('--context=',   ['default'], 'The context for scope and settings'),
+        ('--stdin=',              [], None), # Emulate stdin on API
         ('--q=',                  [], 'Search terms (used by web API)'),
         ('--qr=',                 [], 'Refining terms (used by web API)'),
+        ('--target=',             [], 'Target mailbox'),
         ('--or',             [False], 'Use OR instead of AND with search terms'),
         ('--offset=',          ['0'], 'Skip the first X results'),
         ('--limit=',            [''], 'Output at most X results'),
@@ -91,6 +93,7 @@ class CommandMailboxes(CommandSearch):
         ('--keep-progress=', [False], 'X=(/path|ID) persist state between runs'),
     ],[
         (None, None, 'removal'),
+        ('--tag=',                [], 'X=<tag op>, tag copied messages'),
         ('--trash',          [False], 'Tag removed messages as trash'),
         ('--delete',         [False], 'Allow permanent deletion of messages'),
         ('--remove-after=',    ['0'], 'X=1h, X=2d, ... remove after some time'),
@@ -108,13 +111,15 @@ class CommandMailboxes(CommandSearch):
         self.moggie = get_shared_moggie()
         self.remove_max_ts = None
         self.remove_messages = None
-        self.remove_tag_op = '+trash'
+        self.remove_tag_op = ['+trash']
         self.remove_post = []
         self.email_cache = {}
         self.source_mailbox = None
         self.target_mailbox = None
+        self.target_dest_ids = []
         self.target_sync_info = []
         self.source_sync_info = []
+        self.format_buffer = None
         self.keep_progress = None
         self.email_emitter = None
         super().__init__(*args, **kwargs)
@@ -123,13 +128,20 @@ class CommandMailboxes(CommandSearch):
         super().validate_configuration(zip_encryption=False)
 
     def configure_target(self, args):
-        self.target_mailbox = args.pop(-1)
+        if not self.options['--target=']:
+            self.options['--target='].append(args.pop(-1))
         if args and args[-1] == '--':
             args.pop(-1)
+        self.target_mailbox = self.options['--target='][-1]
+        if self.target_mailbox == '-':
+            raise Nonsense('Cannot use stdout as a target, sorry!')
         return args
 
+    def strip_options(self, args):
+        return self.configure_target(super().strip_options(list(args)))
+
     def configure(self, args):
-        args = super().configure(self.configure_target(list(args)))
+        args = super().configure(args)
 
         def _format_from_path(fn, exists=False):
             ext = fn.rsplit('.', 1)[-1]
@@ -153,7 +165,8 @@ class CommandMailboxes(CommandSearch):
             elif not self.options['--create='][-1]:
                 self.options['--create='] = [_format_from_path(self.export_to)]
 
-            self.email_emitter = self.get_emitter(fmt=self.options['--create='][-1])
+            creating = self.options['--create='][-1]
+            self.email_emitter = self.get_emitter(fmt=creating)
             self.options['--part='] = [0]  # Fetch entire emails
 
         self.remove_max_ts = friendly_time_ago_to_timestamp(
@@ -167,7 +180,8 @@ class CommandMailboxes(CommandSearch):
                     self.remove_messages = self.remove_from_mailbox
             elif self.sync_src.startswith('in:'):
                 self.remove_messages = self.remove_by_tagging
-                self.remove_tag_op = '-' + self.sync_src.split()[0][3:]
+                self.remove_tag_op = ['-' + self.sync_src.split()[0][3:]]
+                self.validate_and_normalize_tagops(self.remove_tag_op)
             else:
                 self.remove_messages = self.remove_by_tagging
 
@@ -180,6 +194,10 @@ class CommandMailboxes(CommandSearch):
             else:
                 self.keep_progress = os.path.join(
                     self.workdir, 'copy-progress-' + keep_progress)
+
+        if self.options['--tag=']:
+            self.validate_and_normalize_tagops(self.options['--tag='])
+            self.format_buffer = []
 
         return args
 
@@ -260,7 +278,7 @@ class CommandMailboxes(CommandSearch):
             msg_idx_list = 'id:' + ','.join('%s' % idx for idx in msg_idxs)
             query = RequestTag(
                 context=self.context,
-                tag_ops=[([self.remove_tag_op], msg_idx_list)],
+                tag_ops=[(self.remove_tag_op, msg_idx_list)],
                 username=self.options['--username='][-1],
                 password=self.options['--password='][-1])
             logging.debug('Tagging: %s %s' % (self.remove_tag_op, msg_idx_list))
@@ -287,6 +305,19 @@ class CommandMailboxes(CommandSearch):
             self.changed += 1
         else:
             logging.debug('Nothing to remove')
+
+    async def tag_created_messages(self, *dest_ids):
+        msg_idx_list = 'id:' + ','.join('%s' % idx for idx in dest_ids)
+        tag_op = (self.options['--tag='], msg_idx_list, [self.target_mailbox])
+        query = RequestTag(
+            context=self.context,
+            tag_ops=[tag_op],
+            username=self.options['--username='][-1],
+            password=self.options['--password='][-1])
+        logging.debug('Tagging: %s %s' % (self.options['--tag='], msg_idx_list))
+        res = await self.worker.async_api_request(self.access, query)
+        self.changed += 1
+        return res['results'].get('metadata_ids', {})
 
     async def plan_actions(self, results, sync_info):
         # This is where deciding what to copy/delete/sync/etc. will happen
@@ -377,25 +408,13 @@ class CommandCopy(CommandMailboxes):
     UPDT_MESSAGE = 'updated'
     SKIP_MESSAGE = 'skipped'
     FAIL_MESSAGE = 'failed'
+    TAGD_MESSAGE = 'tagged'
 
     RESULT_KEY  = 'COPY'
     FMT_COPIED  = 'Copied\t%(uuid)s\tid:%(dest_id)s\t%(subject)s'
     FMT_UPDATED = 'Updated\t%(uuid)s\tid:%(dest_id)s\t%(subject)s'
     FMT_SKIPPED = 'Skipped\t%(uuid)s\tid:%(dest_id)s\t%(subject)s'
     FMT_FAILED  = 'Failed\t%(uuid)s\t\t%(subject)s'
-
-    def get_emitter(self, fmt=None):
-        emitter = super().get_emitter(fmt=fmt)
-        if fmt is not None:
-            return emitter
-
-        async def wrapped_emitter(item, first=False, last=False):
-            result = await emitter(item, first=first, last=last)
-            if last and self.email_emitter:
-                await self.email_emitter(None, last=True)
-            return result
-
-        return wrapped_emitter
 
     def get_formatter(self):
         self.write_error = lambda e: None
@@ -418,6 +437,25 @@ class CommandCopy(CommandMailboxes):
 
     async def as_exported_emails(self, pnm):
         if not pnm:
+            # All messages have now been exported! Close the mailbox...
+            await self.email_emitter(None, last=True)
+
+            # And if we are tagging messages, which will assign them a
+            # metadata index ID, make sure we report that as the message
+            # idx for use downstream.
+            tids = {}
+            if self.options['--tag='] and self.target_dest_ids:
+                tids = await self.tag_created_messages(*self.target_dest_ids)
+            while self.format_buffer:
+                fmt, parsed = self.format_buffer.pop(0)
+                idx = tids.get(str(parsed['dest_id']))
+                if idx is not None:
+                    parsed['src_id'] = parsed['idx']
+                    parsed['dest_mbx_id'] = parsed['dest_id']
+                    parsed['idx'] = parsed['dest_id'] = idx
+                    parsed[self.RESULT_KEY] += ',' + self.TAGD_MESSAGE
+                yield (fmt, parsed)
+
             return
 
         if not isinstance(pnm, tuple) and not isinstance(pnm[1], Metadata):
@@ -436,6 +474,7 @@ class CommandCopy(CommandMailboxes):
                     fmt = self.FMT_COPIED if (plan == self.COPY_MESSAGE) else self.FMT_UPDATED
                     status = plan
                     self.changed += 1
+                    self.target_dest_ids.append(dest_id)
                     if self.keep_progress:
                         self.target_sync_info.append({'uuid': metadata.uuid_asc})
         else:
@@ -447,7 +486,10 @@ class CommandCopy(CommandMailboxes):
         parsed['dest_id'] = dest_id or '-'
         parsed[self.RESULT_KEY] = status
 
-        yield (fmt, parsed)
+        if self.format_buffer is None:
+            yield (fmt, parsed)
+        else:
+            self.format_buffer.append((fmt, parsed))
 
 
 class CommandMove(CommandCopy):
