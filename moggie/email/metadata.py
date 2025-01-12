@@ -29,7 +29,7 @@ class Metadata(list):
     # These are the headers we want extracted and stored in metadata.
     # Note the Received headers are omitted, too big and too much noise.
     HEADER_RE = re.compile(b'(?:^|\n)(' +
-            b'(?:Date|Message-ID|In-Reply-To|From|To|Cc|Subject):\n?' +
+            b'(?:Date|Message-ID|In-Reply-To|From|Reply-To|To|Cc|Subject):\n?' +
             b'(?:[^\n]+\n\\s+)*[^\n]+' +
         b')',
         flags=(re.IGNORECASE + re.DOTALL))
@@ -40,6 +40,7 @@ class Metadata(list):
     FIND_RE = {
         'in-reply-to': re.compile(r'(?:^|\n)in-reply-to:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
         'message-id': re.compile(r'(?:^|\n)message-id:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
+        'reply-to': re.compile(r'(?:^|\n)reply-to:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
         'subject': re.compile(r'(?:^|\n)subject:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
         'date': re.compile(r'(?:^|\n)date:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
         'from': re.compile(r'(?:^|\n)from:\s*((?:[^\n]+|\n[ \t])*)', flags=(re.IGNORECASE + re.DOTALL)),
@@ -197,6 +198,7 @@ class Metadata(list):
         raise ValueError('Could not parse metadata %s' % p)
 
     def parsed(self, force=False):
+        _u = lambda o: str(o, 'utf-8') if isinstance(o, bytes) else o
         if force or self._parsed is None:
             self._parsed = {
                 'ts': self.timestamp,
@@ -210,7 +212,8 @@ class Metadata(list):
                     'parent_id': self.parent_id,
                     'thread_id': self.thread_id})
             self._parsed.update(parse_header(bytes(self.headers, 'latin-1')))
-            self._parsed.update(self.more)
+            for k, v in self.more.items():
+                self._parsed[k] = _u(v)
             self._parsed['annotations'] = self.annotations
             for k in self._parsed['annotations']:
                 del self._parsed[k]
@@ -218,7 +221,8 @@ class Metadata(list):
         return self._parsed
 
     def get_sync_info(self):
-        return self.more.get('sync_info') or None
+        si = self.more.get('sync_info')
+        return bytes(si, 'utf-8') if isinstance(si, str) else si
 
     def get_dkim_status(self):
         """

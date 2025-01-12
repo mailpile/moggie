@@ -9,7 +9,7 @@ from .rfc2074 import rfc2074_quote, rfc2074_unquote
 from .addresses import AddressInfo, AddressHeaderParser
 
 
-FOLDING_RE = re.compile(r'\r?\n\s+', flags=re.DOTALL)
+FOLDING_RE = re.compile(r'\r?\n\s', flags=re.DOTALL)
 
 RECEIVED_TOKENS = ('from', 'by', 'via', 'with', 'id', 'for')
 RECEIVED_TOKENS_RE = re.compile(r'\b(from|by|via|with|id|for)\s+', flags=re.I)
@@ -197,6 +197,10 @@ def parse_content_type(hdr):
     return [ct, params]
 
 
+def parse_references(header_value):
+    return [r.strip() for r in header_value.replace('><', '> <').split()]
+
+
 def parse_received(header_value):
     try:
         fields, date = [f.strip() for f in header_value.rsplit(';', 1)]
@@ -245,8 +249,9 @@ def parse_header(raw_header, default_charset='utf-8'):
         except UnicodeDecodeError:
             raw_header = str(raw_header, 'latin-1')
 
-    # FIXME: This was '' - which is correct?
-    unfolded = re.sub(FOLDING_RE, ' ', raw_header)
+    # FIXME: Some messages may want this to be ' ' - although that
+    #        definitely breaks other things. Needs more investigation.
+    unfolded = re.sub(FOLDING_RE, '', raw_header)
 
     headers = {}
     order = []
@@ -299,6 +304,9 @@ def parse_header(raw_header, default_charset='utf-8'):
 
         elif orig_hdr == 'received':
             headers[hdr] = headers.get(hdr, []) + [parse_received(val)]
+
+        elif orig_hdr == 'references':
+            headers[hdr] = headers.get(hdr, []) + parse_references(val)
 
         else:
             headers[hdr] = headers.get(hdr, []) + [val]
@@ -407,7 +415,7 @@ def format_header(hname, data,
             folds[-1] = '%s\n ' % p1
             folds.append(p2)
 
-        return ''.join(folds)
+        return ''.join(folds).rstrip()
 
     if hname == '_mbox_separator':
         return values[0]
