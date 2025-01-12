@@ -42,30 +42,37 @@ class AddressInfo(dict):
     def __str__(self):
         return self.normalized()
 
-    def friendly(self, max_width=40):
-        friendly = self.normalized()
+    def friendly(self, max_width=40, only_address=False):
+        if only_address:
+           friendly = ('<%s>' % self.address).strip()
+        else:
+           friendly = ('%s <%s>' % (self.fn, self.address)).strip()
+
         if not max_width or len(friendly) < max_width:
            return friendly
 
         def _t(s, mw):
             return s if (len(s) <= mw) else (s[:(mw-2)] + '..')
 
+        def _rt(s, mw):
+            return s if (len(s) <= mw) else ('..' + s[-(mw-2):])
+
         def _ta(a, mw):
             if len(a) <= mw:
                 return a
             u, h = a.split('@', 1)
-            if len(h) < mw//2:
-                return '%s@%s' % (_t(u, mw//2 - 1), h)
+            if len(h) < (2 * mw)//3:
+                return '%s@%s' % (_t(u, mw//3 - 1), h)
             elif len(u) < mw//2:
-                return '%s@%s' % (u, _t(h, mw//2 - 1))
+                return '%s@%s' % (u, _rt(h, mw//2 - 1))
             else:
-                return _t(a, mw)
+                return _rt(a, mw)
 
-        if self.fn:
+        if self.fn and not only_address:
            fn = _t(self.fn, (2 * max_width) // 3)
            return '%s <%s>' % (fn, _ta(self.address, max_width - (len(fn)+3)))
 
-        return '<%s>' % (_t(self.address, max_width-2))
+        return '<%s>' % (_ta(self.address, max_width-2))
 
 
 class AddressHeaderParser(list):

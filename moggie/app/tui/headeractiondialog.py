@@ -101,13 +101,14 @@ class HeaderActionDialog(MessageDialog):
 
             for addr in addresses:
                 ai = AddressInfo(**addr)
+                addr = ai.friendly(max_width=30, only_address=True) # FIXME: Magic number
                 composers.extend([(
                     'r' if first else None,
-                    'Reply directly to: ' + ai.address,
+                    'Reply directly to: ' + addr,
                     lambda x: self.on_compose([str(ai)], True)
                 ),(
                     'c' if first else None,
-                    'Compose e-mail to: ' + ai.address,
+                    'Compose e-mail to: ' + addr,
                     lambda x: self.on_compose([str(ai)], False))])
                 first = False
 

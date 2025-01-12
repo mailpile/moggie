@@ -7,7 +7,7 @@ import time
 import urwid
 
 from ...email.util import IDX_MAX
-from ...email.addresses import AddressInfo
+from ...email.addresses import AddressInfo, AddressHeaderParser
 from ...email.metadata import Metadata
 from ...email.parsemime import MessagePart
 from ...util.dumbcode import to_json
@@ -193,10 +193,7 @@ Technical details:
                 if isinstance(txt, dict):
                     txt = AddressInfo(**val)
                 if isinstance(txt, AddressInfo):
-                    if txt.fn:
-                        txt = '%s <%s>' % (txt.fn, txt.address)
-                    else:
-                        txt = '<%s>' % txt.address
+                    txt = txt.friendly(max_width=70)
                 else:
                     txt = str(txt).strip()
                 if not txt and not default:
