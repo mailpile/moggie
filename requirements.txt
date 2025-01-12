@@ -6,6 +6,7 @@ markdown
 msgpack
 numpy
 urwid
+urwid-readline
 aiosmtplib
 pyqrcode
 dkimpy

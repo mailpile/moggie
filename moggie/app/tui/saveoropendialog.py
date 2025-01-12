@@ -37,7 +37,7 @@ class SaveOrOpenDialog(MessageDialog):
         else:
             message = 'Note: The directory must already exist.'
 
-        super().__init__(tui, message=message)
+        super().__init__(tui, message=message, title=title)
 
     def make_buttons(self):
         return [

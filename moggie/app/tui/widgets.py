@@ -86,10 +86,10 @@ class Selectable(urwid.WidgetWrap):
 
 class SimpleButton(Selectable):
     LABEL = 'OK'
-    def __init__(self, label=None, on_select=None, style=None):
+    def __init__(self, label=None, on_select=None, style=None, box='[%s]'):
         self.label = label or self.LABEL
         Selectable.__init__(self,
-            urwid.Text((style or 'subtle', '[%s]' % self.label)),
+            urwid.Text((style or 'subtle', box % self.label)),
             on_select={'enter': on_select})
 
 

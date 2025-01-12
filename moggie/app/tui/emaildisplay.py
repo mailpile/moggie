@@ -17,6 +17,7 @@ from .widgets import *
 from .messagedialog import MessageDialog
 from .decorations import EMOJI, ENVELOPES
 from .saveoropendialog import SaveOrOpenDialog
+from .headeractiondialog import HeaderActionDialog
 from .openurldialog import OpenURLDialog
 
 
@@ -84,7 +85,7 @@ Technical details:
         self.crumb = self.VIEW_CRUMBS[self.view]
 
         self.column_hks = [
-#           ('col_hk', 'r:'), 'Reply', ' ',
+            ('col_hk', 'r:'), 'Reply', ' ',
 #           ('col_hk', 'F:'), 'Forward', ' ',
             ('col_hk', 'V:'), 'Change View']
 
@@ -118,8 +119,6 @@ Technical details:
         if key == 'r':
             self.on_reply()
             return None
-        if key == 'R':
-            self.on_reply(group=False)
         if key == 'V':
             self.toggle_view()
             return None
@@ -159,8 +158,8 @@ Technical details:
 
         def _on_attachment(att, filename):
             return lambda e: self.on_attachment(att, filename)
-        def _on_header_select(which):
-            return lambda e: True
+        def _on_click_header(which, field, text, val=None):
+            return lambda e: self.on_click_header(which, field, text, val)
         def _on_deselect():
             return lambda e: True
 
@@ -182,8 +181,7 @@ Technical details:
             fkey = field[:-1].lower()
             if fkey not in self.metadata:
                 if default:
-                    yield line(fkey, field, default, cstate,
-                        action=_on_header_select(fkey))
+                    yield line(fkey, field, default, cstate)
                 continue
 
             value = self.metadata[fkey]
@@ -191,19 +189,22 @@ Technical details:
                 value = [value]
 
             for val in value:
-                if isinstance(val, dict):
-                    val = AddressInfo(**val)
-                if isinstance(val, AddressInfo):
-                    if val.fn:
-                        val = '%s <%s>' % (val.fn, val.address)
+                txt = val
+                if isinstance(txt, dict):
+                    txt = AddressInfo(**val)
+                if isinstance(txt, AddressInfo):
+                    if txt.fn:
+                        txt = '%s <%s>' % (txt.fn, txt.address)
                     else:
-                        val = '<%s>' % val.address
+                        txt = '<%s>' % txt.address
                 else:
-                    val = str(val).strip()
-                if not val and not default:
+                    txt = str(txt).strip()
+                if not txt and not default:
                     continue
-                yield line(fkey, field, val or default, cstate,
-                    action=_on_header_select(fkey))
+                yield line(fkey, field, txt or default, cstate,
+                    action=_on_click_header(
+                        fkey, field[:-1], txt or default,
+                        val=val or None))
                 field = ''
 
         if self.email:
@@ -535,6 +536,10 @@ Technical details:
         self.tui.topbar.open_with(SaveOrOpenDialog,
             'Save or Open Attachment', self, att, filename)
 
+    def on_click_header(self, fkey, field, text, val=None):
+        self.tui.topbar.open_with(HeaderActionDialog,
+            text, None, self, self.metadata, fkey, val or self.metadata[fkey])
+
     def get_data(self, att, callback=None):
         logging.debug('FIXME: Should fetch attachment: %s' % att)
 
@@ -543,7 +548,11 @@ Technical details:
         self.tui.topbar.open_with(
             MessageDialog, 'FIXME: Forwarding does not yet work!')
 
-    def on_reply(self, group=True):
-        logging.debug('FIXME: User wants to reply (group=%s)' % group)
-        self.tui.topbar.open_with(
-            MessageDialog, 'FIXME: Repying does not yet work!')
+    def on_reply(self):
+        self.tui.topbar.open_with(HeaderActionDialog,
+            self.metadata['subject'],
+            None,
+            self,
+            self.metadata,
+            'from',
+            self.metadata['from'])
