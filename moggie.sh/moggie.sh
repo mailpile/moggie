@@ -76,16 +76,13 @@ c() {
     MOGGIE_SH_DRAFT="$(pwd)"
 
     if [ ! -e message.txt ]; then
-        # FIXME: We should have moggie generate this, based on the
-        #        preferences (to/from/etc) for the active context.
-        cat <<tac >message.txt
-To: You <you@example.org>
-From: Me <me@example.org>
-Subject: Draft e-mail
-
-
-$(cat ~/.signature 2>/dev/null)
-tac
+        moggie plan email --format=xargs \
+            |xargs -0 moggie email \
+                --subject='Draft e-mail' --message=' ' \
+                --html=N \
+                --format=rfc822 \
+            |moggie search mailbox:- --format=msgdirs --indent='' \
+            |tar xfz - --strip-components=3
     fi
     cp message.txt draft.txt
     cat <<tac >>draft.txt
