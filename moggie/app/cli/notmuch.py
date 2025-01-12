@@ -1188,13 +1188,15 @@ class CommandAddress(CommandSearch):
             raise Nonsense('Counting requires deduplication')
 
         terms = set([
-            t.rstrip('*').lstrip('-').lstrip('+') for t in self.terms.split()])
-        maxlen = max(4, min(len(t) for t in terms))
-        for term in terms:
-            self.term_substrings.add(term + '$')
-            for ln in range(max(2, len(term) - 4), len(term)-1):
-                for idx in range(0, len(term) - ln):
-                    self.term_substrings.add(term[idx:min(maxlen, idx+ln)])
+            t.rstrip('*').lstrip('-').lstrip('+')
+            for t in self.terms.split() if ':' not in t])
+        if terms:
+            maxlen = max(4, min(len(t) for t in terms))
+            for term in terms:
+                self.term_substrings.add(term + '$')
+                for ln in range(max(2, len(term) - 4), len(term)-1):
+                    for idx in range(0, len(term) - ln):
+                        self.term_substrings.add(term[idx:min(maxlen, idx+ln)])
 
         return args
 
@@ -1219,6 +1221,10 @@ class CommandAddress(CommandSearch):
             return True
 
     def calc_score(self, result):
+        if not self.term_substrings:
+            result['score'] = 1 if result.get('name') else 0
+            return
+
         name_score = sum(10 if ('$' in sub) else 1
                 for sub in self.term_substrings
                 if sub.rstrip('$') in result['name'])
@@ -1232,10 +1238,11 @@ class CommandAddress(CommandSearch):
         if md is not None:
             addr = Metadata(*md).parsed().get('from')
             if addr and addr.address:
+                both = ('%s <%s>' % (addr.fn or '', addr.address)).strip()
                 result = {
                     'address': addr.address,
                     'name': addr.fn,
-                    'name-addr': '%s <%s>' % (addr.fn, addr.address)}
+                    'name-addr': both}
                 if self.is_new(addr, result):
                     if self.scores:
                         self.calc_score(result)
@@ -1246,12 +1253,11 @@ class CommandAddress(CommandSearch):
             mdp = Metadata(*md).parsed()
             for hdr in ('to', 'cc', 'bcc'):
                 for addr in mdp.get(hdr, []):
+                    both = ('%s <%s>' % (addr.fn or '', addr.address)).strip()
                     result = {
                         'address': addr.address,
                         'name': addr.fn,
-                        'name-addr': (
-                            ('%s <%s>' % (addr.fn, addr.address)) if addr.fn else
-                            ('<%s>' % (addr.address)))}
+                        'name-addr': both}
                     if self.is_new(addr, result):
                         if self.scores:
                             self.calc_score(result)
