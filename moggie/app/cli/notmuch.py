@@ -156,6 +156,7 @@ FIXME: Document html and html formats!
     OPTIONS = [[
         (None, None, 'search'),
         ('--context=',   ['default'], 'The context for scope and settings'),
+        ('--stdin=',              [], None), # Emulate stdin on API
         ('--q=',                  [], 'Search terms (used by web API)'),
         ('--qr=',                 [], 'Refining terms (used by web API)'),
         ('--or',             [False], 'Use OR instead of AND with search terms'),
@@ -208,7 +209,7 @@ FIXME: Document html and html formats!
 
         if self.mailboxes and ('-' in self.mailboxes):
             mailbox = self.get_tempfile()
-            mailbox.write(self.stdin.read())
+            mailbox.write(self.read_file_or_stdin(self, '-', _bytes=True))
             mailbox.flush()
             self.mailboxes[self.mailboxes.index('-')] = mailbox.name
             if not self.options.get('--sync-src=', [None])[-1]:
@@ -1863,6 +1864,18 @@ class CommandTag(CLICommand):
         else:
             await self.run_batch(self.tagops)
 
+    def expand_intsets(self, result):
+        changed = result.get('changed')
+        if changed is not None:
+            result['changed'] = list(dumb_decode(result['changed']))
+
+    def as_text(self, result):
+        txt = 'Tagged:\t\t%(comment)s\nChange ID:\t%(id)s' % result['history']
+        if 'ids' in self.options['--output=']:
+            ids = ' '.join('%d' % i for i in result['changed'])
+            txt += '\nChanged:\t%s' % ids
+        return txt
+
     async def run_batch(self, tagops):
         query = RequestTag(
             context=self.context,
@@ -1877,6 +1890,10 @@ class CommandTag(CLICommand):
         msg = await self.worker.async_api_request(self.access, query)
 
         fmt = self.options['--format='][-1]
+
+        if 'ids' in self.options['--output=']:
+            self.expand_intsets(msg['results'])
+
         if fmt == 'json':
             self.print_json(msg['results'])
         elif fmt == 'jhtml':
@@ -1886,9 +1903,7 @@ class CommandTag(CLICommand):
         elif fmt == 'sexp':
             self.print_sexp(msg['results'])
         elif 'history' in msg['results']:
-            self.print(
-                'Tagged:\t\t%(comment)s\nChange ID:\t%(id)s'
-                % msg['results']['history'])
+            self.print(self.as_text(msg['results']))
         else:
             self.print('%s' % msg['results'])
 
