@@ -487,7 +487,7 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
             return caps
         return default
 
-    def choose_worker(self, pop, wait, fn, args, kwargs):
+    def _choose_caps(self, pop, wait, fn, args, kwargs):
         caps = 'read'
         if fn in ('set', 'append', 'delete'):
             caps = 'write'
@@ -501,7 +501,15 @@ class StorageWorkers(WorkerPool, StorageWorkerApi):
             if ptr.ptr_type == Metadata.PTR.IS_IMAP:
                 caps = self._imap_caps_from_arg(dumb_decode(ptr.ptr_path))
 
+        return caps
+
+    def choose_worker(self, pop, wait, fn, args, kwargs):
+        caps = self._choose_caps(pop, wait, fn, args, kwargs)
         return self.with_worker(capabilities=caps, pop=pop, wait=wait)
+
+    async def choose_worker_async(self, pop, wait, fn, args, kwargs):
+        caps = self._choose_caps(pop, wait, fn, args, kwargs)
+        return await self.with_worker_async(capabilities=caps, pop=pop, wait=wait)
 
 
 if __name__ == '__main__':

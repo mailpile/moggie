@@ -989,7 +989,19 @@ class WorkerPool:
         logging.error('Worker not found: %s/%s' % (which, capabilities))
         return None
 
-    def with_worker(self, which=None, capabilities='', pop=False, wait=False):
+    def with_worker(self, *args, **kwargs):
+        for tries, worker in enumerate(self.with_worker_gen(*args, **kwargs)):
+            if worker is not None:
+                return worker
+            time.sleep(min(0.25, 0.01 * tries))
+
+    async def with_worker_async(self, *args, **kwargs):
+        for tries, worker in enumerate(self.with_worker_gen(*args, **kwargs)):
+            if worker is not None:
+                return worker
+            await asyncio.sleep(min(0.25, 0.01 * tries))
+
+    def with_worker_gen(self, which=None, capabilities='', pop=False, wait=False):
         max_workers = self.max_cap_workers.get(capabilities, self.max_workers)
         for tries in range(0, 50):
             worker = name = None
@@ -1006,9 +1018,11 @@ class WorkerPool:
 
                         if worker:
                             if pop:
-                                return self.workers.pop(i)
+                                yield self.workers.pop(i)
+                                return
                             else:
-                                return worker
+                                yield worker
+                                return
 
             if self.counts.get(capabilities, 0) >= max_workers:
                 logging.debug(
@@ -1020,10 +1034,11 @@ class WorkerPool:
                 if worker or not wait:
                     w = (worker.worker if pop else worker).connect(quick=False)
                     if w or not wait:
-                        return worker
+                        yield worker
+                        return
 
             # Busy waits are bad...?
-            time.sleep(min(0.25, 0.01 * tries))
+            yield None
 
         self.housekeeping()
         raise OSError('Failed to find worker for: %s/%s' % (which, capabilities))
@@ -1034,6 +1049,13 @@ class WorkerPool:
         based on the function name and arguments.
         """
         return self.with_worker(pop=pop, wait=wait)
+
+    async def choose_worker_async(self, pop, wait, fn, args, kwargs):
+        """
+        This function exists so subclasses can override it and make choices
+        based on the function name and arguments.
+        """
+        return await self.with_worker_async(pop=pop, wait=wait)
 
     def connect(self, *args, **kwargs):
         # FIXME: This is a noop, real connect() happens later. This may
@@ -1083,7 +1105,7 @@ class WorkerPool:
         for t1 in range(0, 2):
             try:
                 for t2 in range(0, 50):
-                    wEntry = self.choose_worker(True, False, fn, args, kwa)
+                    wEntry = await self.choose_worker_async(True, False, fn, args, kwa)
                     if wEntry:
                         break
                     await asyncio.sleep(0.05)
