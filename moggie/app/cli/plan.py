@@ -25,8 +25,8 @@ class CommandPlan(CLICommand):
     preference).
 
     The options reflect the default settings, and may be further refined
-    or reordered by passing options such as `--emailing=` to indicate
-    what the user is doing.
+    or reordered depending on the scenario and by passing options such
+    as `--emailing=` to indicate what the user is doing.
 
     ### Commands and scenarios
 
@@ -49,16 +49,16 @@ class CommandPlan(CLICommand):
 
     %(OPTIONS)s
 
-    ### Passing arguments
+    ### Feeling Lucky
 
-    The `moggie plan` output can be fed directly to the desired command
-    by using the `xargs` tool, like so:
+    The first-choice `moggie plan` option set can be fed directly to the
+    desired command, by using the `xargs` tool like so:
 
-        $ moggie plan email --format=xargs |xargs -0 moggie email ...
+        $ moggie plan email --xargs |xargs -0 moggie email ...
 
     Or to use a specific scenario:
 
-        $ moggie plan reply1 email --format=xargs |xargs -0 ...
+        $ moggie plan reply1 email --xargs |xargs -0 ...
 
     Note the use of the `-0` argument to `xargs` to guarantee that data
     which is split over multiple lines (e.g. e-mail signatures) gets
@@ -74,6 +74,7 @@ class CommandPlan(CLICommand):
         ('--tabs',         [False], 'Use tabs to separate output columns'),
         ('--message=',          [], 'X=<search terms>, e-mail(s) for context'),
         ('--emailing=',         [], 'X=<address>, config for sending emails'),
+        ('--xargs',        [False], 'Shorthand for --format=xargs'),
         ]]
     SCENARIOS = {
         'compose': ['email', 'copy', 'send'],
@@ -105,6 +106,9 @@ class CommandPlan(CLICommand):
             self.scenario = self.cmds.pop(0)
             if not self.cmds:
                 self.cmds = self.SCENARIOS[self.scenario]
+
+        if self.options['--xargs'][-1]:
+            self.options['--format='].append('xargs')
 
         fmt = self.options['--format='][-1]
         if fmt == 'text':
@@ -191,6 +195,7 @@ class CommandPlan(CLICommand):
     async def transform_compose_copy(self, config):
         _ga = lambda email: self._get_account(config, email)
         return dict((_id, {
+                'context': [self.context],
                 'tag': ['+drafts', '+_mp_incoming_old'],
                 'target': [_ga(identity['address']).get('write_to_mailbox')],
             }) for _id, identity in self._get_identities(config))
@@ -205,6 +210,7 @@ class CommandPlan(CLICommand):
     async def transform_email(self, config):
         arg_sets = dict((_id, {
                 # FIXME: Add crypto-related keys!
+                'context': [self.context],
                 'from': [('%(name)s <%(address)s>' % identity).strip()],
                 'signature': [identity.get('signature', None)]
             }) for _id, identity in self._get_identities(config))
@@ -272,6 +278,7 @@ class CommandPlan(CLICommand):
         email_config = await self.transform_email(config)
         for _id, identity in self._get_identities(config):
             send_config[_id] = send_cfg = {
+                'context': [self.context],
                 'tag-sending': ['-drafts', '+outbox', '+_mp_incoming_old'],
                 'tag-sent': ['-outbox', '+sent'],
                 'send-at': [config.get('default_send_at', '+120')],
@@ -304,7 +311,8 @@ class CommandPlan(CLICommand):
 
         opts = ['OPT%d' % (c+1) for c in range(len(results))]
         bash = [
-            'MOGGIE_SCENARIO=%s' % self.scenario,
+            'MOGGIE_CONTEXT=%s' % shlex.quote(self.context),
+            'MOGGIE_SCENARIO=%s' % shlex.quote(self.scenario),
             'MOGGIE_COMMANDS=( %s )' % ' '.join(self.cmds),
             'MOGGIE_OPT_SETS=( %s )' % ' '.join(opts),
             '']

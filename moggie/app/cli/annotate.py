@@ -63,7 +63,7 @@ class CommandAnnotate(CommandSearch):
                 if pair[:1] == '=':
                     pair = pair[1:]
                 key, value = pair.split('=', 1)
-                self.annotations['=' + key.strip().lower()] = value.strip()
+                self.annotations['=' + key.strip()] = value.strip()
 
         args = super().configure(args[:dashes])
 

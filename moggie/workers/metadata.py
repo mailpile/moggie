@@ -303,7 +303,7 @@ class MetadataWorker(BaseWorker):
                     continue
 
                 for key, val in annotations.items():
-                    key = key.strip().lower()
+                    key = key.strip()
                     if not key:
                         continue
                     elif key[:1] != '=':
