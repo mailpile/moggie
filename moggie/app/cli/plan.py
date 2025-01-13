@@ -267,13 +267,25 @@ class CommandPlan(CLICommand):
 
     async def transform_send(self, config):
         _ga = lambda email: self._get_account(config, email)
-        return dict((_id, {
+
+        send_config = {}
+        email_config = await self.transform_email(config)
+        for _id, identity in self._get_identities(config):
+            send_config[_id] = send_cfg = {
                 'tag-sending': ['-drafts', '+outbox', '+_mp_incoming_old'],
                 'tag-sent': ['-outbox', '+sent'],
                 'send-at': [config.get('default_send_at', '+120')],
                 'send-from': [identity['address']],
                 'send-via': [_ga(identity['address']).get('sendmail')],
-            }) for _id, identity in self._get_identities(config))
+                'send-to': []}
+
+            email_cfg = email_config.get(_id, {})
+            for hdr in ('to', 'cc', 'bcc'):
+                for rcpt in email_cfg.get(hdr, []):
+                    for ai in AddressHeaderParser(rcpt):
+                        send_cfg['send-to'].append(ai.address)
+
+        return send_config
 
     async def transform(self, cmd, config):
         return await (self.transforms[self.scenario+'/'+cmd])(config)

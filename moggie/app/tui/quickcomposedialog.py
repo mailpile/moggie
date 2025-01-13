@@ -207,29 +207,23 @@ class QuickComposeDialog(urwid.WidgetWrap):
 
     def on_email(self, mog_ctx, result):
         email = result[0]['_RFC822']
-
+        self.error = 'Saving %d bytes...' % len(email)
+        self.update_pile()
         self.mog_ctx.copy(*(
                 ['-', '--stdin=%s' % email] +
                 self.plan_args('copy')),
             on_success=self.on_copied)
 
-        self.error = 'Saving %d bytes...' % len(email)
-        self.update_pile()
-
     def on_copied(self, mog_ctx, result):
-        self.error = 'Sending message...'
+        self.error = 'Scheduling message for sending...'
         self.update_pile()
+        self.mog_ctx.send(*(
+                self.plan_args('send') +
+                ['id:%s' % result[0]['idx']]),
+            on_success=self.on_sent)
 
-        idx = result[0]['idx']
-
-        logging.debug('Copy result: %s' % result)
-        logging.debug('Send plan %s' % self.plan_args('send'))
-#        self.mog_ctx.send(*(
-#                self.plan_args('send') +
-#                ['id:%s' % idx]),
-#            on_success=self.on_copied)
-
-        self.error = 'FIXME: Send message id:%s' % idx
+    def on_sent(self, mog_ctx, result):
+        logging.debug('Send result: %s' % result)
+        self.error = 'Success!'
         self.update_pile()
-        if False:
-            self._emit('close')
+        self._emit('close')

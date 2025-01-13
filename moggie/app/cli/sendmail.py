@@ -203,7 +203,7 @@ class SendingProgress:
         back_offs = self.DEFERRED_BACKOFF * (1 + len(self.history))
         backing_off = (
             (status[-1:] == self.DEFERRED) and
-            (ts - back_offs > now))
+            (ts + back_offs > now))
 
         return (not postponed) and (not backing_off) 
 
