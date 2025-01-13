@@ -37,15 +37,36 @@ def quoted_printable_decode(payload, tostr, in_header=False):
     return ''.join((rv if done else tostr(rv)) for done, rv in result)
 
 
+def merge_parts(parts):
+    # This is necessary, because some mail generators will FIRST
+    # base64 encode a header, and THEN split it into =?utf-8?b=...?=
+    # constructs. This may cause utf-8 sequences to get fragmented,
+    # preventing successful decoding.
+    while parts:
+        yield parts.pop(0)
+        if len(parts) > 3:
+            (charset, method, payload), parts = parts[:3], parts[3:]
+            continuation = ['', charset, method]
+            while len(parts) > 3:
+                if parts[:3] == continuation:
+                    payload += parts[3]
+                    parts = parts[4:]
+                else:
+                    break
+            yield charset
+            yield method
+            yield payload
+
+
 def rfc2074_unquote(quoted, strict=False):
     text = []
-    parts = QUOTED_RE.split(re.sub(FOLDING_QUOTED_RE, '?==?', quoted))
+    parts = list(merge_parts(
+        QUOTED_RE.split(re.sub(FOLDING_QUOTED_RE, '?==?', quoted))))
     while parts:
         text.append(parts.pop(0))
         if len(parts) > 3:
-            charset = parts.pop(0)
-            method = parts.pop(0)
-            payload = op = parts.pop(0)
+            (charset, method, payload), parts = parts[:3], parts[3:]
+            op = payload
 
             if strict:
                 charsets = [charset]

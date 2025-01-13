@@ -56,6 +56,13 @@ class RFC2704Tests(unittest.TestCase):
         self.assertEquals(rfc2074_unquote('=?ISO-8859-1?Q?a_b?='), 'a b')
         self.assertEquals(rfc2074_unquote('=?ISO-8859-1?Q?a?= =?ISO-8859-2?Q?_b?='), 'a b')
 
+    def test_tests_from_email(self):
+        for i, o in [
+                ('hello =?utf-8?B?Yn?= =?utf-8?B?Jl?=', 'hello bre'),
+                ('hello =?utf-8?Q?world?= 1 2 =?utf-8?Q?work?=', 'hello world 1 2 work'),
+                ('hello world =?utf-8?Q?ohai?= nice', 'hello world ohai nice')]:
+            self.assertEquals(rfc2074_unquote(i), o)
+
     def test_encoding_hello_verold(self):
         test = 'hello verööld'
         test_b64 = '=?utf-8?b?%s?=' % str(
