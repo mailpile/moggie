@@ -15,8 +15,9 @@ import time
 import urwid
 
 from ...email.metadata import Metadata
-from ...util.friendly import friendly_date, friendly_caps
+from ...util.friendly import friendly_date, friendly_caps, seconds_to_friendly_time
 from ..suggestions import Suggestion
+from ..cli.sendmail import SendingProgress
 
 from .choosetagdialog import ChooseTagDialog
 from .decorations import EMOJI
@@ -155,11 +156,42 @@ class EmailListWalker(urwid.ListWalker):
                 self.SUBJECT_BRACKETS.sub('\\1..\\2',
                 self.SUBJECT_RE.sub('', subj)))
             return md.get('_prefix', '') + subj
+
+        def _tag_info(md, tags):
+            tags = [(t[3:] if t[:3] == 'in:' else t) for t in tags]
+            tags = [t for t in tags if '_' not in (t[:1], t[-1:])]
+            tags = ('(%s)' % ' '.join(tags)) if tags else ''
+            return tags
+
+        def _send_info(md, sp):
+            if sp:
+                d, f, a = len(sp.done), len(sp.failed), len(sp.all_recipients)
+                if not a:
+                    return None
+                nxt = (sp.next_send_time or 0) - int(time.time())
+                if nxt < 0 and (d >= a):
+                    if f:
+                        return '(%d/%d sent, %d failed)' % (d - f, a, f)
+                    else:
+                        return '(sent ok)'  # All good!
+                if nxt > 5:
+                    nxt = 'in ' + seconds_to_friendly_time(nxt, parts=2)
+                else:
+                    nxt = 'ASAP'
+                tried = len(sp.history)
+                errors = ('%d tries, ' % tried) if tried else ''
+                if d:
+                    return '(%d/%d sent, %snext %s)' % (d-f, a, errors, nxt)
+                else:
+                    return '(%swill send %s)' % (errors, nxt)
+            return None
+
         try:
             focused = (pos == self.focus)
             md = self.visible[pos]
             if isinstance(md, list):
                 md = Metadata(*md).parsed()
+            progress = SendingProgress(md) if md.get('annotations') else None
 
             uuid = md['uuid']
             fmt = '%Y-%m-%d'
@@ -203,10 +235,13 @@ class EmailListWalker(urwid.ListWalker):
                 #       even taller (or smaller), be sure to update
                 #       the FOCUS_ITEM_EXTRA_ROWS attribute.
                 ppl = []
-                for which in ('to', 'cc'):
-                    ppl.extend(
-                        (a.get('fn') or a.get('address') or '')
-                        for a in md.get(which, []))
+                if progress:
+                    ppl.extend(progress.all_recipients)
+                if not ppl:
+                    for which in ('to', 'cc'):
+                        ppl.extend(
+                            (a.get('fn') or a.get('address') or '')
+                            for a in md.get(which, []))
                 if ppl:
                     to = ppl.pop(0)
                     if len(to) > 35:
@@ -218,13 +253,11 @@ class EmailListWalker(urwid.ListWalker):
                     ppl = ''
 
                 tm = ts.strftime('%H:%M:%S') if ts else ''
-                tags = [(t[3:] if t[:3] == 'in:' else t) for t in tags]
-                tags = [t for t in tags if '_' not in (t[:1], t[-1:])]
-                tags = ('(%s)' % ' '.join(tags)) if tags else ''
+                info = _send_info(md, progress) or _tag_info(md, tags)
                 kwa = {'wrap': wrap, 'align': 'right'}
                 widget = urwid.Pile([widget, urwid.Columns([
                     ('weight', 50, urwid.Text((prefix+'_to', ppl), wrap=wrap)),
-                    (len(tags),    urwid.Text((prefix+'_tags', tags), **kwa)),
+                    (len(info),    urwid.Text((prefix+'_info', info), **kwa)),
                     (10,           urwid.Text((prefix+'_time', tm), **kwa))],
                     dividechars=1)])
 

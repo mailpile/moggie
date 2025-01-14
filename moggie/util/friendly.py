@@ -7,13 +7,25 @@ import time
 _time_multipliers = {
     's':  1,
     'M':  60,
-    'H':  60 * 60,
     'h':  60 * 60,
+    'H':  60 * 60,
     'd':  60 * 60 * 24,
     'w':  60 * 60 * 24 * 7,
     'm': (60 * 60 * 24 * (30 + 31)) // 2,
     'y': (60 * 60 * 24 * (365 + 365 + 365 + 366)) // 4}
 
+
+
+def seconds_to_friendly_time(secs, parts=1, min_secs=60):
+    suffix, mul = 's', 1
+    for ns, nmul in _time_multipliers.items():
+        if secs < nmul:
+            break
+        suffix, mul = ns, nmul
+    amt = '%d%s' % (secs // mul, suffix)
+    if (parts > 1) and (secs % mul > min_secs):
+        amt += ' ' + seconds_to_friendly_time(secs % mul, parts=parts-1)
+    return amt
 
 def friendly_time_to_seconds(word):
     mul = _time_multipliers.get(word[-1:])

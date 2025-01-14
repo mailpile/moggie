@@ -39,7 +39,6 @@ class LoggingSMTPProtocol(SMTPProtocol):
 
 
 def enable_smtp_logging():
-    #asyncio.get_event_loop().set_debug(True)
     al = logging.getLogger('asyncio')
     al.setLevel(logging.DEBUG)
     ch = logging.StreamHandler()
@@ -146,7 +145,7 @@ class ServerAndSender:
                 self.port = self.PORT_SMTPS
             else:
                 self.port = self.PORT_SMTP
-        
+
         if not self.proto:
             if self.port == self.PORT_SMTPS:
                 self.proto = self.PROTO_SMTP_OVER_TLS
@@ -167,8 +166,16 @@ class SendingProgress:
     PENDING = 'p'
     REJECTED = 'r'  # Permanent errors
     DEFERRED = 'd'  # Temporary errors
+    CANCELED = 'c'  # User cancelled
     SENT = 's'
     USE_MX = 'MX'
+
+    FRIENDLY_STATUS = {
+        PENDING: 'Ready',
+        CANCELED: 'Cancelled',
+        DEFERRED: 'Will retry',
+        REJECTED: 'Rejected',
+        SENT: 'Sent OK'}
 
     DEFERRED_BACKOFF = 30 * 60  # Wait at least 30 minutes after errors
     TIMEOUT = 5
@@ -176,36 +183,44 @@ class SendingProgress:
     def __init__(self, metadata=None):
         self.status = {}
         self.history = []
-        if metadata is not None:
+        if isinstance(metadata, dict):
+            self.from_annotations(metadata.get('annotations', {}))
+        elif hasattr(metadata, 'annotations'):
             self.from_annotations(metadata.annotations)
 
     all_recipients = property(lambda s: [
         rcpt for rcpt, status in s.get_rcpt_statuses()])
 
+    failed = property(lambda s: [
+        rcpt for rcpt, status in s.get_rcpt_statuses()
+        if status[-1:] == s.REJECTED])
+
     unsent = property(lambda s: [
         rcpt for rcpt, status in s.get_rcpt_statuses()
-        if s._is_unsent(status)])
+        if s.is_unsent(status)])
 
     done = property(lambda s: [
         rcpt for rcpt, status in s.get_rcpt_statuses()
-        if s._is_unsent(status)])
+        if not s.is_unsent(status)])
 
-    def _is_unsent(self, status):
-        return status[-1:] not in (self.SENT, self.REJECTED)
+    next_send_time = property(lambda s: min([
+            s._send_time(status) for rcpt, status in s.get_rcpt_statuses()
+            if s.is_unsent(status)
+        ]) if s.unsent else None)
+
+    def is_unsent(self, status):
+        return status[-1:] not in (self.SENT, self.CANCELED, self.REJECTED)
+
+    def _send_time(self, status):
+        send_ts = int(status[:-1], 16)
+        if status[-1:] == self.DEFERRED:
+            back_off_s = self.DEFERRED_BACKOFF * (1 + len(self.history))
+            send_ts += back_off_s
+
+        return send_ts
 
     def _is_ready(self, now, status):
-        ts = int(status[:-1], 16)
-
-        # Is sending postponed/scheduled for the future?
-        postponed = (ts > now)
-
-        # Are we in a deferred state and tried too recently?
-        back_offs = self.DEFERRED_BACKOFF * (1 + len(self.history))
-        backing_off = (
-            (status[-1:] == self.DEFERRED) and
-            (ts + back_offs > now))
-
-        return (not postponed) and (not backing_off) 
+        return (self._send_time(status) <= now)
 
     def __str__(self):
         return '<Sending status=%s history=%s>' % (self.status, self.history)
@@ -260,6 +275,7 @@ class SendingProgress:
     async def attempt_send(progress, sending_email,
             timeout=TIMEOUT,
             send_at=None,
+            debug=False,
             now=None):
         """
         Attempt to connect to all the mail servers we have recipients for,
@@ -276,9 +292,11 @@ class SendingProgress:
         for ss, stats in progress.status.items():
             rcpts = [
                 r for r, s in stats.items()
-                if progress._is_unsent(s) and progress._is_ready(now, s)]
+                if progress.is_unsent(s) and progress._is_ready(now, s)]
             if rcpts:
-                if await progress.smtp_send(sending_email, ss, rcpts, timeout):
+                if await progress.smtp_send(sending_email, ss, rcpts,
+                        timeout=timeout,
+                        debug=debug):
                     made_changes = True
 
         return made_changes
@@ -289,23 +307,28 @@ class SendingProgress:
         updates = []
         for ss, stats in progress.status.items():
             for rcpt, stat in stats.items():
-                if progress._is_unsent(stat):
-                    updates.append((stat[-1:], ss, rcpt))
+                if progress.is_unsent(stat):
+                    updates.append((progress.PENDING, ss, rcpt))
         for update in updates:
             progress.progress(*update, ts=new_ts)
         return bool(updates)
 
-    async def smtp_send(progress, sending_email, ss, recipients, timeout=TIMEOUT):
+    async def smtp_send(progress, sending_email, ss, recipients,
+            timeout=TIMEOUT, debug=False):
         enable_smtp_logging()
 
         try:
+            if debug:
+                asyncio.get_event_loop().set_debug(True)
             smtp_client = aiosmtplib.SMTP(
-                hostname=ss.host, 
+                hostname=ss.host,
                 port=ss.port,
                 use_tls=ss.use_tls,
                 start_tls=ss.use_starttls,
                 timeout=timeout)
         except:
+            if debug:
+                asyncio.get_event_loop().set_debug(False)
             logging.exception('Failed to create smtp_client(%s)' % ss)
             return False
 
@@ -338,11 +361,20 @@ class SendingProgress:
                         status = progress.SENT
                     progress.progress(status, ss, rcpt, log=msg)
 
+        except aiosmtplib.errors.SMTPRecipientsRefused as e:
+            logging.debug('Recipients refused: %s' % e)
+            progress.progress(progress.REJECTED, ss, *recipients, log=e)
+
         except aiosmtplib.errors.SMTPException as e:
+            logging.debug('SMTPException: %s' % e)
             progress.progress(progress.DEFERRED, ss, *recipients, log=e)
 
         except (IOError, OSError, ssl.SSLCertVerificationError) as e:
             progress.progress(progress.DEFERRED, ss, *recipients, log=e)
+
+        finally:
+            if debug:
+                asyncio.get_event_loop().set_debug(False)
 
         try:
             smtp_client.close()
@@ -350,6 +382,22 @@ class SendingProgress:
             pass
 
         return True
+
+    def explain(progress):
+        for ss, stats in progress.status.items():
+            for rcpt, stat in sorted(stats.items()):
+                if progress.is_unsent(stat):
+                    statcode = stat[-1:]
+                    ts = progress._send_time(stat)
+                else:
+                    ts, statcode = int(stat[:-1], 16), stat[-1:]
+                yield (
+                    ss.sender,
+                    ss.host,
+                    rcpt,
+                    statcode,
+                    progress.FRIENDLY_STATUS[statcode],
+                    ts)
 
 
 class CommandSend(CommandAnnotate):
@@ -401,6 +449,7 @@ class CommandSend(CommandAnnotate):
     OPTIONS = CommandAnnotate.OPTIONS + [[
         (None, None, 'sending'),
         ('--tag-sending=',      [], 'X=Tag to add/remove from emails in flight'),
+        ('--tag-failed=',       [], 'X=Tag to add/remove from failed messages'),
         ('--tag-sent=',         [], 'X=Tag to add/remove from sent messages'),
         ('--send-to=',          [], 'X=Address to send to (ignores headers)'),
         ('--send-from=',    [None], 'X=Address to send as (ignores headers)'),
@@ -411,6 +460,8 @@ class CommandSend(CommandAnnotate):
         ('--use-tor=',     [False], 'X=host:port, connect via Tor'),
         ('--ignore-all',   [False], 'Ignore/override existing sending plan and state'),
         ('--ignore-ts',    [False], 'Ignore/override existing timestamps'),
+        ('--retry-now',    [False], 'Retry sending immediately'),
+        ('--debug',        [False], 'Enable low level debugging of SMTP dialog'),
         ]]
 
     # These are just the most critical, known-to-be-private/internal headers.
@@ -431,6 +482,10 @@ class CommandSend(CommandAnnotate):
         if self.options['--send-via='] and self.options['--direct-smtp'][-1]:
             raise Nonsense('Please use --send-via= or --direct-smtp, not both.')
 
+        if self.options['--retry-now'][-1]:
+            self.options['--send-at='].append('NOW')
+            self.options['--ignore-ts'].append(True)
+
         send_at = self.options['--send-at='][-1]
         if send_at == 'NOW':
             send_at = 0
@@ -450,6 +505,9 @@ class CommandSend(CommandAnnotate):
 
         if self.options['--tag-sending=']:
             self.validate_and_normalize_tagops(self.options['--tag-sending='])
+
+        if self.options['--tag-failed=']:
+            self.validate_and_normalize_tagops(self.options['--tag-failed='])
 
         if self.options['--tag-sent=']:
             self.validate_and_normalize_tagops(self.options['--tag-sent='])
@@ -477,7 +535,7 @@ class CommandSend(CommandAnnotate):
         hdrs = b'\n' + raw_message[:hend]
         return self.SANITIZE_HEADER.sub(b'', hdrs)[1:] + raw_message[hend:]
 
-    async def process(self, metadata, parsed_email, raw_message):
+    async def process(self, metadata, parsed_email, raw_message, debug=False):
         # If we have metadata, check how much progress has been made
         if self.options['--ignore-all'][-1]:
             progress = SendingProgress()
@@ -533,7 +591,9 @@ class CommandSend(CommandAnnotate):
 
         # Attempt to send...
         send_at = self.send_at if self.options['--ignore-ts'][-1] else None
-        if await progress.attempt_send(clean_message, send_at=send_at):
+        if await progress.attempt_send(clean_message,
+                send_at=send_at,
+                debug=debug):
             changed = True
 
         if changed:
@@ -555,6 +615,11 @@ class CommandSend(CommandAnnotate):
             tag_sent = self.options['--tag-sent=']
             if tag_sent and in_index:
                 await self.tag_message(metadata, tag_sent)
+
+        if progress.failed and changed:
+            tag_failed = self.options['--tag-failed=']
+            if tag_failed and in_index:
+                await self.tag_message(metadata, tag_failed)
 
         return changed
 
@@ -579,7 +644,8 @@ class CommandSend(CommandAnnotate):
             parsed_email = res['email']
             raw_message = base64.b64decode(parsed_email.pop('_RAW'))
 
-            if await self.process(md, parsed_email, raw_message):
+            if await self.process(md, parsed_email, raw_message,
+                    debug=self.options['--debug'][-1]):
                 processed.append(md)
             else:
                 logging.debug('Not processed: %s' % md.idx)

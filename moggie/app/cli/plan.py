@@ -280,10 +280,8 @@ class CommandPlan(CLICommand):
             send_config[_id] = send_cfg = {
                 'context': [self.context],
                 'tag-sending': ['-drafts', '+outbox', '+_mp_incoming_old'],
+                'tag-failed': ['+inbox', '+urgent'],
                 'tag-sent': ['-outbox', '+sent'],
-                'send-at': [config.get('default_send_at', '+120')],
-                'send-from': [identity['address']],
-                'send-via': [_ga(identity['address']).get('sendmail')],
                 'send-to': []}
 
             email_cfg = email_config.get(_id, {})
@@ -291,6 +289,12 @@ class CommandPlan(CLICommand):
                 for rcpt in email_cfg.get(hdr, []):
                     for ai in AddressHeaderParser(rcpt):
                         send_cfg['send-to'].append(ai.address)
+
+            if send_cfg.get('send-to'):
+                send_cfg.update({
+                    'send-from': [identity['address']],
+                    'send-at': [config.get('default_send_at', '+120')],
+                    'send-via': [_ga(identity['address']).get('sendmail')]})
 
         return send_config
 

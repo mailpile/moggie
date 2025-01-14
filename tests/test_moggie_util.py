@@ -106,6 +106,15 @@ class DummbCodeTests(unittest.TestCase):
 
 
 class FriendlyTests(unittest.TestCase):
+    def test_secs_to_friendly_time(self):
+        self.assertEqual(seconds_to_friendly_time(60, parts=2), '1M')
+        self.assertEqual(seconds_to_friendly_time(120, parts=2), '2M')
+        self.assertEqual(seconds_to_friendly_time(3721, parts=2), '1H 2M')
+        self.assertEqual(seconds_to_friendly_time(3721, parts=3), '1H 2M') # No seconds!
+        self.assertEqual(seconds_to_friendly_time(86400, parts=2), '1d')
+        self.assertEqual(seconds_to_friendly_time(86401, parts=2), '1d') # No seconds!
+        self.assertEqual(seconds_to_friendly_time(90000, parts=2), '1d 1H')
+
     def test_friendly_time_ago(self):
         ts = 1710849600  # 19 mar 2024, 12:00 UTC
         testing = friendly_time_ago_to_timestamp

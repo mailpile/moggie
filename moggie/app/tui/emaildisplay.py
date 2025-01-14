@@ -11,7 +11,10 @@ from ...email.addresses import AddressInfo, AddressHeaderParser
 from ...email.metadata import Metadata
 from ...email.parsemime import MessagePart
 from ...util.dumbcode import to_json
+from ...util.friendly import friendly_datetime, seconds_to_friendly_time
 from ...util.mailpile import sha1b64
+
+from ..cli.sendmail import SendingProgress
 
 from .widgets import *
 from .messagedialog import MessageDialog
@@ -46,6 +49,12 @@ class EmailDisplay(urwid.ListBox):
         'message/rfc822': ('message', 'eml'),
         'image/jpeg': ('attachment', 'jpg')}
 
+    PLAINTEXT_URL_RE = re.compile(
+        r'((?:https?://|mailto:|www\.)[a-zA-Z0-9\._-]+[^\s)>]*)')
+    MARKDOWN_URL_RE = re.compile(
+        r'((?:[\*-] +|#+ +|\[\d+\] +)?\!?(?:\[.*?\]|))(\(\s*#\d+\.[a-f0-9]{12}\s*\)|\<#\d+\.[a-f0-9]{12}\>)([\.\? ]*)',
+        re.DOTALL)
+
     MESSAGE_MISSING = """\
 Message is missing
 
@@ -74,14 +83,14 @@ Technical details:
         self.tui = tui
         self.mailbox = mailbox
         self.metadata = metadata
+        self.send_progress = None
         self.username = username
         self.password = password
         self.selected = selected
         self.email = parsed
         self.view = self.VIEW_EMAIL
         self.marked_read = False
-        self.has_attachments = None
-        self.uuid = self.metadata['uuid']
+        self.retrying = False
         self.crumb = self.VIEW_CRUMBS[self.view]
 
         self.column_hks = [
@@ -92,12 +101,17 @@ Technical details:
         self.search_id = None
         self.rendered_width = self.COLUMN_NEEDS
         self.widgets = urwid.SimpleListWalker([])
-        self.header_lines = list(self.headers())
+        self.header_lines = []
         self.email_display = [self.no_body('Loading ...')]
         urwid.ListBox.__init__(self, self.widgets)
-        self.update_content()
 
-        adjust = 3 if selected else 2
+        self.refresh(metadata)
+
+        adjust = 2
+        if self.selected:
+            adjust += 1
+        if self.send_progress is not None:
+            adjust += 1
         self.set_focus(len(self.header_lines) - adjust)
 
         # Expire things from our result cache
@@ -107,6 +121,16 @@ Technical details:
             del RESULT_CACHE[k]
 
         self.send_email_request()
+
+    def refresh(self, metadata):
+        self.metadata = metadata
+        self.send_progress = sp = SendingProgress(metadata)
+        if not sp.all_recipients:
+            self.send_progress = None
+        self.has_attachments = None
+        self.uuid = self.metadata['uuid']
+        self.header_lines = list(self.headers())
+        self.update_content()
 
     def cleanup(self):
         self.mog_ctx.moggie.unsubscribe(self.name)
@@ -160,6 +184,8 @@ Technical details:
             return lambda e: self.on_attachment(att, filename)
         def _on_click_header(which, field, text, val=None):
             return lambda e: self.on_click_header(which, field, text, val)
+        def _on_click_cancel(sender, server, rcpt):
+            return lambda e: self.on_click_cancel(sender, server, rcpt)
         def _on_deselect():
             return lambda e: True
 
@@ -235,6 +261,73 @@ Technical details:
                 'Message selected (click to deselect)',
                 '    ', action=_on_deselect())
 
+        if (self.send_progress is not None) and (self.view == self.VIEW_EMAIL):
+            lines, progress, now = [], self.send_progress, int(time.time())
+            explained = list(progress.explain())
+            if explained:
+                if self.retrying:
+                    retry_now = urwid.Text(('send_retry_now', 'Working...'))
+                    retry_now_w = len('Working...')  #FIXME
+                elif progress.unsent:
+                    retry_now = SimpleButton('Retry Now',
+                        style='send_retry_now',
+                        on_select=self.on_click_retry_now)
+                    retry_now_w = 2 + len(retry_now.label)
+                else:
+                    retry_now = retry_now_w = None
+
+                cols = [('weight',  1, urwid.Text(('send_plan_title', 'Sending Status:')))]
+                if retry_now is not None:
+                    cols.append(('fixed',  retry_now_w, retry_now))
+                    lines.append(urwid.Columns(cols, dividechars=1))
+                else:
+                    lines.append(cols[0][-1])
+
+                sender_w = max(len(ex[0]) for ex in explained)
+                server_w = max(len(ex[1]) for ex in explained)
+                rcpt_w = max(len(ex[2]) for ex in explained)
+                for sender, server, rcpt, statcode, status, ts in explained:
+                    sc = '_' + statcode
+
+                    if progress.is_unsent(statcode):
+                        cancel = SimpleButton('x',
+                            on_select=_on_click_cancel(sender, server, rcpt),
+                            style='send_cancel'+sc)
+                        cancel = None  #FIXME
+                        if ts > now:
+                            status = '%s, next attempt in %s' % (
+                                status, seconds_to_friendly_time(ts - now, parts=2))
+                        else:
+                            status = '%s, should send ASAP' % status
+                    else:
+                        status = '%s at %s' % (status, friendly_datetime(ts))
+                        cancel = None
+
+                    columns = [
+                        ('fixed',        1, urwid.Text(' ')),
+                        ('fixed', sender_w, urwid.Text(('send_sender'+sc, sender))),
+                        ('fixed',        2, urwid.Text(('send_spacer'+sc, '->'))),
+                        ('fixed',   rcpt_w, urwid.Text(('send_rcpt'+sc,   rcpt))),
+                        ('fixed',        2, urwid.Text(('send_spacer'+sc, '::'))),
+                        ('weight',       1, urwid.Text(('send_status'+sc, status)))]
+                    if cancel:
+                        columns.append(
+                            ('fixed', 2+len(cancel.label), cancel))
+                    lines.append(urwid.Columns(columns, dividechars=1))
+
+            if self.send_progress.history:
+                lines.append(urwid.Text(('send_hist_title', '\nHistory:')))
+
+            for ts, info in sorted(self.send_progress.history)[-5:]:
+                friendly_ts = friendly_datetime(ts)
+                lines.append(urwid.Columns([
+                    ('fixed',                1, urwid.Text(' ')),
+                    ('fixed', len(friendly_ts), urwid.Text(('send_hist_date', friendly_ts))),
+                    ('weight',               1, urwid.Text(('send_hist_info', info))),
+                    ], dividechars=1))
+
+            yield urwid.LineBox(urwid.Pile(lines))
+
         yield(urwid.Divider())
 
     def render(self, size, focus=False):
@@ -244,6 +337,7 @@ Technical details:
     def toggle_view(self):
         next_view = (self.VIEWS.index(self.view) + 1)  % len(self.VIEWS)
         self.view = self.VIEWS[next_view]
+        self.header_lines = list(self.headers())
         self.send_email_request()
 
     def get_search_command(self):
@@ -264,6 +358,7 @@ Technical details:
                 # Reset to the bare minimum, we can as for more if the user
                 # wants it (and as the app evolves).
                 '--with-nothing=Y',
+                '--with-metadata=Y',
                 '--with-missing=N',
                 '--with-headers=Y',
                 '--with-structure=Y',
@@ -294,9 +389,9 @@ Technical details:
         cache_id = sha1b64('%s' % args)
         return cache_id, command, args
 
-    def send_email_request(self):
+    def send_email_request(self, use_cache=True):
         self.search_id, command, args = self.get_search_command()
-        cached = RESULT_CACHE.get(self.search_id)
+        cached = RESULT_CACHE.get(self.search_id) if use_cache else None
         if cached:
             self.incoming_parse(None, copy.deepcopy(cached[1]), cached=True)
         else:
@@ -353,6 +448,9 @@ Technical details:
         RESULT_CACHE[self.search_id] = (time.time(), copy.deepcopy(message))
         self.email_display = []
 
+        if isinstance(message, dict) and ('metadata' in message):
+            self.refresh(message['metadata'])
+
         if isinstance(message, dict) and ('parsed' in message):
             self.email = message['parsed']
             if self.email:
@@ -375,12 +473,6 @@ Technical details:
         self.crumb = self.VIEW_CRUMBS[self.view]
         self.tui.update_topbar()
         self.update_content()
-
-    PLAINTEXT_URL_RE = re.compile(
-        r'((?:https?://|mailto:|www\.)[a-zA-Z0-9\._-]+[^\s)>]*)')
-    MARKDOWN_URL_RE = re.compile(
-        r'((?:[\*-] +|#+ +|\[\d+\] +)?\!?(?:\[.*?\]|))(\(\s*#\d+\.[a-f0-9]{12}\s*\)|\<#\d+\.[a-f0-9]{12}\>)([\.\? ]*)',
-        re.DOTALL)
 
     def parsed_email_to_widget_list(self):
         from moggie.security.html import html_to_markdown
@@ -553,3 +645,18 @@ Technical details:
             self.metadata,
             'from',
             self.metadata['from'])
+
+    def on_click_cancel(self, sender, server, rcpt):
+        logging.debug('FIXME: Cancel %s[%s]=>%s' % (sender, server, rcpt))
+
+    def on_click_retry_now(self, *args):
+        self.retrying = True
+        self.header_lines = list(self.headers())
+        self.update_content()
+        self.mog_ctx.send(
+            *['--retry-now', 'id:%s' % self.metadata['idx']],
+            on_success=self.on_retried)
+
+    def on_retried(self, *args):
+        self.retrying = False
+        self.send_email_request(use_cache=False)
