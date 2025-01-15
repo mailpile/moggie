@@ -12,6 +12,7 @@ from moggie.util.dumbcode import *
 from moggie.util.friendly import *
 from moggie.util.intset import IntSet
 from moggie.util.wordblob import *
+from moggie.util.sendmail import *
 
 
 class DoctestTests(unittest.TestCase):
@@ -274,3 +275,23 @@ class WordblobTest(unittest.TestCase):
         self.assertEqual(wordblob_search('f*', b1, 10, order=-1), ['f', 'Five', 'Four'])
         self.assertEqual(wordblob_search('f*', b1, 10, order=+1), ['f', 'Four', 'Five'])
 
+
+class ServerAndSenderTests(unittest.TestCase):
+    def test_sas_parser(self):
+        N = None
+        for spec, proto, host, port, usr, pwd in (
+            ('[::1]',                  'smtp',    '[::1]',        25, N, N),
+            ('127.0.0.1:123',          'smtp',    '127.0.0.1',   123, N, N),
+            ('smtps://127.0.0.1:123/', 'smtps',   '127.0.0.1',   123, N, N),
+            ('example.org:123',        'smtp',    'example.org', 123, N, N),
+            ('smtpclr://example.org/', 'smtpclr', 'example.org',  25, N, N),
+            ('example.org',            'smtp',    'example.org',  25, N, N),
+            ('smtps:u@127.0.0.1:123',  'smtps',   '127.0.0.1',   123, 'u', ''),
+            ('u@h:p@ss@ex.org:44',     'smtp',    'ex.org', 44, 'u@h', 'p@ss'),
+            ('u@h:p@ss@[::1]:22',      'smtp',    '[::1]',  22, 'u@h', 'p@ss'),
+        ):
+            sas = ServerAndSender().parse_server_spec(spec)
+
+            self.assertEquals(sas.host, host)
+            self.assertEquals(sas.port, port)
+            self.assertEquals(sas.username_and_password(), (usr, pwd))

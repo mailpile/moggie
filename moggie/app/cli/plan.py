@@ -176,6 +176,12 @@ class CommandPlan(CLICommand):
 
                 self._gather_context_emails(parsed)
 
+    def _get_account_id(self, config, email):
+        for acct, info in config['accounts'].items():
+            if email in info['addresses']:
+                return acct
+        raise KeyError(email)
+
     def _get_account(self, config, email):
         for acct, info in config['accounts'].items():
             if email in info['addresses']:
@@ -272,7 +278,7 @@ class CommandPlan(CLICommand):
         return arg_sets
 
     async def transform_send(self, config):
-        _ga = lambda email: self._get_account(config, email)
+        _ga_id = lambda email: self._get_account_id(config, email)
 
         send_config = {}
         email_config = await self.transform_email(config)
@@ -294,7 +300,7 @@ class CommandPlan(CLICommand):
                 send_cfg.update({
                     'send-from': [identity['address']],
                     'send-at': [config.get('default_send_at', '+120')],
-                    'send-via': [_ga(identity['address']).get('sendmail')]})
+                    'send-via': ['@%s' % _ga_id(identity['address'])]})
 
         return send_config
 

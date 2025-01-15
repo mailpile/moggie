@@ -13,8 +13,7 @@ from ...email.parsemime import MessagePart
 from ...util.dumbcode import to_json
 from ...util.friendly import friendly_datetime, seconds_to_friendly_time
 from ...util.mailpile import sha1b64
-
-from ..cli.sendmail import SendingProgress
+from ...util.sendmail import SendingProgress
 
 from .widgets import *
 from .messagedialog import MessageDialog
@@ -283,9 +282,9 @@ Technical details:
                 else:
                     lines.append(cols[0][-1])
 
-                sender_w = max(len(ex[0]) for ex in explained)
-                server_w = max(len(ex[1]) for ex in explained)
-                rcpt_w = max(len(ex[2]) for ex in explained)
+                sender_w = max(len(ex[0] or '') for ex in explained)
+                server_w = max(len(ex[1] or '') for ex in explained)
+                rcpt_w = max(len(ex[2] or '') for ex in explained)
                 for sender, server, rcpt, statcode, status, ts in explained:
                     sc = '_' + statcode
 
