@@ -67,7 +67,7 @@ class CommandSend(CommandAnnotate):
         ('--send-to=',          [], 'X=Address to send to (ignores headers)'),
         ('--send-from=',    [None], 'X=Address to send as (ignores headers)'),
         ('--send-at=',     ['NOW'], 'X=(NOW*|+seconds|@timestamp)'),
-        ('--send-via=',         [], 'X=(@account|(smtp|smtps)://[user:pass@]host:port)'),
+        ('--send-via=',         [], 'X=(@account|/bin/path|proto://[user:pass@]host:port)'),
         ('--direct-smtp',  [False], 'Send directly via recipient SMTP servers'),
         ('--use-headers',  [False], 'Scan headers for from/to/cc/bcc'),
         ('--use-tor=',     [False], 'X=host:port, connect via Tor'),

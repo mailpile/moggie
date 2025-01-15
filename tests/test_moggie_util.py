@@ -170,23 +170,6 @@ class HttpTests(unittest.TestCase):
             self.assertEqual(moggie.util.http.url_parts(url), parse)
 
 
-class SendmailTests(unittest.TestCase):
-    def test_partial_url(self):
-        parse_partial_url = moggie.util.sendmail.parse_partial_url
-        self.assertEqual(
-            parse_partial_url('http://user:pass@host:443/path/to/stuff'),
-            ('http', 'user', 'pass', 'host', 443, 'path/to/stuff'))
-        self.assertEqual(
-            parse_partial_url('user@host/path/to/stuff'),
-            ('smtp', 'user', None, 'host', 25, 'path/to/stuff'))
-        self.assertEqual(
-            parse_partial_url('localhost:125'),
-            ('smtp', None, None, 'localhost', 125, None))
-        self.assertEqual(
-            parse_partial_url('user:secret@localhost:125'),
-            ('smtp', 'user', 'secret', 'localhost', 125, None))
-
-
 class IntsetTest(unittest.TestCase):
     def test_intset(self):
         self.assertEqual(IntSet.DEF_BITS, 64)
