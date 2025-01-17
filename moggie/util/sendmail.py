@@ -48,7 +48,7 @@ class ServerAndSender:
     PORT_SMTP = 25
     PORT_SMTPS = 465
 
-    def __init__(self, via=None, sender=None, key=None):
+    def __init__(self, via=None, sender=None, key=None, accounts=None):
         self._reset()
 
         self.sender = sender
@@ -56,14 +56,10 @@ class ServerAndSender:
             self.parse_key(key)
 
         elif via:
-            if via[:1] == '@':
-                self.account = via[1:]
-            elif via[:1] == '/':
-                self.command = via
-            elif via[:1] == '|':
-                self.command = via[1:]
-            else:
-                self.parse_server_spec(via)
+            self.parse_via(via)
+
+        if self.account and accounts:
+            self.configure_account(accounts)
 
     use_tls = property(lambda s: (s.proto == s.PROTO_SMTP_OVER_TLS))
 
@@ -98,6 +94,26 @@ class ServerAndSender:
         return ('%s/%s/%s/%d/%s'
             % (self.proto, self.host, self.auth or '', self.port, self.sender))
 
+    def configure_account(self, accounts):
+        acct = accounts[self.account]    # Raises if does not exist
+        self.parse_via(acct['sendmail']) # Again, raises...
+        self.override_credentials(password=acct.get('sendmail_password'))
+
+    def override_credentials(self, username=None, password=None):
+        if username is None and password is None:
+            return
+
+        u, p = self.username_and_password()
+        if username is not None:
+            u = username
+        if password is not None:
+            p = password
+
+        if u or p:
+            self.auth = self.encode_userpass(username=u, password=p)
+        else:
+            self.auth = None
+
     def parse_key(self, key):
         self._reset()
 
@@ -114,6 +130,16 @@ class ServerAndSender:
 
         return self
 
+    def parse_via(self, via):
+        if via[:1] == '@':
+            self.account = via[1:]
+        elif via[:1] == '/':
+            self.command = via
+        elif via[:1] == '|':
+            self.command = via[1:]
+        else:
+            self.parse_server_spec(via)
+
     def username_and_password(self):
         if self.auth:
             u, p = self.auth.split(',', 1)
@@ -122,13 +148,20 @@ class ServerAndSender:
             return u, p
         return None, None
 
-    def encode_userpass(self, userpass):
-        if ':' in userpass:
-            u, p = userpass.split(':', 1)
-        else:
-            u, p = userpass, ''
-        u = str(base64.b64encode(bytes(u, 'utf-8')), 'utf-8')
-        p = str(base64.b64encode(bytes(p, 'utf-8')), 'utf-8')
+    def encode_userpass(self, userpass=None, username=None, password=None):
+        u = p = ''
+        if userpass is not None:
+            if ':' in userpass:
+                u, p = userpass.split(':', 1)
+            else:
+                u, p = userpass, ''
+        if username is not None:
+            u = username
+        if password is not None:
+            p = password
+
+        u = str(base64.b64encode(bytes(u or '', 'utf-8')), 'utf-8')
+        p = str(base64.b64encode(bytes(p or '', 'utf-8')), 'utf-8')
         return '%s,%s' % (u, p)
 
     def parse_server_spec(self, sspec):
@@ -207,6 +240,7 @@ class SendingProgress:
     TIMEOUT = 5
 
     def __init__(self, metadata=None, annotations=None):
+        self.last_ts = 0
         self.status = {}
         self.history = []
         if isinstance(metadata, dict):
@@ -218,6 +252,10 @@ class SendingProgress:
 
     all_recipients = property(lambda s: [
         rcpt for rcpt, status in s.get_rcpt_statuses()])
+
+    sent = property(lambda s: [
+        rcpt for rcpt, status in s.get_rcpt_statuses()
+        if status[-1:] == self.SENT])
 
     failed = property(lambda s: [
         rcpt for rcpt, status in s.get_rcpt_statuses()
@@ -258,20 +296,28 @@ class SendingProgress:
             for recipient, status in rstats.items():
                 yield (recipient, status)
 
-    def rcpt(self, server, sender, *recipients, ts=0):
+    def rcpt(self, ss, *recipients, ts=0):
         # FIXME: Fix formatting of SMTP server spec or raise if nonsense
-        ss = ServerAndSender(server, sender)
         s = self.status[ss] = self.status.get(ss, {})
         s.update(dict((r, '%x%s' % (ts, self.PENDING)) for r in recipients))
         return self
 
+    def _unique_now(self):
+        # This ensures that no two log lines get the same timestamp
+        now = int(time.time())
+        if now <= self.last_ts:
+            now = self.last_ts + 1
+        self.last_ts = now
+        return now
+
     def progress(self, status, server_and_sender, *recipients, ts=None, log=None):
-        ts = int(time.time()) if (ts is None) else ts
+        ts = self._unique_now() if (ts is None) else ts
         ss = server_and_sender
         for recipient in recipients:
             s = self.status[ss] = self.status.get(ss, {})
             s[recipient] = '%x%s' % (ts, status)
-        if log:
+        if log is not None:
+            log = str(log)
             logging.debug('progress(%s -> %s): %s'
                 % (server_and_sender, recipients, log))
             self.history.append((ts, log))
@@ -305,7 +351,8 @@ class SendingProgress:
             send_at=None,
             cli_obj=None,
             debug=False,
-            now=None):
+            now=None,
+            _raise_on_login_failed=None):
         """
         Attempt to connect to all the mail servers we have recipients for,
         attempt to send and update our state in the process. Returns True
@@ -318,6 +365,9 @@ class SendingProgress:
         else:
             made_changes = False
 
+        class FakeException(Exception):
+            pass
+
         for ss, stats in progress.status.items():
             rcpts = [
                 r for r, s in stats.items()
@@ -325,17 +375,21 @@ class SendingProgress:
             if rcpts:
                 try:
                     if cli_obj and ss.account:
-                        worker = cli_obj.connect()
-                        send_func = progress.api_send
+                        send_func = progress.send_api
                     elif ss.command:
-                        send_func = progress.exec_send
+                        send_func = progress.send_popen
                     else:
-                        send_func = progress.smtp_send
+                        send_func = progress.send_smtp
 
                     if await send_func(sending_email, ss, rcpts,
+                                _raise_on_login_failed=_raise_on_login_failed,
                                 timeout=timeout,
+                                cli_obj=cli_obj,
                                 debug=debug):
                         made_changes = True
+                except (_raise_on_login_failed or FakeException) as e:
+                    logging.debug('Send -[%s]->%s failed to logoin' % (ss, rcpts))
+                    raise
                 except Exception as e:
                     logging.exception('Send -[%s]->%s failed' % (ss, rcpts))
                     progress.progress(progress.DEFERRED, ss, *rcpts,
@@ -356,23 +410,35 @@ class SendingProgress:
         return bool(updates)
 
     def explain(progress):
+        history = dict(progress.history)
         for ss, stats in progress.status.items():
             for rcpt, stat in sorted(stats.items()):
+                ts = int(stat[:-1], 16)
+                statcode = stat[-1:]
+                last_log = history.get(ts, '')
                 if progress.is_unsent(stat):
-                    statcode = stat[-1:]
                     ts = progress._send_time(stat)
-                else:
-                    ts, statcode = int(stat[:-1], 16), stat[-1:]
                 yield (
                     ss.sender,
                     ss.host,
                     rcpt,
                     statcode,
                     progress.FRIENDLY_STATUS[statcode],
+                    last_log,
                     ts)
 
-    async def smtp_send(progress, sending_email, ss, recipients,
-            timeout=TIMEOUT, debug=False):
+    def smtp_code_to_status(progress, ecode):
+        if ecode in progress.FRIENDLY_STATUS:
+            return ecode
+        if 200 <= ecode < 300:
+            return progress.SENT
+        if 400 <= ecode < 500:
+            return progress.DEFERRED
+        return progress.REJECTED
+
+    async def send_smtp(progress, sending_email, ss, recipients,
+            cli_obj=None, timeout=TIMEOUT, debug=False,
+            _raise_on_login_failed=None):
         enable_smtp_logging()
 
         try:
@@ -391,17 +457,27 @@ class SendingProgress:
             logging.exception('Failed to create smtp_client(%s)' % ss)
             return False
 
+        class FakeException(Exception):
+            pass
+
         try:
             async with smtp_client:
                 # FIXME: Login if we have credentials
                 errors = response = None
                 if ss.auth:
                     u, p = ss.username_and_password()
-                    response = await smtp_client.login(u, p, timeout=timeout)
-                    if not (200 <= response.code < 300):
-                        errors = dict(
-                            (r, (response.code, response.message))
-                            for r in recipients)
+                    try:
+                        response = await smtp_client.login(u, p, timeout=timeout)
+                        code, msg = response.code, response.message
+                    except aiosmtplib.errors.SMTPAuthenticationError as e:
+                        code, msg = e.code, e.message
+                        if _raise_on_login_failed is not None:
+                            raise _raise_on_login_failed('Login to %s:%d' % (ss.host, ss.port))
+
+                    if not (200 <= code < 300):
+                        if _raise_on_login_failed:
+                            raise _raise_on_login_failed(response)
+                        errors = dict((r, (code, msg)) for r in recipients)
 
                 if not errors:
                     errors, response = await smtp_client.sendmail(
@@ -410,18 +486,17 @@ class SendingProgress:
                 for rcpt in recipients:
                     if rcpt in errors:
                         ecode, msg = errors[rcpt]
-                        if ecode < 500:
-                            status = progress.DEFERRED
-                        else:
-                            status = progress.REJECTED
+                        status = progress.smtp_code_to_status(ecode)
                     else:
                         ss.auth = None
                         msg = response
                         status = progress.SENT
                     progress.progress(status, ss, rcpt, log=msg)
 
+        except (_raise_on_login_failed or FakeException) as e:
+            raise
+
         except aiosmtplib.errors.SMTPRecipientsRefused as e:
-            logging.debug('Recipients refused: %s' % e)
             progress.progress(progress.REJECTED, ss, *recipients, log=e)
 
         except aiosmtplib.errors.SMTPException as e:
@@ -434,11 +509,37 @@ class SendingProgress:
         finally:
             if debug:
                 asyncio.get_event_loop().set_debug(False)
+            try:
+                smtp_client.close()
+            except (IOError, OSError):
+                pass
 
-        try:
-            smtp_client.close()
-        except (IOError, OSError):
-            pass
+        return True
+
+    async def send_api(progress, sending_email, ss, recipients,
+            cli_obj=None, timeout=TIMEOUT, debug=False,
+            _raise_on_login_failed=None):
+        from moggie.api.requests import RequestSendEmail
+
+        req = RequestSendEmail(
+            email=sending_email,
+            server_and_sender=str(ss),
+            recipients=recipients,
+            timeout=timeout)
+
+        cli_obj.connect()
+        results = await cli_obj.repeatable_async_api_request(cli_obj.access, req)
+        logging.debug('RESULTS=%s' % results)
+
+        if 'sent_ok' not in results and 'errors' not in results:
+            raise ValueError('Invalid response: %s' % results)
+
+        sent_ok = results.get('sent_ok')
+        if sent_ok:
+            progress.progress(progress.SENT, ss, *sent_ok)
+
+        for rcpt, (ecode, emsg) in results.get('errors', {}).items():
+            progress.progress(progress.smtp_code_to_status(ecode), ss, rcpt, log=emsg)
 
         return True
 

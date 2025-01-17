@@ -44,6 +44,7 @@ class CommandPlan(CLICommand):
       forward  Forward an existing e-mail
       reply    Reply to an e-mail (reply-all)
       reply1   Reply to an e-mail (selected recipient/s)
+      retry    Retry sending one or more e-mails (requires --message=)
 
     ### Options
 
@@ -78,9 +79,10 @@ class CommandPlan(CLICommand):
         ]]
     SCENARIOS = {
         'compose': ['email', 'copy', 'send'],
+        'forward': ['email', 'copy', 'send'],
         'reply':   ['email', 'copy', 'send'],
         'reply1':  ['email', 'copy', 'send'],
-        'forward': ['email', 'copy', 'send']}
+        'retry':   ['send']}
 
     def __init__(self, *args, **kwargs):
         self.transforms = {
@@ -95,7 +97,8 @@ class CommandPlan(CLICommand):
             'reply/send': self.transform_send,
             'reply1/copy': self.transform_compose_copy,
             'reply1/email': self.transform_email,
-            'reply1/send': self.transform_send}
+            'reply1/send': self.transform_send,
+            'retry/send': self.transform_retry_send}
         super().__init__(*args, **kwargs)
 
     def configure(self, args):
@@ -166,6 +169,8 @@ class CommandPlan(CLICommand):
             results = []
             async for res in super().gather_emails([([], msg)]):
                 if 'email' in res:
+                    if 'metadata' in res:
+                        res['email']['_METADATA'] = Metadata(*res['metadata']).parsed()
                     results.append(res['email'])
 
             for i, parsed in enumerate(results):
@@ -277,18 +282,31 @@ class CommandPlan(CLICommand):
 
         return arg_sets
 
+    def _common_send_args(self):
+        return {
+            'context': [self.context],
+            'tag-sending': ['-drafts', '+outbox', '+_mp_incoming_old'],
+            'tag-failed': ['+inbox', '+urgent'],
+            'tag-sent': ['-outbox', '+sent'],
+            'send-to': []}
+
+    async def transform_retry_send(self, config):
+        send_config = {}
+        for i, msg in enumerate(self.options['--message=']):
+            if isinstance(msg, dict):
+                _id = msg.get('_METADATA', {}).get('idx', '#%s' % i)
+                send_config[_id] = send_cfg = self._common_send_args()
+                send_cfg['ARGS'] = ['--retry-now', 'id:%s' % _id]
+
+        return send_config
+
     async def transform_send(self, config):
         _ga_id = lambda email: self._get_account_id(config, email)
 
         send_config = {}
         email_config = await self.transform_email(config)
         for _id, identity in self._get_identities(config):
-            send_config[_id] = send_cfg = {
-                'context': [self.context],
-                'tag-sending': ['-drafts', '+outbox', '+_mp_incoming_old'],
-                'tag-failed': ['+inbox', '+urgent'],
-                'tag-sent': ['-outbox', '+sent'],
-                'send-to': []}
+            send_config[_id] = send_cfg = self._common_send_args()
 
             email_cfg = email_config.get(_id, {})
             for hdr in ('to', 'cc', 'bcc'):

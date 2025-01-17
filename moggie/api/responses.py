@@ -122,6 +122,15 @@ class ResponseEmail(dict):
             'email': parsed_email})
 
 
+class ResponseSendEmail(dict):
+    def __init__(self, request, sent_ok=[], errors={}):
+        self.update({
+            'req_type': request['req_type'],
+            'req_id': request['req_id'],
+            'sent_ok': sent_ok,
+            'errors': errors})
+
+
 class ResponseConfigGet(dict):
     def __init__(self, request, config_data, error=None):
         self.update({

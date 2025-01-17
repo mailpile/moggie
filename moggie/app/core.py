@@ -20,6 +20,7 @@ from ..config.helpers import DictItemProxy, EncodingListItemProxy
 from ..email.util import IDX_MAX
 from ..util.asyncio import async_run_in_thread
 from ..util.dumbcode import *
+from ..util.sendmail import ServerAndSender, SendingProgress
 from ..workers.importer import ImportWorker
 from ..workers.metadata import MetadataWorker
 from ..workers.storage import StorageWorkers
@@ -874,6 +875,52 @@ main app worker. Hints:
 
         return ResponseEmail(api_request, await get_email())
 
+    async def api_req_send_email(self, conn_id, access, api_request):
+        ctx = api_request.get('context') or self.config.CONTEXT_ZERO
+        # Will raise ValueError or NameError if access denied
+        roles, tag_ns, scope_s = access.grants(ctx, AccessConfig.GRANT_SEND)
+
+        rcpts = api_request['recipients']
+        email = api_request['email']
+        response = {
+            'sent_ok': [],
+            'errors': {}}
+
+        # Configure the server/sender, loading the account details
+        # from config if necessary.
+        accounts = {}
+        all_contexts = self.config.contexts
+        for context in (all_contexts[k] for k in access.roles):
+            accounts.update(context.accounts_dict())
+        ss = ServerAndSender(
+            key=api_request['server_and_sender'],
+            accounts=accounts)
+
+        # If we've been given a username/password, override the
+        # credentials accordingly.
+        ss.override_credentials(
+            username=api_request.get('username'),
+            password=api_request.get('password'))
+
+        progress = SendingProgress().rcpt(ss, *rcpts)
+        try:
+            await progress.attempt_send(email,
+                _raise_on_login_failed=PermissionError)
+        except PermissionError as e:
+            raise NeedInfoException(str(e), need=[
+                    NeedInfoException.Need('Username', 'username'),
+                    NeedInfoException.Need('Password', 'password')],
+                resource=str(ss))
+
+        for exp in progress.explain():
+            sender, host, rcpt, statcode, statmsg, log, ts = exp
+            if statcode == progress.SENT:
+                response['sent_ok'].append(rcpt)
+            else:
+                response['errors'][rcpt] = (statcode, log)
+
+        return ResponseSendEmail(api_request, **response)
+
     async def api_req_contexts(self, conn_id, access, api_request):
         # FIXME: Only return contexts this access level grants use of
         all_contexts = self.config.contexts
@@ -1184,6 +1231,8 @@ main app worker. Hints:
             result = await self.api_req_tag(conn_id, access, api_req)
         elif type(api_req) == RequestEmail:
             result = await self.api_req_email(conn_id, access, api_req)
+        elif type(api_req) == RequestSendEmail:
+            result = await self.api_req_send_email(conn_id, access, api_req)
         elif type(api_req) == RequestMailbox:
             result = await self.api_req_mailbox(conn_id, access, api_req)
         elif type(api_req) == RequestAnnotate:

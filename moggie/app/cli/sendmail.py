@@ -191,9 +191,11 @@ class CommandSend(CommandAnnotate):
             if not sending_from:
                 raise Nonsense('Need from address')
 
+            progress.rcpt(
+                ServerAndSender(smtp_server, sending_from),
+                *sending_to,
+                ts=self.send_at)
             changed = True
-            for addr in sending_to:
-                progress.rcpt(smtp_server, sending_from, addr, ts=self.send_at)
 
         elif sending_from:
             raise Nonsense('Sending address is already defined')

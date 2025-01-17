@@ -316,6 +316,22 @@ class RequestChangePassphrase(RequestBase):
         }, req_id=req_id)
 
 
+class RequestSendEmail(RequestBase):
+    def __init__(self,
+            email=None,
+            server_and_sender=None,
+            recipients=[],
+            timeout=None,
+            req_id=None):
+        self.update({
+            'req_type': 'send_email',
+            'server_and_sender': server_and_sender,
+            'recipients': recipients,
+            'timeout': timeout,
+            'email': email,
+        }, req_id=req_id)
+
+
 class RequestCommand(RequestBase):
     def __init__(self,
             command=None, args=None, username=None, password=None,
@@ -362,6 +378,7 @@ def to_api_request(_input):
          'path_policy': RequestPathPolicy,
          'path_policies': RequestPathPolicies,
          'openpgp': RequestOpenPGP,
+         'send_email': RequestSendEmail,
          'unlock': RequestUnlock,
          'change_passphrase': RequestChangePassphrase,
          }.get(_input.get('req_type', '').split(':')[0])

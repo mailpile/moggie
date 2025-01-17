@@ -468,6 +468,9 @@ class ContextConfig(ConfigSectionProxy):
         sop_cfg = self.openpgp_sop_client or _parent('openpgp_sop_client')
         return keys_cfg, sop_cfg
 
+    def accounts_dict(self):
+        return dict((k, a.as_dict()) for k, a in sorted(self._accounts()))
+
     def as_dict(self, deep=True):
         if not deep:
             return super().as_dict()

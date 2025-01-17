@@ -180,7 +180,11 @@ class QuickComposeDialog(urwid.WidgetWrap):
     def plan_args(self, command, skip=[]):
         args = []
         for k, arglist in self.plan[command].items():
-            if k not in skip:
+            if k in skip:
+                pass
+            elif k == 'ARGS':
+                args.extend(arglist)
+            else:
                 args.extend('--%s=%s' % (k, v) for v in arglist)
         return args
 

@@ -285,7 +285,7 @@ Technical details:
                 sender_w = max(len(ex[0] or '') for ex in explained)
                 server_w = max(len(ex[1] or '') for ex in explained)
                 rcpt_w = max(len(ex[2] or '') for ex in explained)
-                for sender, server, rcpt, statcode, status, ts in explained:
+                for sender, server, rcpt, statcode, status, logmsg, ts in explained:
                     sc = '_' + statcode
 
                     if progress.is_unsent(statcode):
@@ -652,9 +652,26 @@ Technical details:
         self.retrying = True
         self.header_lines = list(self.headers())
         self.update_content()
-        self.mog_ctx.send(
-            *['--retry-now', 'id:%s' % self.metadata['idx']],
-            on_success=self.on_retried)
+        self.mog_ctx.plan(
+            'retry', '--message=id:%s' % self.metadata['idx'],
+            on_success=self.on_have_retry_plan)
+
+    def plan_args(self, plan, command, skip=[]):
+        args = []
+        for k, arglist in plan[command].items():
+            if k in skip:
+                pass
+            elif k == 'ARGS':
+                args.extend(arglist)
+            else:
+                args.extend('--%s=%s' % (k, v) for v in arglist)
+        return args
+
+    def on_have_retry_plan(self, mog_ctx, plan_results):
+        plans = plan_results[0]
+        for _id, plan in plans:
+            args = self.plan_args(plan, 'send')
+            self.mog_ctx.send(*args ,on_success=self.on_retried)
 
     def on_retried(self, *args):
         self.retrying = False
