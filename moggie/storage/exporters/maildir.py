@@ -2,6 +2,7 @@ import copy
 import datetime
 import io
 import logging
+import fasteners
 import os
 import tarfile
 import time
@@ -38,7 +39,8 @@ class ZipWriter:
     CAN_DELETE = True
 
     def __init__(self, fd, d_acl=0o040750, f_acl=0o000640, password=None):
-        self.zf = self._open_or_create(fd, password)
+        self.lock = None
+        self.zf, self.lock = self._open_or_create(fd, password)
         self.should_compact = False
         self.encrypting = (password is not None)
 
@@ -53,36 +55,71 @@ class ZipWriter:
             self.add_file('README.txt', time.time(), ENCRYPTED_README,
                 encrypt=False)
 
+    def __del__(self, *args, **kwargs):
+        if self.lock:
+            self.unlock(self.lock)
+
+    def lock_path(self, path, blocking=False, **kwargs):
+        try:
+            fn = path+'.lock'
+            lock = fasteners.InterProcessLock(fn)
+            if lock.acquire(blocking=blocking, **kwargs):
+                return (fn, lock)
+        except (OSError, IOError, PermissionError):
+            pass
+        raise PermissionError('Failed to acquire lock: %s.lock' % fd)
+
+    def unlock(self, lock_pair):
+        fn, lock = lock_pair
+        try:
+            os.unlink(fn)
+            lock.release()
+        except:
+            logging.exception('unlock_path(%s)' % (lock_pair,))
+
     def _open_or_create(self, fd, password):
+        lock = None
         mode = 'w'
-        if isinstance(fd, (str, bytes)):
-            try:
-                fd = open(fd, 'r+b')
-                mode = 'a'
-            except OSError:
-                fd = open(fd, 'w+b')
-        else:
-            try:
-                cur = fd.tell()
-                fd.seek(0, 2)
-                if fd.tell() != cur:
-                    fd.seek(cur, 0)
+        try:
+            if isinstance(fd, (str, bytes)):
+                lock = self.lock_path(fd)
+                try:
+                    fd = open(fd, 'r+b')
                     mode = 'a'
-            except (AttributeError, IOError, OSError):
-                pass
-        if self.CAN_ENCRYPT:
-            zf = zipfile.AESZipFile(fd,
-                compression=zipfile.ZIP_DEFLATED,
-                mode=mode)
-            if password:
-                zf.setpassword(password)
-                zf.setencryption(zipfile.WZ_AES, nbits=256)
-            return zf
-        else:
-            if password:
-                logging.error('ZIP encryption is unavailable')
-                raise IOError('ZIP encryption is unavailable')
-            return zipfile.ZipFile(fd, mode=mode)
+                except OSError:
+                    fd = open(fd, 'w+b')
+            else:
+                try:
+                    cur = fd.tell()
+                    fd.seek(0, 2)
+                    if fd.tell() != cur:
+                        fd.seek(cur, 0)
+                        mode = 'a'
+                except (AttributeError, IOError, OSError):
+                    pass
+            if self.CAN_ENCRYPT:
+                zf = zipfile.AESZipFile(fd,
+                    compression=zipfile.ZIP_DEFLATED,
+                    mode=mode)
+                if password:
+                    zf.setpassword(password)
+                    zf.setencryption(zipfile.WZ_AES, nbits=256)
+            else:
+                if password:
+                    raise OSError('ZIP encryption is unavailable')
+                zf = zipfile.ZipFile(fd, mode=mode)
+
+            if not hasattr(zf, 'careful'):
+                logging.error(
+                    'WARNING: zipfile module is unsafe, data corruption is likely!')
+            else:
+                zf.careful = True
+
+            return zf, lock
+        except:
+            if lock:
+                self.unlock(lock)
+            raise
 
     def _tt(self, ts):
         if self.encrypting:
@@ -100,7 +137,6 @@ class ZipWriter:
 
     def delete_file(self, filename):
         try:
-            logging.debug('Deleting %s' % fn)
             self.zf.delete(fn)
             self.should_compact = True
         except AttributeError:
@@ -111,7 +147,6 @@ class ZipWriter:
         try:
             for fn in self.zf.namelist():
                 if fn.startswith(fn_prefix):
-                    logging.debug('Deleting %s' % fn)
                     self.zf.delete(fn)
                     self.should_compact = True
         except AttributeError:
@@ -119,7 +154,6 @@ class ZipWriter:
             raise IOError('Deletion is unavailable')
 
     def add_file(self, fn, ts, data, encrypt=True):
-        logging.debug('Adding %s' % fn)
         if fn in self.zf.namelist():
             try:
                 self.zf.delete(fn)
@@ -143,6 +177,9 @@ class ZipWriter:
 
     def close(self):
         self.zf.close()
+        if self.lock:
+            self.unlock(self.lock)
+            self.lock = None
 
 
 class TarWriter(ZipWriter):
