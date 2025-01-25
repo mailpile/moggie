@@ -1,3 +1,4 @@
+appdirs
 aiosmtplib
 aiodns
 cryptography

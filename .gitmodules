@@ -16,3 +16,6 @@
 [submodule "submodules/pymap"]
 	path = submodules/pymap
 	url = https://github.com/icgood/pymap
+[submodule "submodules/kettlingar"]
+	path = submodules/kettlingar
+	url = https://github.com/mailpile/kettlingar
