@@ -118,7 +118,7 @@ class ConnectError(APIException):
 
 
 class IMAPError(APIException):
-    pass
+    retryable = False
 
 
 def _try_wrap(conn, e_ctx, op, *args, **kwargs):
@@ -142,10 +142,13 @@ def _try_wrap(conn, e_ctx, op, *args, **kwargs):
                 'A%s IMAP protocol error occurred: %s'
                     % (' retryable' if _retryable else 'n', err),
                 **e_ctx)
+            _raising.retryable = _retryable
             _raising.traceback = traceback.format_exc()
     except (IOError, AttributeError, socket.error) as exc:
+        _errno = getattr(exc, 'errno', None)
         _raising = IMAPError(
-            'A network error occurred: %s' % exc, **e_ctx)
+            'A network error occurred: %s (errno=%s)' % (exc, _errno), **e_ctx)
+        _raising.retryable = (_errno not in (-3,))
         _raising.traceback = traceback.format_exc()
     try:
         if conn:
@@ -338,14 +341,25 @@ class ImapConn:
         # Note: Caching this would cause us to miss UIDVALIDITY changes,
         #       and mail get badly mixed up.
 
-        with self.lock:
-            ok, data = _try_wrap(
-                self.conn, self.conn_info, _parsed_imap,
-                    self.unlock().conn.select, mailbox, readonly=readonly)
-            if ok:
-                self.selected = self._gather_responses()
-                self.selected['mailbox'] = mailbox
-                return self
+        reconnected = False
+        while True:
+            try:
+                with self.lock:
+                    ok, data = _try_wrap(
+                        self.conn, self.conn_info, _parsed_imap,
+                            self.unlock().conn.select, mailbox, readonly=readonly)
+                    if not ok:
+                        break
+                    self.selected = self._gather_responses()
+                    self.selected['mailbox'] = mailbox
+                    return self
+            except IMAPError as ie:
+                if ie.retryable and not reconnected:
+                    self.connect()
+                    reconnected = True
+                else:
+                    raise
+
         raise KeyError('Failed to select %s' % mailbox)
 
     def uids(self, mailbox, skip=0):
@@ -357,11 +371,25 @@ class ImapConn:
             return [int(i) for i in data]
         return []
 
-    def fetch_metadata(self, mailbox, uids):
+    def fetch_metadata(self, mailbox, uids, cache=None):
         # Ask the server for only the headers we need for metadata; sharing
         # some of the parsing work and reducing network traffic.
         imap_headers = (
             'BODY.PEEK[HEADER.FIELDS %s]' % (Metadata.IMAP_HEADERS,))
+
+        if cache:
+            cache_id = '%s:%s:%s' % (
+                self._id(),
+                str(self.selected['mailbox'], 'utf-8'),
+                ','.join(str(u) for u in uids))
+            cache_size = 0
+            cache_results = cache.cache_get(cache_id) or []
+            if cache_results:
+                logging.debug('Using cached results for %s' % cache_id)
+                for r in cache_results:
+                    yield r
+                return
+
         with self.lock:
             ok, data = _try_wrap(self.conn, self.conn_info,
                 self.select(mailbox).conn.uid, 'FETCH',
@@ -384,15 +412,22 @@ class ImapConn:
                 _, (uid, data) = parse_imap(('OK', lines), decode=True)
                 data = _imap_dict(data)
                 if 'FLAGS' in data and 'RFC822.SIZE' in data:
-                    yield (
+                    result = (
                         int(data['UID']),
                         int(data['RFC822.SIZE']),
                         data['FLAGS'],
                         data.get('RFC822.HEADER', b''))
+                    if cache:
+                        cache_results.append(result)
+                        cache_size += 128 + len(result[-1])
+                    yield result
                 else:
                     raise ValueError('Flags or size not found')
             except (ValueError, IndexError) as e:
                 logging.debug('Bogus data: %s, %s' % (lines, e))
+
+        if cache:
+            cache.cache_add(cache_id, cache_results, size=cache_size)
 
     def fetch_messages(self, mailbox, uids):
         with self.lock:
@@ -478,7 +513,7 @@ class ImapConn:
                     self.close()
                     self.conn.socket().close()
                     self.conn.file.close()
-                except (OSError, IOError):
+                except (OSError, IOError, AttributeError):
                     pass
                 self.conn = None
 

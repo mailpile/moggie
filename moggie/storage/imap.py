@@ -17,9 +17,10 @@ from .mailboxes import MailboxStorageMixin
 
 
 class ImapMailbox:
-    def __init__(self, conn, path): 
+    def __init__(self, conn, path, cache):
         self.conn = conn
         self.path = path
+        self.cache = cache
         self.prefix = None
 
     def unlock(self, *args, **kwargs):
@@ -60,7 +61,8 @@ class ImapMailbox:
         for beg in range(0, len(uids), batch):
             for uid, size, _, msg in self.conn.fetch_metadata(
                     self.path,
-                    uids[beg:beg+batch]):
+                    uids[beg:beg+batch],
+                    cache=self.cache):
                 try:
                     hend, hdrs = quick_msgparse(msg, 0)
                     path = self.make_path(uid)
@@ -79,11 +81,16 @@ class ImapMailbox:
 
 
 class ImapStorage(BaseStorage, MailboxStorageMixin):
+    CACHE_MAX = 128*1024*1024
+
     def __init__(self, metadata=None, ask_secret=None, set_secret=None):
         self.metadata = metadata
         self.ask_secret = ask_secret
         self.set_secret = set_secret
         self.conns = {}
+        self.cache = {}
+        self.cache_keys = []
+        self.cache_bytes = 0
         BaseStorage.__init__(self)
         self.dict = None
 
@@ -137,7 +144,7 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
         try:
             user, host_port, mailbox, message = self.key_to_uhmm(key)
             conn = self.get_conn(user=user, host_port=host_port, auth=auth)
-            return ImapMailbox(conn, mailbox)
+            return ImapMailbox(conn, mailbox, self)
         except PleaseUnlockError:
             raise
         except (KeyError, IOError):
@@ -158,6 +165,25 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
     def get(self, *args, **kwargs):
         raise RuntimeError('FIXME: Unimplemented')
 
+    def cache_drop(self):
+        self.cache = {}
+        self.cache_keys = []
+        self.cache_bytes = 0
+
+    def cache_get(self, key):
+        return self.cache.get(key, [None])[-1]
+
+    def cache_add(self, key, data, size=None):
+        while self.cache_bytes > self.CACHE_MAX:
+            size, data = self.cache.pop(self.cache_keys.pop(0))
+            self.cache_bytes -= size
+        if not size:
+            size = len(data)
+        self.cache[key] = (size, data)
+        self.cache_bytes += size
+        self.cache_keys.append(key)
+        return data
+
     def __getitem__(self, key, *gi_args, **kwargs):
         try:
             username = password = context = secret_ttl = None
@@ -165,6 +191,7 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
                 username, password, context, secret_ttl = gi_args
 
             key = dumb_decode(key)
+
             user, host_port, mailbox, message = self.key_to_uhmm(key)
             conn = self.get_conn(
                 host_port=host_port,
@@ -179,10 +206,17 @@ class ImapStorage(BaseStorage, MailboxStorageMixin):
             if conn.selected.get('UIDVALIDITY') != uidvalidity:
                 logging.debug('UID is obsolete: %s != %s'
                     % (uidvalidity, conn.selected.get('UIDVALIDITY')))
-                raise KeyError
- 
-            for uid, data in conn.fetch_messages(mailbox, [uid]):          
-                return data
+                self.cache_drop()
+                raise KeyError('UID is obsolete')
+
+            cache_id = '%s/%s/%s/%s' % (user, host_port, mailbox, message)
+            cached_data = self.cache_get(cache_id)
+            if cached_data is not None:
+                logging.debug('Using cached results for %s' % cache_id)
+                return cached_data
+
+            for uid, data in conn.fetch_messages(mailbox, [uid]):
+                return self.cache_add(cache_id, data)
         except PleaseUnlockError:
             raise
         except KeyError:
