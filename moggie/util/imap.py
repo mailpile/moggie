@@ -380,7 +380,7 @@ class ImapConn:
         if cache:
             cache_id = '%s:%s:%s' % (
                 self._id(),
-                str(self.selected['mailbox'], 'utf-8'),
+                mailbox,
                 ','.join(str(u) for u in uids))
             cache_size = 0
             cache_results = cache.cache_get(cache_id) or []
