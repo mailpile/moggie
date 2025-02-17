@@ -203,16 +203,22 @@ class RecordFile:
 
         ofs = self.offsets[idx]
         cur_len = self.length(idx) if (ofs > 0) else 0
-        compress = self.compress
-        if 64 < cur_len <= (compress or cur_len):
-            compress = cur_len
-
         if encode:
+            if idx > 0:
+                compress = self.compress
+                if 64 < cur_len <= (compress or cur_len):
+                    compress = cur_len
+            else:
+                # Compression is always disabled for the zeroth element so we
+                # can safely store compression-related settings/dictionaries.
+                compress = False
+
             aes_key = aes_key if (aes_key is not None) else self.aes_key
             if (aes_key is not None) and encrypt:
                 aes_pair = (aes_key, self.make_aes_iv())
             else:
                 aes_pair = None
+
             encoded = dumb_encode_bin(value,
                 compress=compress,
                 aes_key_iv=aes_pair,
@@ -302,7 +308,7 @@ class RecordFile:
             os.remove(tempfile)
 
         if ((not force)
-                and (new_aes_key is False or new_aes_key == self.aes_key)
+                and ((new_aes_key is False) or (new_aes_key == self.aes_key))
                 and (padding is None)
                 and (target is None)
                 and (os.path.getmtime(self.path) - self.compacted_time() < 5)):
@@ -649,9 +655,7 @@ class RecordStore(RecordStoreReadOnly):
 
         return full_idx
 
-    def compact(self,
-            new_aes_key=False, force=False, partial=False,
-            progress_callback=None):
+    def compact(self, new_aes_key=False, force=False, partial=False):
         last_chunk_idx = self.next_idx // self.chunk_records
         done = []
         progress = {'compacting': None, 'done': done, 'total': last_chunk_idx+1}
@@ -662,9 +666,9 @@ class RecordStore(RecordStoreReadOnly):
         for idx in range(0, self.next_idx, self.chunk_records):
             if (which is None) or (which == 0) or (idx == 0):
                 chunk_idx = (idx // self.chunk_records)
-                if progress_callback is not None:
-                    progress['compacting'] = chunk_idx
-                    progress_callback(progress)
+
+                progress['compacting'] = chunk_idx
+                yield progress
 
                 (_, chunk_obj) = self.get_chunk(idx)
                 chunk_obj = chunk_obj.compact(
@@ -674,9 +678,8 @@ class RecordStore(RecordStoreReadOnly):
             if which is not None:
                 which -= 1
 
-        if progress_callback:
-            del progress['compacting']
-            progress_callback(progress)
+        del progress['compacting']
+        yield progress
 
 
 if __name__ == "__main__":

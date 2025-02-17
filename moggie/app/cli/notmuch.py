@@ -578,8 +578,6 @@ Tags: %(t)s
                 or self.options.get('--include-html'))
             shown_types = ('text/plain', 'text/html') if want_html else ('text/plain',)
 
-            logging.debug('want_html=%s' % want_html)
-
             notmuch_compatible = bool(self.options.get('--format-version='))
             thread = self._as_thread(thread)
             for md in thread['messages']:

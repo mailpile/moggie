@@ -41,6 +41,11 @@ class MetadataWorker(BaseWorker):
             b'add_metadata': (True, self.api_add_metadata),
             b'metadata':     (True, self.api_metadata)})
 
+        #import base64
+        #logging.info('FIXME: Encryption key leak! %s' %
+        #    ','.join(str(base64.b64encode(k), 'latin-1')
+        #        for k in encryption_keys))
+
         self.change_lock = threading.Lock()
         self.encryption_keys = encryption_keys
         self.metadata_dir = metadata_dir
@@ -240,9 +245,9 @@ class MetadataWorker(BaseWorker):
     def api_compact(self, full, callback_chain, **kwargs):
         def background_compact():
             with self.change_lock:
-                self._metadata.compact(partial=not full)
-                self.results_to_callback_chain(callback_chain,
-                    {'compacted': True, 'full': full})
+                for progress in self._metadata.compact(partial=not full):
+                    progress['full'] = full
+                    self.results_to_callback_chain(callback_chain, progress)
         self.add_background_job(background_compact)
         self.reply_json({'running': True})
 
