@@ -17,6 +17,11 @@ from .mailboxes import MailboxStorageMixin
 
 
 class ImapMailbox:
+    ITER_BATCH_SIZE = 100  # This is a trade-off between overhead and how
+                           # responsive the app is. Since we expect to usually
+                           # generate and work with full lists of mailbox
+                           # contents, we err on the higher side.
+
     def __init__(self, conn, path, cache):
         self.conn = conn
         self.path = path
@@ -57,7 +62,7 @@ class ImapMailbox:
             uids = list(reversed(uids))
         uids = uids[skip:]
 
-        batch = 25
+        batch = self.ITER_BATCH_SIZE
         for beg in range(0, len(uids), batch):
             for uid, size, _, msg in self.conn.fetch_metadata(
                     self.path,
