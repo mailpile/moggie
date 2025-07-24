@@ -546,6 +546,7 @@ class Moggie:
 
         return finish(self, result)
 
+
 class MoggieCLI(Moggie):
     """
     A Moggie object configured for use as a command-line tool by default,

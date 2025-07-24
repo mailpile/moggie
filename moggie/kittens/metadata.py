@@ -393,7 +393,6 @@ class MetadataKitten(MoggieKitten):
                         del md.more['tags']
                     return md
 
-                
             progress_msg = 'Found %(total)s metadata entries'
             if threads:
                 progress_msg = 'Found %(total)s threads'

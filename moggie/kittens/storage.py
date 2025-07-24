@@ -46,7 +46,7 @@ class StorageBackendKitten(MoggieKitten):
     async def api_key_get(self, request_info, key,
             begin=0,
             end=None,
-            block_size=None, 
+            block_size=None,
             json_safe=False):
         """/key_get <key> [options]
 
@@ -283,7 +283,7 @@ class StorageBackendKitten(MoggieKitten):
             text=False, data=False, full_raw=False, parts=None,
             username=None, password=None):
         """/email <metadata> [<options>]
- 
+
         FIXME
         """
         yield None, {'FIXME': True}
@@ -291,7 +291,7 @@ class StorageBackendKitten(MoggieKitten):
     async def api_delete_emails(self, request_info, mailbox,  metadata_list,
             username=None, password=None):
         """/delete_emails <mailbox> <metadata_list> [<options>]
- 
+
         FIXME
         """
         yield None, {'FIXME': True}
@@ -378,7 +378,7 @@ class StorageTriageKitten(MoggieKitten):
     async def raw_key_get(self, request_info, key,
             begin=0,
             end=None,
-            block_size=None, 
+            block_size=None,
             json_safe=False):
         async for res in self._choose_backend(key).key_get(key,
                 begin=begin,
