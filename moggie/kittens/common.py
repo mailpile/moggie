@@ -11,7 +11,7 @@ from moggie.util.intset import IntSet
 from kettlingar import RPCKitten
 from kettlingar.metrics import RPCKittenVarz
 
-GLOBAL_UNIQUE_ID = False
+GLOBAL_UNIQUE_ID = 'moggie'  # FIXME: This is not unique at all
 
 
 class MoggieKitten(RPCKitten, RPCKittenVarz):

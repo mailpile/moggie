@@ -120,6 +120,42 @@ class StorageBackendKitten(MoggieKitten):
         if json_safe:
             yield None, progress
 
+    async def _try_generate(self, key, generator, end_message_fmt=None):
+        t0 = time.time()
+        try:
+            async for result in generator():
+                yield result
+
+            if end_message_fmt is not None:
+                yield None, self.progress(end_message_fmt(),
+                    finished=True,
+                    elapsed_ms=int((time.time() - t0) * 1000))
+
+        except PleaseUnlockError as pue:
+            yield None, self.progress(
+                'Resource is locked: %(key)s (%(error)s)',
+                key=key,
+                finished=401,
+                elapsed_ms=int((time.time() - t0) * 1000),
+                error=str(pue))
+
+        except KeyError as ke:
+            yield None, self.progress(
+                'Resource unavailable: %(key)s (%(error)s)',
+                key=key,
+                finished=404,
+                elapsed_ms=int((time.time() - t0) * 1000),
+                error=str(pue))
+
+        except Exception as exc:
+            yield None, self.progress(
+                'Aborted! Error: %(error)s',
+                key=key,
+                finished=500,
+                elapsed_ms=int((time.time() - t0) * 1000),
+                error=str(exc),
+                traceback=traceback.format_exc())
+
     async def api_key_info(self, request_info, key,
             details=None, recurse=0, relpath=None,
             username=None, password=None):
@@ -134,7 +170,8 @@ class StorageBackendKitten(MoggieKitten):
         """
         recurse = int(recurse)
         details = self.Bool(details)
-        try:
+
+        async def _gen():
             # FIXME: Change the storage backend into a generator?
             pending = [self.get_backend(key).info(key,
                 details=details,
@@ -148,19 +185,8 @@ class StorageBackendKitten(MoggieKitten):
                 pending.extend(result.pop('contents', []))
                 yield None, result
 
-        except PleaseUnlockError as pue:
-            yield None, self.progress(
-                'Resource is locked: %(key)s (%(error)s)',
-                key=key,
-                finished=401,
-                error=str(pue))
-
-        except KeyError as ke:
-            yield None, self.progress(
-                'Resource unavailable: %(key)s (%(error)s)',
-                key=key,
-                finished=404,
-                error=str(pue))
+        async for result in self._try_generate(key, _gen):
+            yield result
 
     def _prep_filter(self, terms):
         if not terms:
@@ -220,6 +246,7 @@ class StorageBackendKitten(MoggieKitten):
         skip = int(skip)
         limit = int(limit) if limit else None
         reverse = self.Bool(reverse)
+        count = 0
 
         unique_app_id = await self.unique_app_id()
         sync_dest = sync_dest or key
@@ -232,11 +259,11 @@ class StorageBackendKitten(MoggieKitten):
             sync_dest=sync_dest,
             sync_id=sync_id)
 
-        _filter, wanted_ids = self._prep_filter(terms)
+        async def _gen():
+            nonlocal count, limit
 
-        t0 = time.time()
-        count = 0
-        try:
+            _filter, wanted_ids = self._prep_filter(terms)
+
             parser = self.get_backend(key).iter_mailbox(key,
                 ids=(wanted_ids or None),
                 skip=skip,
@@ -257,27 +284,11 @@ class StorageBackendKitten(MoggieKitten):
                         if not limit:
                             break
 
-            yield None, self.progress(
-                'Found %(count)s emails in %(elapsed_ms)sms',
-                finished=True,
-                elapsed_ms=int((time.time() - t0) * 1000),
-                count=count)
+        def _end_msg_fmt():
+            return 'Found %s emails in %%(elapsed_ms)sms' % count
 
-        except PleaseUnlockError as pue:
-            yield None, self.progress(
-                'Resource is locked: %(key)s (%(error)s)',
-                finished=401,
-                elapsed_ms=int((time.time() - t0) * 1000),
-                key=key,
-                error=str(pue))
-
-        except Exception as exc:
-            yield None, self.progress(
-                'Aborted! Error: %(error)s',
-                finished=500,
-                elapsed_ms=int((time.time() - t0) * 1000),
-                error=str(exc),
-                traceback=traceback.format_exc())
+        async for result in self._try_generate(key, _gen, _end_msg_fmt):
+            yield result
 
     async def api_email(self, request_info, metadata,
             text=False, data=False, full_raw=False, parts=None,
@@ -288,7 +299,15 @@ class StorageBackendKitten(MoggieKitten):
         """
         yield None, {'FIXME': True}
 
-    async def api_delete_emails(self, request_info, mailbox,  metadata_list,
+    async def api_create_email(self, request_info, mailbox, rfc822_text,
+            username=None, password=None):
+        """/create_email <mailbox> <rfc822_text> [<options>]
+
+        FIXME
+        """
+        yield None, {'FIXME': True}
+
+    async def api_delete_emails(self, request_info, mailbox, metadata_list,
             username=None, password=None):
         """/delete_emails <mailbox> <metadata_list> [<options>]
 
@@ -315,6 +334,9 @@ class StorageTriageKitten(MoggieKitten):
 
     DOC_STRING_MAP = {
         'api_unique_app_id': MoggieKitten.api_unique_app_id.__doc__,
+        'raw_delete_emails': StorageBackendKitten.api_delete_emails.__doc__,
+        'raw_create_email': StorageBackendKitten.api_create_email.__doc__,
+        'raw_email': StorageBackendKitten.api_email.__doc__,
         'raw_key_get': StorageBackendKitten.api_key_get.__doc__,
         'raw_key_info': StorageBackendKitten.api_key_info.__doc__,
         'raw_mailbox': StorageBackendKitten.api_mailbox.__doc__}
@@ -410,6 +432,34 @@ class StorageTriageKitten(MoggieKitten):
                 terms=terms, skip=skip, limit=limit, reverse=reverse,
                 username=username, password=password,
                 sync_src=sync_src, sync_dest=sync_dest,
+                call_reply_to=request_info):
+            if not res.get('replied_to_first_fd'):
+                raise RuntimeError('Delegating reply to backend failed')
+
+    async def api_email(self, request_info, metadata,
+            text=False, data=False, full_raw=False, parts=None,
+            username=None, password=None):
+        async for res in self._choose_backend(metadata).email(metadata,
+                text=text, data=data, full_raw=full_raw, parts=parts,
+                username=username, password=password,
+                call_reply_to=request_info):
+            if not res.get('replied_to_first_fd'):
+                raise RuntimeError('Delegating reply to backend failed')
+
+    async def api_create_email(self, request_info, mailbox, rfc822_text,
+            username=None, password=None):
+        async for res in self._choose_backend(mailbox).create_email(
+                mailbox, rfc822_text,
+                username=username, password=password,
+                call_reply_to=request_info):
+            if not res.get('replied_to_first_fd'):
+                raise RuntimeError('Delegating reply to backend failed')
+
+    async def api_delete_emails(self, request_info, mailbox, metadata_list,
+            username=None, password=None):
+        async for res in self._choose_backend(mailbox).delete_emails(
+                mailbox, metadata_list,
+                username=username, password=password,
                 call_reply_to=request_info):
             if not res.get('replied_to_first_fd'):
                 raise RuntimeError('Delegating reply to backend failed')
