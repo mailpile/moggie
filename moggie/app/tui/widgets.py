@@ -140,19 +140,6 @@ class CancelButton(SimpleButton):
         super().__init__(on_select=on_select, style=style)
 
 
-class QuestionDialog(urwid.WidgetWrap):
-    WANTED_HEIGHT = 4
-    WANTED_WIDTH = 40
-    signals = ['close']
-    def __init__(self):
-        close_button = urwid.Button(('subtle', '[x]'))
-        urwid.connect_signal(close_button, 'click', lambda b: self._emit('close'))
-        fill = urwid.Filler(urwid.Pile([
-            urwid.Text('WTF OMG LOL'),
-            close_button]))
-        super().__init__(urwid.AttrWrap(fill, 'popbg'))
-
-
 class SplashCat(urwid.Filler):
     COLUMN_NEEDS = 40
     COLUMN_WANTS = 70

@@ -13,9 +13,10 @@ from ...email.draft import MessageDraft
 from ...util.friendly import friendly_datetime
 
 from .widgets import *
-from .emaildisplay import EmailDisplay
 from .chooseaddressdialog import ChooseAddressDialog
 from .decorations import EMOJI
+from .emaildisplay import EmailDisplay
+from .messagedialog import MessageDialog
 
 
 # We keep a global in-memory cache of recent composer sessions;
@@ -41,7 +42,7 @@ class Composer(EmailDisplay):
     NO_SUBJECT = '(no subject)'
 
     def __init__(self, mog_ctx, tui,
-            message_draft=None, msg_idx=None, 
+            message_draft=None, msg_idx=None,
             username=None, password=None):
 
         self.editor_body = None
@@ -287,6 +288,11 @@ class Composer(EmailDisplay):
             self.refresh(self.metadata)
             return None
 
+        if key in ('Q', 'q'):
+            # Intercept so users don't accidentally quit the app w/o saving
+            if self.on_click_discard():
+                return None
+
         # Not super() because we don't want to enable the EmailDisplay keys
         return urwid.ListBox.keypress(self, size, key)
 
@@ -358,7 +364,44 @@ class Composer(EmailDisplay):
         logging.debug('click: choose sender')
 
     def on_click_send(self, *unused_args):
-        logging.debug('click: send')
+        # FIXME: First, validate, then...
+
+        def on_send_in_two():
+            self.generate_and_save_draft(self.postpone_copied_email_2m)
+
+        def on_send_tomorrow():
+            self.generate_and_save_draft(self.postpone_copied_email_1d)
+
+        def on_send_now():
+            self.generate_and_save_draft(self.send_copied_email)
+
+        self.tui.show_modal(MessageDialog,
+            title='Send E-mail',
+            message="Send this message...",
+            actions={
+                # FIXME
+                #'In 2 minutes': on_send_in_two,
+                #'Tomorrow': on_send_tomorrow,
+                'Now': on_send_now,
+                'Cancel': lambda: False})
+
+    def postpone_copied_email_2m(self, mog_ctx, result):
+        logging.debug('FIXME: Postpone send! 2 minutes')
+
+    def postpone_copied_email_1d(self, mog_ctx, result):
+        logging.debug('FIXME: Postpone send! 1 day')
+
+    def send_copied_email(self, mog_ctx, result):
+        self.report_progress('Sending message...')
+        self.mog_ctx.send(*(
+                make_plan_args(self.sending_plan, 'send') +
+                ['id:%s' % result[0]['idx']]),
+            on_success=self.on_sent,
+            on_error=self.on_error)
+
+    def on_sent(self, mog_ctx, result):
+        self.report_progress('Sent!')
+        self.tui.col_remove(self)
 
     def on_click_postpone(self, *unused_args):
         self.update_message_draft()
@@ -368,17 +411,38 @@ class Composer(EmailDisplay):
         self.tui.col_remove(self)
 
     def on_click_discard(self, *unused_args):
-        logging.debug('FIXME: Request confirmation if the user has written a lot?')
-        logging.debug('FIXME: If there is a draft saved, delete it.')
-        self.message_draft = None
-        self.tui.col_remove(self)
+        def on_confirm_discard(*args):
+            logging.debug('FIXME: If there is a draft saved, delete it.')
+            self.message_draft = None
+            self.tui.col_remove(self)
+
+        # How much effort has been put in?
+        self.update_message_draft()
+        msg_text = self.message_draft.subject +'\n'+ self.message_draft.message
+        msg_lines = [line
+            for line in msg_text.strip().splitlines()
+            if line.strip() and not line.startswith('>')]
+        char_count = sum(len(l) for l in msg_lines) if msg_lines else 0
+
+        if (len(msg_lines) > 4) or (char_count > 40):
+            self.tui.show_modal(MessageDialog,
+                title='Discard draft?',
+                message="Delete and discard this draft?",
+                actions={
+                    'Yes': on_confirm_discard,
+                    'No': lambda: True})
+            # For self.keypress(), let the handler know we intercepted.
+            return True
+        else:
+            on_confirm_discard()
+            return False
 
     def report_progress(self, message):
         self.editor_status.set_text(message)
         self.tui.redraw()
 
     def generate_and_save_draft(self, on_done=None):
-        plan = self.plans[self.plan_id]
+        self.sending_plan = plan = self.plans[self.plan_id]
 
         for var, val in (
                 ('message-id', self.message_draft.message_id),
@@ -398,12 +462,18 @@ class Composer(EmailDisplay):
             email = result[0]['_RFC822']
             self.message_draft.message_id = result[0]['message-id']
 
+            # FIXME: Wrap on_done, record result[0]['idx']] so we can delete it
+
             self.report_progress('Saving %d bytes...' % len(email))
             self.mog_ctx.copy(*(
                     ['-', '--stdin=%s' % email] +
                     make_plan_args(plan, 'copy')),
                 on_success=on_done,
                 on_error=self.on_error)
+
+        # FIXME: We probably need to embed the current plan in the e-mail
+        #        headers themselves, for persistence when we load a draft
+        #        from a message?
 
         self.mog_ctx.email(*make_plan_args(plan, 'email'),
             on_success=_generated,

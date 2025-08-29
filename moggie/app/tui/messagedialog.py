@@ -12,9 +12,10 @@ class MessageDialog(urwid.WidgetWrap):
 
     signals = ['close']
 
-    def __init__(self, tui, message='', title=''):
+    def __init__(self, tui, message='', title='', actions={}):
         self.tui = tui
         self.title = title
+        self.actions = actions
 
         self.close_button = CloseButton(
             lambda x: self._emit('close'), style='popsubtle')
@@ -33,9 +34,21 @@ class MessageDialog(urwid.WidgetWrap):
             urwid.AttrWrap(urwid.Filler(self.pile), 'popbg')))
 
     def make_buttons(self):
+        if self.actions:
+            buttons = []
+            def cb(act):
+                def _cb(*args):
+                    self._emit('close')
+                    act()
+                return _cb
+            for key, val in self.actions.items():
+                buttons.append(SimpleButton(key, cb(val), style='popsubtle'))
+            return reversed(buttons)
+
         return [
-            SimpleButton(self.DEFAULT_OK, lambda x: self.on_ok(),
-            style='popsubtle')]
+            SimpleButton(
+                self.DEFAULT_OK, lambda x: self.on_ok(),
+                style='popsubtle')]
 
     def make_widgets(self):
         return []
