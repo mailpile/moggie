@@ -96,7 +96,7 @@ class Safe_Popen(Unsafe_Popen):
                              shell=False,
                              cwd=None,
                              env=None,
-                             universal_newlines=False,
+                             text=False,
                              startupinfo=None,
                              creationflags=None,
                              keep_open=None,
@@ -210,7 +210,7 @@ class Safe_Popen(Unsafe_Popen):
                                   shell=shell,
                                   cwd=cwd,
                                   env=env,
-                                  universal_newlines=universal_newlines,
+                                  text=text,
                                   startupinfo=startupinfo,
                                   creationflags=creationflags)
         except:
