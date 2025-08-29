@@ -263,7 +263,7 @@ Hash: %s
             return None, '', '', ''
 
         if html is None:
-            html = cli_obj.options['--pgp-htmlwrap='][-1] in ('Y', 'y', '1')
+            html = cli_obj.is_yes(cli_obj.options['--pgp-htmlwrap='])
 
         pgp_signing_ids = cls.get_signing_ids_and_keys(cli_obj)['PGP']
         sopc, keys = CommandOpenPGP.get_async_sop_and_keystore(cli_obj,
@@ -446,9 +446,9 @@ Hash: %s
             connect=cls.should_connect(cli_obj, connect))
 
         if html is None:
-            html = cli_obj.options['--pgp-htmlwrap='][-1] in ('Y', 'y', '1')
+            html = cli_obj.is_yes(cli_obj.options['--pgp-htmlwrap='])
         if clear is None:
-            clear = cli_obj.options['--pgp-clearsign='][-1] in ('Y', 'y', '1')
+            clear = cli_obj.is_yes(cli_obj.options['--pgp-clearsign='])
         if clear:
             html = False
 
@@ -622,7 +622,7 @@ class CommandPGPGetKeys(CommandOpenPGP):
     INFO_FMT = '-----BEGIN PGP INFO----\n\n-----END PGP INFO-----\n'
 
     def print_results_as_text(self, results):
-        html_wrap = self.options['--pgp-htmlwrap='][-1] in ('Y', 'y', '1')
+        html_wrap = self.is_yes(self.options['--pgp-htmlwrap='])
         for r in results:
             fpr = r['fingerprint']
             info = ''
@@ -649,12 +649,12 @@ class CommandPGPGetKeys(CommandOpenPGP):
         if self.options['--max-results=']:
             kwa['max_results'] = int(self.options['--max-results='][-1])
 
-        private = self.options['--private='][-1] in ('Y', 'y', '1')
-        html_wrap = self.options['--pgp-htmlwrap='][-1] in ('Y', 'y', '1')
-        with_info = self.options['--with-info='][-1] in ('Y', 'y', '1')
-        with_keys = self.options['--with-key='][-1] in ('Y', 'y', '1')
-        best_first = self.options['--best-first='][-1] in ('Y', 'y', '1')
-        only_usable = self.options['--only-usable='][-1] in ('Y', 'y', '1')
+        private = self.is_yes(self.options['--private='])
+        html_wrap = self.is_yes(self.options['--pgp-htmlwrap='])
+        with_info = self.is_yes(self.options['--with-info='])
+        with_keys = self.is_yes(self.options['--with-key='])
+        best_first = self.is_yes(self.options['--best-first='])
+        only_usable = self.is_yes(self.options['--only-usable='])
         sop, keys = self.get_async_sop_and_keystore(self,
             connect=self.should_connect(self))
 
@@ -763,7 +763,7 @@ class CommandPGPDelKeys(CommandOpenPGP):
         if self.options['--keystore=']:
             kwa['which'] = self.options['--keystore='][-1]
 
-        private = self.options['--private='][-1] in ('Y', 'y', 1)
+        private = self.is_yes(self.options['--private='])
 
         # FIXME: Error handling? Progress reporting?
         sop, keys = self.get_async_sop_and_keystore(self,

@@ -145,9 +145,9 @@ class CommandParse(CLICommand):
                         val = defaults[-1]
                     else:
                         val = False
-                if val in (True, 'Y', 'y', 'true', 'True', 'TRUE'):
+                if CLICommand.is_yes(val):
                     return True
-                if val in (False, 'N', 'n', 'false', 'False', 'FALSE', None):
+                if CLICommand.is_no(val):
                     return False
                 return val
 
@@ -407,9 +407,10 @@ class CommandParse(CLICommand):
 
         quick_parse = None
         if data:
+            data = bytes(data, 'latin-1') if isinstance(data, str) else data
+
             from moggie.email.util import make_ts_and_Metadata, quick_msgparse
             from moggie.email.parsemime import parse_message
-
             quick_parse = quick_msgparse(data, 0)
 
         if not quick_parse:
@@ -1294,6 +1295,7 @@ class CommandEmail(CLICommand):
         ('--cc=',        [],  'Cc: recipient'),
         ('--date=',      [],  'Message date, default is "now"'),
         ('--subject=',   [],  'Message subject'),
+        ('--message-id=',[],  'Message ID'),
         ('--header=',    [],  'X="header:value", set arbitrary headers'),
     ],[
         (None, None, 'content'),
@@ -1421,7 +1423,7 @@ class CommandEmail(CLICommand):
                         '--forwarding=', '--forward=',
                         '--quote=', '--draft=',
                         '--from=', '--to=', '--cc=', '--subject=',
-                        '--date=', '--header='):
+                        '--date=', '--message-id=', '--header='):
                     raise Nonsense('Bounced messages cannot be modified (%s%s)'
                         % (opt, val))
 
@@ -1968,11 +1970,12 @@ class CommandEmail(CLICommand):
             h.append(val)
 
         for hdr, opt in (
-                ('from',    '--from='),
-                ('to',      '--to='),
-                ('cc',      '--cc='),
-                ('date',    '--date='),
-                ('subject', '--subject=')):
+                ('from',       '--from='),
+                ('to',         '--to='),
+                ('cc',         '--cc='),
+                ('date',       '--date='),
+                ('subject',    '--subject='),
+                ('message-id', '--message-id=')):
             h = self.headers[hdr] = self.headers.get(hdr, [])
             for v in self.options.get(opt, []):
                 if isinstance(v, str):
@@ -1989,8 +1992,11 @@ class CommandEmail(CLICommand):
 
         if 'mime-version' not in self.headers:
             self.headers['mime-version'] = 1.0
+
         if 'message-id' not in self.headers:
             self.headers['message-id'] = _make_message_id()
+        elif isinstance(self.headers['message-id'], list):
+            self.headers['message-id'] = self.headers['message-id'][-1]
 
         # Sanity checks
         if len(self.headers.get('from', [])) != 1:
@@ -2050,7 +2056,7 @@ class CommandEmail(CLICommand):
         clearsignable = ((not self.attachments)
             and (len(raw_text_parts) == len(parts) == 1)
             and (parts[0][0]['content-type'][0] == 'text/plain')
-            and (self.options['--pgp-clearsign='][-1] in ('Y', 'y', '1')))
+            and (self.is_yes(self.options['--pgp-clearsign='])))
 
         if encryption == 'all' and not self.options['--encrypt-to=']:
             # Create an encrypted .ZIP with entire message content
@@ -2199,6 +2205,7 @@ class CommandEmail(CLICommand):
       try:
         as_tree = await self.update_email_tree()
         as_tree['_RFC822'] = await self.render_email(as_tree)
+        as_tree['message-id'] = self.headers['message-id']
         fmt = self.options['--format='][-1]
         if fmt in ('text', 'rfc822', 'rfc2822'):
             self.print(as_tree['_RFC822'])

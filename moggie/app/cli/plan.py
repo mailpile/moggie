@@ -207,6 +207,7 @@ class CommandPlan(CLICommand):
         _ga = lambda email: self._get_account(config, email)
         return dict((_id, {
                 'context': [self.context],
+                'update': ['y'],
                 'tag': ['+drafts', '+_mp_incoming_old'],
                 'target': [_ga(identity['address']).get('write_to_mailbox')],
             }) for _id, identity in self._get_identities(config))

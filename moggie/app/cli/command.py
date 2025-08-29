@@ -170,6 +170,22 @@ class CLICommand:
 
         return mailboxes, terms
 
+    @classmethod
+    def is_yes(self, opt):
+        yn = opt[-1] if (opt and isinstance(opt, list)) else opt
+        if isinstance(yn, str):
+            return yn.lower() in ('y', 'yes', 't', 'true', 'on', '1')
+        return bool(yn)
+
+    @classmethod
+    def is_no(self, opt):
+        yn = opt[-1] if (opt and isinstance(opt, list)) else opt
+        if isinstance(yn, str):
+            return yn.lower() in ('n', 'no', 'f', 'false', 'off', '0')
+        if isinstance(yn, bool):
+            return (not yn)
+        return True if (yn is None) else False
+
     def combine_terms(self, terms):
         if self.options.get('--or', [False])[-1]:
             return ' OR '.join('(%s)' % term for term in terms)

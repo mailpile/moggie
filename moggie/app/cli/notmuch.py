@@ -385,7 +385,9 @@ FIXME: Document html and html formats!
         uuid = md.uuid_asc
         sync_info = md.get_sync_info()
         sync_info_parsed = parse_sync_info(sync_info, self.sync_id) if sync_info else None
-        if fn:
+        if self.sync_src == 'stdin':
+            fn = '-'
+        elif fn:
             try:
                 fn = str(fn, 'utf-8')
             except UnicodeDecodeError:
@@ -1098,7 +1100,6 @@ Tags: %(t)s
             if limit is not None:
                 limit -= count
 
-
             for r in results:
                 async for fd in formatter(r):
                     yield fd
@@ -1106,6 +1107,7 @@ Tags: %(t)s
             query['skip'] += count
             if ((count < (query['limit'] or 0))
                     or (not count)
+                    or (batch is None)
                     or (output in ('tags', 'tag_info'))):
                 break
 

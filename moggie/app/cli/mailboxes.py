@@ -99,7 +99,7 @@ class CommandMailboxes(CommandSearch):
         ('--remove-after=',    ['0'], 'X=1h, X=2d, ... remove after some time'),
     ],[
         (None, None, 'output'),
-        ('--update',         [False], 'Update existing messages instead of skipping'),
+        ('--update=',        [False], 'Update existing messages instead of skipping'),
         ('--create=',         [None], 'X=(mailzip|maildir|mbox)'),
         ('--format=',       ['text'], 'X=(text*|text0|json|sexp)'),
         ('--output=',   ['metadata'], None),
@@ -427,7 +427,7 @@ class CommandCopy(CommandMailboxes):
         for result in results:
             md = Metadata(*result)
             want_copy = (md.uuid_asc not in existing_uuids)
-            if (not want_copy) and self.options['--update'][-1]:
+            if (not want_copy) and self.is_yes(self.options['--update=']):
                 plan.append((self.UPDT_MESSAGE, md))
             else:
                 plan.append(
@@ -622,7 +622,7 @@ class CommandMove(CommandCopy):
 
                 if copied_ts and (copied_ts <= self.remove_max_ts):
                     plan.append((self.REM_MESSAGE, md))
-                elif self.options['--update'][-1]:
+                elif self.is_yes(self.options['--update=']):
                     plan.append((self.UPDT_MESSAGE, md))
                 else:
                     plan.append((self.SKIP_MESSAGE, md))
