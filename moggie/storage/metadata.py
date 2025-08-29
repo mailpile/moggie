@@ -330,7 +330,7 @@ class MetadataStore(RecordStore):
         if om is None:
             return (True, self.append(metadata, keys=all_keys))
 
-        metadata.add_pointers(om.pointers)
+        metadata.add_pointers(om.pointers, newer=False)
         for k, v in om.more.items():
             if k not in metadata.more:
                 metadata.more[k] = v
