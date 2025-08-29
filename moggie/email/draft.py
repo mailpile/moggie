@@ -10,9 +10,6 @@ from .metadata import Metadata
 # Then we need to capture user input and store in-progress message drafts,
 # so we can recreate composer state and generate an actual message to send.
 #
-# In order to support mutt-like editing, we need a way to generate and parse
-# message headers that configure Moggie behaviors as well.
-#
 # If we build on Metadata() we can store drafts directly in the index. So
 # that's nice. Then when a message is finalized, we can generate an actual
 # message which is a snapshot of settings and state.
@@ -46,9 +43,11 @@ def make_message_id():
 class MessageDraft(Metadata):
     SINGLE_CLI_ARGS = ()
     ALL_CLI_ARGS = ('-a', '-b', '-c', '-H', '-i', '-s')
+    NO_SUBJECT = '(no subject)'
 
-    def __init__(self, headers=None, more=None):
+    def __init__(self, headers=None, more=None, no_subject=None):
         # FIXME: We always want to know which context a draft is associated with.
+        self.no_subject = no_subject or self.NO_SUBJECT
         super().__init__(0, 0,
             Metadata.PTR(0, b'/dev/null', 0),
             headers or DEFAULT_TEMPLATE,
@@ -95,7 +94,7 @@ class MessageDraft(Metadata):
             elif arg == '-s':
                 m['subject'] = (m.get('subject', '') + ' ' + args.pop(0)).strip()
             elif arg[:1] != '-':
-                m[u] = m.get(u, []) + [arg]
+                m[u] = m.get(u, []) + arg.split(',')
             elif arg == '--':
                 u = 'to'
             elif unhandled_cb is not None:
@@ -105,16 +104,26 @@ class MessageDraft(Metadata):
         return cls(more=m)
 
     @classmethod
-    def FromEditable(cls, args):
-        pass
+    def FromPlan(cls, plan):
+        # FIXME: Are there more things in the plan we should pick up?
+        m = {}
+        for hdr in ('to', 'cc', 'bcc'):
+            m[hdr] = plan['email'].get(hdr, [])
+        return cls(more=m)
+
+    subject = property(
+        lambda s: s.more.get('subject'),
+        lambda s, v: s.more.__setitem__('subject', v))
+    message = property(
+        lambda s: s.more.get('message'),
+        lambda s, v: s.more.__setitem__('message', v))
+    message_id = property(
+        lambda s: s.more.get('message-id'),
+        lambda s, v: s.more.__setitem__('message-id', v))
 
     def default_features(self):
         # FIXME
         return ['postpone:2m', 'inline-quote', 'reflow']
-
-    def no_subject(self):
-        # FIXME
-        return '(no subject)'
 
     def email_args(self):
         args = []
@@ -126,30 +135,45 @@ class MessageDraft(Metadata):
         if not m.get('html:auto') and 'html' not in m:
             args.append('--html=N')
 
-        for arg in ('to', 'cc', 'bcc', 'attach', 'message', 'text', 'html'):
+        for arg in ('to', 'cc', 'bcc', 'attach', 'message', 'message-id',
+                    'text', 'html'):
             for val in m.get(arg, []):
                args.append('--%s=%s' % (arg, val))
 
         return args
 
-    def generate_email(self):
-        #from moggie.app.cli.email import EmailCommand
-        pass
+    def parsed(self, force=True):
+        return super().parsed(force=force)
+
+    def get_header_bytes(self):
+        # This is used by super().parsed() - instead of parsing the
+        # template we want to use the current draft values.
+        header_lines = self.generate_editable().split('\n\n')[0].splitlines()
+        return bytes('\n'.join(
+                h for h in header_lines
+                if h and len(h.split()) > 1),
+            'utf-8')
 
     def generate_editable(self):
         # FIXME: Bodies, Attachments, MIME, PGP... so much fun!
         m = self.more.get
         headers = self.headers % {
-            'message_id': m('message_id') or make_message_id(),
+            'message_id': m('message-id') or make_message_id(),
             'date': m('date') or 'now',
             'from': ' '.join(m('from', [])),
             'to': ' '.join(m('to') or []),
             'cc': ' '.join(m('cc') or []),
             'bcc': ' '.join(m('bcc') or []),
-            'subject': m('subject') or self.no_subject(),
+            'subject': m('subject') or self.no_subject,
             'attachments': ' '.join(m('attach') or []),
             'features': ', '.join(m('features', self.default_features()))}
-        return '%s%s' % (headers, self.more.get('message') or '(no message)')
+        return '%s\n\n%s' % (
+            headers.strip(),
+            self.more.get('message') or '(no message)')
+
+    def generate_email(self):
+        #from moggie.app.cli.email import EmailCommand
+        raise SystemError('FIXME')
 
 
 def FakeDraftMain(args, draft=None):

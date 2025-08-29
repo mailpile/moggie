@@ -130,10 +130,17 @@ class Metadata(list):
     more           = property(lambda s: s[s.OFS_MORE])
     headers        = property(lambda s: s[s.OFS_HEADERS])
     uuid_asc       = property(lambda s: dumb_encode_asc(s.uuid))
-    uuid           = property(lambda s: hashlib.sha1(
-            b''.join(sorted(s.headers.strip().encode('latin-1').splitlines()))
-        ).digest())
+    uuid           = property(lambda s: s.get_uuid())
     annotations    = property(lambda s: dict(kv for kv in s.more.items() if kv[0][:1] == '='))
+
+    def get_uuid(self):
+        msgid = self.get_raw_header_str('Message-Id')
+        if msgid.split('@', 1)[-1] in ('mailpile>', 'moggie>'):
+            data = bytes(msgid, 'latin-1')
+        else:
+            data = self.headers.strip().encode('latin-1')
+            data = b''.join(sorted(data.splitlines()))
+        return hashlib.sha1(data).digest()
 
     def __str__(self):
         return ('%d=%s@%s %d %d/%d %s\n%s\n' % (
@@ -153,7 +160,7 @@ class Metadata(list):
     def get(self, key, default=None):
         self.more.get(key, default)
 
-    def add_pointers(self, pointers):
+    def add_pointers(self, pointers, newer=True):
         """
         Add pointers to the metadata, removing any obsolete pointers in
         the process. Returns False if nothing changed.
@@ -162,10 +169,15 @@ class Metadata(list):
         original = sorted(combined)
         by_container = dict((p.container, p) for p in combined)
         for mp in (Metadata.PTR(*p) for p in pointers):
-            replacing = by_container.get(mp.container)
-            if replacing:
-                combined.remove(replacing)
-            combined.append(mp)
+            existing = by_container.get(mp.container)
+            if existing:
+                if newer:
+                    combined.remove(existing)
+                    combined.append(mp)
+                else:
+                    pass  # Not newer, omit this pointer
+            else:
+                combined.append(mp)
         combined.sort()
         if combined != original:
             self[self.OFS_POINTERS] = combined
@@ -197,6 +209,9 @@ class Metadata(list):
             return cls(*p)
         raise ValueError('Could not parse metadata %s' % p)
 
+    def get_header_bytes(self):
+        return bytes(self.headers, 'latin-1')
+
     def parsed(self, force=False):
         _u = lambda o: str(o, 'utf-8') if isinstance(o, bytes) else o
         if force or self._parsed is None:
@@ -211,7 +226,7 @@ class Metadata(list):
                 self._parsed.update({
                     'parent_id': self.parent_id,
                     'thread_id': self.thread_id})
-            self._parsed.update(parse_header(bytes(self.headers, 'latin-1')))
+            self._parsed.update(parse_header(self.get_header_bytes()))
             for k, v in self.more.items():
                 self._parsed[k] = _u(v)
             self._parsed['annotations'] = self.annotations

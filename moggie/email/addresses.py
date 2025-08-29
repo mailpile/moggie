@@ -43,10 +43,11 @@ class AddressInfo(dict):
         return self.normalized()
 
     def friendly(self, max_width=40, only_address=False):
+        unquoted_fn = self.fn.strip('"')
         if only_address:
            friendly = ('<%s>' % self.address).strip()
         else:
-           friendly = ('%s <%s>' % (self.fn, self.address)).strip()
+           friendly = ('%s <%s>' % (unquoted_fn, self.address)).strip()
 
         if not max_width or len(friendly) < max_width:
            return friendly
@@ -68,8 +69,8 @@ class AddressInfo(dict):
             else:
                 return _rt(a, mw)
 
-        if self.fn and not only_address:
-           fn = _t(self.fn, (2 * max_width) // 3)
+        if unquoted_fn and not only_address:
+           fn = _t(unquoted_fn, (2 * max_width) // 3)
            return '%s <%s>' % (fn, _ta(self.address, max_width - (len(fn)+3)))
 
         return '<%s>' % (_ta(self.address, max_width-2))
