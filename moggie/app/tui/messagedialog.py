@@ -66,6 +66,7 @@ class MessageDialog(urwid.WidgetWrap):
 
         self.pile.contents = ([(w, ('pack', None)) for w in widgets])
         self.focus_next(first=focus)
+        self.tui.redraw()
 
     def wanted_height(self):
         return (5 +

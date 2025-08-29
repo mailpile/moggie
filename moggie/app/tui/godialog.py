@@ -34,9 +34,9 @@ class GoDialog(MessageDialog):
         's': ('s', 'tags', 'Sent'),
         'j': ('j', 'tags', 'Junk'),
         't': ('t', 'tags', 'Trash'),
-       #'h': ('h', 'tools', 'Home'),
-       #'c': ('c', 'tools', 'Composer'),
-        'b': ('b', 'tools', 'Browse for mail')}
+        'b': ('b', 'tools', 'Browse for mail'),
+        'c': ('c', 'tools', 'Composer'),
+        'p': ('h', 'tools', 'Preferences')}
 
     ALPHABET = '1234567890abcdefghijklmnopqrstuvwxyz'
 
@@ -64,11 +64,11 @@ class GoDialog(MessageDialog):
             's': (tui.show_search_result, mog_ctx, 'in:sent', False),
             'j': (tui.show_search_result, mog_ctx, 'in:junk', False),
             't': (tui.show_search_result, mog_ctx, 'in:trash', False),
-           #'c': (tui.show_composer,),
-           #'h': (tui.show_home,),
-            'b': (tui.show_browser, mog_ctx, True, False)}
+            'b': (tui.show_browser, mog_ctx, True, False),
+            'c': (tui.show_composer, mog_ctx),
+            'p': (tui.show_preferences, mog_ctx)}
 
-        utc = self.get_utc(mog_ctx)
+        utc = self.get_user_tag_cache(mog_ctx)
         for op in 'iadosjt':
             tag = self.op_map[op][2].split(':', 1)[1].lower()
             utc[tag] = False
@@ -86,7 +86,7 @@ class GoDialog(MessageDialog):
 
         super().__init__(tui, title='Go to ...')
 
-    def get_utc(self, mog_ctx):
+    def get_user_tag_cache(self, mog_ctx):
         global USER_TAG_CACHE
         if mog_ctx.key not in USER_TAG_CACHE:
             USER_TAG_CACHE.clear()
@@ -94,7 +94,7 @@ class GoDialog(MessageDialog):
         return USER_TAG_CACHE[mog_ctx.key]
 
     def update_tag_list(self, mog_ctx, search_result, update=True):
-        utc = self.get_utc(mog_ctx)
+        utc = self.get_user_tag_cache(mog_ctx)
 
         for tag in search_result:
             tag = str(tag, 'utf-8').split(':', 1)[1].lower()

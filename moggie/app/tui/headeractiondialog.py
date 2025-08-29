@@ -133,7 +133,7 @@ class HeaderActionDialog(MessageDialog):
 
     def on_compose(self, recipients, as_reply):
         self._emit('close')
-        self.tui.topbar.open_with(QuickComposeDialog,
+        self.tui.show_modal(QuickComposeDialog,
             recipients, self.metadata if as_reply else None)
         return False
 

@@ -137,7 +137,7 @@ class QuickComposeDialog(urwid.WidgetWrap):
             sending = [
                 ('fixed', 4+2, SimpleButton(
                     'Send',
-                    lambda x: self.on_send(), style='popsubtle')),
+                    lambda x: self.on_click_send(), style='popsubtle')),
                 ('fixed', len(sender)+3+2, urwid.Text(
                     'as %s' % sender))]
         else:
@@ -152,7 +152,7 @@ class QuickComposeDialog(urwid.WidgetWrap):
             ('weight', 1, urwid.Text(' ')),
             ('fixed', 6+2, SimpleButton(
                 'Edit..',
-                lambda x: self.on_full_editor(), style='popsubtle')),
+                lambda x: self.on_click_full_editor(), style='popsubtle')),
             ('fixed', 6+2, SimpleButton(
                 'Cancel',
                 lambda b: self._emit('close'), style='popsubtle'))]
@@ -164,6 +164,7 @@ class QuickComposeDialog(urwid.WidgetWrap):
                 urwid.LineBox(self.edit_body),
                 urwid.Columns(self.make_buttons(), dividechars=1)]
             + self.options)]
+        self.tui.redraw()
         return self.pile
 
     def wanted_height(self):
@@ -174,57 +175,115 @@ class QuickComposeDialog(urwid.WidgetWrap):
             + self.edit_body.rows((self.WANTED_WIDTH-4,))
             - 1)
 
-    def on_full_editor(self):
-        self._emit('close')
+    def plan_recipients(self):
+        for hdr in ('To', 'Cc', 'Bcc'):
+            rcpts = self.plan['email'].get(hdr.lower(), [])
+            for rcpt in rcpts:
+                 yield hdr, rcpt
 
-    def plan_args(self, command, skip=[]):
-        args = []
-        for k, arglist in self.plan[command].items():
-            if k in skip:
-                pass
-            elif k == 'ARGS':
-                args.extend(arglist)
-            else:
-                args.extend('--%s=%s' % (k, v) for v in arglist)
-        return args
-
-    def on_send(self):
+    def validated_subject_and_message(self, warn=True):
         subject = self.subject.edit_text.strip()
         message = self.edit_body.edit_text.strip()
-        if not subject or not message:
+        if warn and (not subject or not message):
             self.error = 'Need both a subject and a message!'
             self.update_pile()
             self.focus_subject()
-            return
 
-        self.plan['email']['subject'] = [subject]
-        self.plan['email']['message'] = [message]
-        if self.quote.get_state() and self.reply_to_metadata:
+        return subject, message
+
+    def want_quote(self):
+        return self.quote.get_state()
+
+    def generate_email(self, callback,
+            require_message=True,
+            skip_args=[],
+            extra_args=[]):
+
+        subject, message = self.validated_subject_and_message(warn=False)
+        if require_message and subject is None and message is None:
+             return
+
+        self.plan['email']['subject'] = [subject or '...']
+        self.plan['email']['message'] = [message or '...']
+        if self.want_quote() and self.reply_to_metadata:
             self.plan['email']['quote'] = [to_json(self.reply_to_metadata)]
         elif 'quote' in self.plan['email']:
-            del self.plan['email']
+            del self.plan['email']['quote']
 
-        self.mog_ctx.email(*self.plan_args('email'), on_success=self.on_email)
+        self.mog_ctx.email(
+            *(make_plan_args(self.plan, 'email', skip=skip_args) + extra_args),
+            on_success=callback,
+            on_error=self.on_error)
 
         self.error = 'Generating e-mail...'
         self.update_pile()
 
-    def on_email(self, mog_ctx, result):
+    def on_click_full_editor(self):
+        from moggie.email.draft import MessageDraft
+
+        draft = MessageDraft.FromPlan(self.plan)
+        draft.subject = self.subject.edit_text.strip()
+        draft.message = self.edit_body.edit_text.strip()
+
+        if not self.want_quote():
+            # Not quoting, so short ciruit directly to the composer
+            self.tui.show_composer(self.mog_ctx, draft, add=True)
+            self._emit('close')
+            return
+
+        def edit_generated_email(mog_ctx, result):
+            logging.debug('====== result =====\n%s' % result[0])
+            for part in result[0]['parsed']['_PARTS']:
+                ctype = part.get('content-type', [''])[0]
+                if '_TEXT' in part and ctype == 'text/plain':
+                    draft.message = part['_TEXT'].replace('\r', '')
+
+            self._emit('close')
+            self.tui.show_composer(self.mog_ctx, draft, add=True)
+
+        def parse_generated_email(mog_ctx, result):
+            email = result[0]['_RFC822']
+            self.mog_ctx.parse(
+                '--ignore-index=Y',
+                '--with-nothing=Y',
+                '--with-text=Y',
+                '--stdin=%s' % email,
+                on_success=edit_generated_email,
+                on_error=self.on_error)
+            self.error = 'Parsing generated message...'
+            self.update_pile()
+
+        self.generate_email(parse_generated_email,
+            require_message=False,
+            skip_args=['signature', 'quoting'],
+            extra_args=['--quoting=html'])
+
+    def on_error(self, mog_ctx, details):
+        logging.info('Load e-mail failed: %s' % (
+            details.get('error') or details.get('exc_args') or 'unknown error',))
+        self.error('Failed! Check logs')
+
+    def on_click_send(self):
+        self.generate_email(self.copy_generated_email)
+
+    def copy_generated_email(self, mog_ctx, result):
         email = result[0]['_RFC822']
         self.error = 'Saving %d bytes...' % len(email)
         self.update_pile()
         self.mog_ctx.copy(*(
                 ['-', '--stdin=%s' % email] +
-                self.plan_args('copy')),
-            on_success=self.on_copied)
+                make_plan_args(self.plan, 'copy')),
+            on_success=self.send_copied_email,
+            on_error=self.on_error)
 
-    def on_copied(self, mog_ctx, result):
+    def send_copied_email(self, mog_ctx, result):
         self.error = 'Scheduling message for sending...'
         self.update_pile()
         self.mog_ctx.send(*(
-                self.plan_args('send') +
+                make_plan_args(self.plan, 'send') +
                 ['id:%s' % result[0]['idx']]),
-            on_success=self.on_sent)
+            on_success=self.on_sent,
+            on_error=self.on_error)
 
     def on_sent(self, mog_ctx, result):
         logging.debug('Send result: %s' % result)

@@ -50,7 +50,6 @@ def Main(moggie, tui_args, send_draft):
         initial_state = {'app_is_locked': app_is_locked}
 
         if send_draft:
-            from moggie.email.draft import MessageDraft
             initial_state['show_draft'] = send_draft
 
         elif '-f' in tui_args:
@@ -78,15 +77,16 @@ def Main(moggie, tui_args, send_draft):
         main_frame = TuiFrame(moggie, screen)
         main_frame.set_initial_state(initial_state)
 
-        urwid.MainLoop(
+        main_frame.main_loop = urwid.MainLoop(
             urwid.AttrMap(main_frame, 'body'),
             palette(app_worker.app.config),
             pop_ups=True,
             screen=screen,
             handle_mouse=False,
             event_loop=urwid.AsyncioEventLoop(loop=aev_loop),
-            unhandled_input=main_frame.unhandled_input
-            ).run()
+            unhandled_input=main_frame.unhandled_input)
+
+        main_frame.main_loop.run()
 
     except KeyboardInterrupt:
         pass

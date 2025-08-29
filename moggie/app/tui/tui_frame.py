@@ -21,6 +21,7 @@ from .browser import Browser
 from .changepassdialog import ChangePassDialog
 from .contextlist import ContextList
 from .emaillist import EmailList
+from .composer import Composer
 from .godialog import GoDialog
 from .retrydialog import RetryDialog
 from .searchdialog import SearchDialog
@@ -46,6 +47,7 @@ class TuiFrame(urwid.Frame):
         self.render_cols_rows = self.screen.get_cols_rows()
         self.moggie = moggie
         self.mog_ctx0 = MoggieContext(moggie)
+        self.main_loop = None
 
         suggestions = SuggestionBox(self,
             fallbacks=[SuggestionWelcome],
@@ -90,7 +92,7 @@ class TuiFrame(urwid.Frame):
         if show_draft:
             # Display the composer; whether we are locked or not.
             # But what happens to any composed mail will vary!
-            pass  # FIXME
+            self.show_composer(self.mog_ctx0, show_draft)
 
         elif show_browser:
             self.show_browser(self.mog_ctx0, show_browser, history=False)
@@ -213,6 +215,18 @@ class TuiFrame(urwid.Frame):
                 terms,
                 lambda: self.show_search_result(mog_ctx, terms, True),
                 icon=EMOJI.get('search', '-'))
+
+    def show_composer(self, mog_ctx, draft_message=None, add=False):
+        if self.is_locked:
+            self.show_modal(UnlockDialog)
+            return
+        
+        self.col_show(
+            self.all_columns[-2 if add else 0],
+            Composer(mog_ctx, self, draft_message))
+
+    def show_preferences(self, mog_ctx):
+        pass
 
     def refresh_all(self):
         for widget in self.all_columns:
@@ -441,6 +455,12 @@ class TuiFrame(urwid.Frame):
             except (IndexError, AttributeError):
                 pass
 
+        self.redraw()
+
+    def redraw(self):
+        if self.main_loop:
+            self.main_loop.draw_screen()
+
     def keypress(self, size, key):
         if key in ('q', 'esc', 'left', 'right', 'up', 'down'):
             self.user_moved = True
@@ -472,7 +492,7 @@ class TuiFrame(urwid.Frame):
                 if len(self.all_columns) > 1 and self.hidden:
                     self.col_remove(self.all_columns[-1])
             elif key == 'right':
-                self.columns.keypress(cols_rows, 'enter')
+                pass  #self.columns.keypress(cols_rows, 'enter')
 
             # FIXME: Searching or unlocking is a global thing
             elif key == '/':

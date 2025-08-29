@@ -471,6 +471,8 @@ class Browser(urwid.Pile):
         if set_focus:
             self.set_focus(len(self.contents) - 1)
 
+        self.tui.redraw()
+
     def browse(self, path_info=None):
         args = []
         callback = self.incoming_message

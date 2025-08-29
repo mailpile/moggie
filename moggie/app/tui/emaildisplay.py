@@ -25,6 +25,11 @@ from .openurldialog import OpenURLDialog
 
 RESULT_CACHE = {}
 
+def clear_result_cache():
+    global RESULT_CACHE
+    RESULT_CACHE = {}
+
+
 def _h16(stuff):
     return hashlib.md5(bytes(stuff, 'utf-8')).hexdigest()[:12]
 
@@ -38,6 +43,7 @@ class EmailDisplay(urwid.ListBox):
     VIEW_EMAIL = 1
     VIEW_REPORT = 2
     VIEW_SOURCE = 3
+    VIEW_DEFAULT = VIEW_EMAIL
     VIEWS = (VIEW_EMAIL, VIEW_REPORT, VIEW_SOURCE)
     VIEW_CRUMBS = {
         VIEW_EMAIL: 'E-mail',
@@ -73,11 +79,12 @@ Technical details:
 %s
 """
 
+    NAME_FMT = 'emaildisplay-%.4f'
 
     def __init__(self, mog_ctx, tui, metadata,
             username=None, password=None, selected=False, parsed=None,
             mailbox=None):
-        self.name = 'emaildisplay-%.4f' % time.time()
+        self.name = self.NAME_FMT % time.time()
         self.mog_ctx = mog_ctx
         self.tui = tui
         self.mailbox = mailbox
@@ -87,49 +94,59 @@ Technical details:
         self.password = password
         self.selected = selected
         self.email = parsed
-        self.view = self.VIEW_EMAIL
+        self.view = self.VIEW_DEFAULT
         self.marked_read = False
         self.retrying = False
         self.crumb = self.VIEW_CRUMBS[self.view]
 
-        self.column_hks = [
-            ('col_hk', 'r:'), 'Reply', ' ',
-#           ('col_hk', 'F:'), 'Forward', ' ',
-            ('col_hk', 'V:'), 'Change View']
+        self.column_hks = self._column_hotkeys()
 
         self.search_id = None
         self.rendered_width = self.COLUMN_NEEDS
         self.widgets = urwid.SimpleListWalker([])
         self.header_lines = []
-        self.email_display = [self.no_body('Loading ...')]
+        self.email_display = self._initial_content()
         urwid.ListBox.__init__(self, self.widgets)
 
-        self.refresh(metadata)
+        self.refresh(metadata, update=False)
 
         adjust = 2
         if self.selected:
             adjust += 1
         if self.send_progress is not None:
             adjust += 1
-        self.set_focus(len(self.header_lines) - adjust)
+        self.set_focus(max(0, len(self.header_lines) - adjust))
 
+        self.result_cache = self._expire_result_cache()
+
+        self.send_email_request()
+
+    def _expire_result_cache(self):
         # Expire things from our result cache
         deadline = time.time() - 600
         expired = [k for k, (t, c) in RESULT_CACHE.items() if t < deadline]
         for k in expired:
             del RESULT_CACHE[k]
+        return RESULT_CACHE
 
-        self.send_email_request()
+    def _initial_content(self):
+        return [self.no_body('Loading ...')]
 
-    def refresh(self, metadata):
-        self.metadata = metadata
+    def _column_hotkeys(self):
+        return [
+            ('col_hk', 'r:'), 'Reply', ' ',
+#           ('col_hk', 'F:'), 'Forward', ' ',
+            ('col_hk', 'V:'), 'Change View']
+
+    def refresh(self, metadata, update=True):
+        self.metadata = metadata or {}
         self.send_progress = sp = SendingProgress(metadata)
         if not sp.all_recipients:
             self.send_progress = None
         self.has_attachments = None
-        self.uuid = self.metadata['uuid']
+        self.uuid = self.metadata.get('uuid')
         self.header_lines = list(self.headers())
-        self.update_content()
+        self.update_content(update=update)
 
     def cleanup(self):
         self.mog_ctx.moggie.unsubscribe(self.name)
@@ -147,8 +164,10 @@ Technical details:
             return None
         return super().keypress(size, key)
 
-    def update_content(self, update=False):
+    def update_content(self, update=True):
         self.widgets[:] = self.header_lines + self.email_display
+        if update:
+            self.tui.redraw()
 
     def describe_crypto_state(self, part, short=False):
         crypto = (part.get('_CRYPTO') or {}).get('summary', '')
@@ -168,15 +187,19 @@ Technical details:
 
         return cstate
 
-    def headers(self):
-        att_label = EMOJI.get('attachment', 'Attachment')
-        fields = {
+    def _header_fields(self):
+        return {
             'Date:': None,
             'To:': None,
             'Cc:': None,
+            'Bcc:': None,
             'From:': '(unknown sender)',
             'Reply-To:': None,
             'Subject:': '(no subject)'}
+
+    def headers(self, all_editable=False):
+        att_label = EMOJI.get('attachment', 'Attachment')
+        fields = self._header_fields()
         fwidth = max(len(f) for f in [att_label] + list(fields.keys()))
 
         def _on_attachment(att, filename):
@@ -188,13 +211,16 @@ Technical details:
         def _on_deselect():
             return lambda e: True
 
-        def line(fkey, field, value, cstate, action=None):
+        def line(fkey, field, value, cstate, action=None, widget=None):
             fkey = fkey[:4]
             field = urwid.Text(('email_key_'+fkey, field), align='right')
-            value = urwid.Text(('email_val_'+fkey, value))
             cstate = urwid.Text(('email_cs_'+fkey, cstate))
-            if action is not None:
-                value = Selectable(value, on_select={'enter': action})
+            if widget:
+                value = widget('email_val_'+fkey, value)
+            else:
+                value = urwid.Text(('email_val_'+fkey, value))
+                if action is not None:
+                    value = Selectable(value, on_select={'enter': action})
             return urwid.Columns([
                     ('fixed', fwidth,  field),
                     ('weight',     4,  value),
@@ -202,17 +228,23 @@ Technical details:
                 ], dividechars=1)
 
         for field, default in fields.items():
+            widget = None
             cstate = '    '  # FIXME?
             fkey = field[:-1].lower()
-            if fkey not in self.metadata:
+            if isinstance(default, tuple):
+                default, widget = default
+            if fkey not in self.metadata and not all_editable:
                 if default:
-                    yield line(fkey, field, default, cstate)
+                    yield line(fkey, field, default, cstate, widget=widget)
                 continue
 
-            value = self.metadata[fkey]
+            value = self.metadata.get(fkey) or default
+            if value is None:
+                value = []
             if not isinstance(value, list):
                 value = [value]
 
+            lfield = field
             for val in value:
                 txt = val
                 if isinstance(txt, dict):
@@ -223,36 +255,18 @@ Technical details:
                     txt = str(txt).strip()
                 if not txt and not default:
                     continue
-                yield line(fkey, field, txt or default, cstate,
+                yield line(fkey, lfield, txt or default, cstate,
                     action=_on_click_header(
                         fkey, field[:-1], txt or default,
-                        val=val or None))
-                field = ''
+                        val=val or None),
+                    widget=widget)
+                lfield = ''
 
-        if self.email:
-            self.has_attachments = []
-            for part in MessagePart.iter_parts(self.email):
-                ctype = part.get('content-type', ['', {}])
-                if (ctype[0] == 'application/pgp-signature'
-                        and not self.email.get('_OPENPGP_ERRORS')):
-                    continue
-
-                # Get crypto summary, if we have one
-                cstate = self.describe_crypto_state(part, short=True)
-
-                disp = part.get('content-disposition', ['', {}])
-                filename = ctype[1].get('name') or disp[1].get('filename')
-
-                if (not filename) and ctype[0] in self.MIMETYPE_FILENAMES:
-                    fn, ext = self.MIMETYPE_FILENAMES[ctype[0]]
-                    filename = '%s.%s' % (
-                        part.get('content-description', [fn])[0],
-                        ext)
-
-                if filename:
-                    yield line('att', att_label, filename, cstate,
-                        action=_on_attachment(part, filename))
-                    self.has_attachments.append(filename)
+        self.has_attachments = []
+        for part, ctype, filename, cstate in self.iter_attachments():
+            yield line('att', att_label, filename, cstate,
+                action=_on_attachment(part, filename))
+            self.has_attachments.append(filename)
 
         if self.selected:
             yield line('sel',
@@ -325,9 +339,34 @@ Technical details:
                     ('weight',               1, urwid.Text(('send_hist_info', info))),
                     ], dividechars=1))
 
-            yield urwid.LineBox(urwid.Pile(lines))
+            if lines:
+                yield urwid.LineBox(urwid.Pile(lines))
 
         yield(urwid.Divider())
+
+    def iter_attachments(self):
+        if not self.email:
+            return
+        for part in MessagePart.iter_parts(self.email):
+            ctype = part.get('content-type', ['', {}])
+            if (ctype[0] == 'application/pgp-signature'
+                    and not self.email.get('_OPENPGP_ERRORS')):
+                continue
+
+            # Get crypto summary, if we have one
+            cstate = self.describe_crypto_state(part, short=True)
+
+            disp = part.get('content-disposition', ['', {}])
+            filename = ctype[1].get('name') or disp[1].get('filename')
+
+            if (not filename) and ctype[0] in self.MIMETYPE_FILENAMES:
+                fn, ext = self.MIMETYPE_FILENAMES[ctype[0]]
+                filename = '%s.%s' % (
+                    part.get('content-description', [fn])[0],
+                    ext)
+
+            if filename:
+                yield part, ctype, filename, cstate
 
     def render(self, size, focus=False):
         self.rendered_width = size[0]
@@ -390,16 +429,22 @@ Technical details:
 
     def send_email_request(self, use_cache=True):
         self.search_id, command, args = self.get_search_command()
-        cached = RESULT_CACHE.get(self.search_id) if use_cache else None
+
+        if not self.search_id:
+            use_cache = False
+        cached = self.result_cache.get(self.search_id) if use_cache else None
+
         if cached:
             self.incoming_parse(None, copy.deepcopy(cached[1]), cached=True)
+
         else:
             if self.metadata.get('missing'):
                 self.email_display = [self.no_body(self.MESSAGE_MISSING)]
                 self.update_content()
-            command(*args,
-                on_success=self.incoming_parse,
-                on_error=self.incoming_failed)
+            if command:
+                command(*args,
+                    on_success=self.incoming_parse,
+                    on_error=self.incoming_failed)
 
     def empty_body(self):
         if self.metadata.get('missing'):
@@ -444,7 +489,7 @@ Technical details:
                 message = message[0]
             message = try_get(message, 'data', message)
 
-        RESULT_CACHE[self.search_id] = (time.time(), copy.deepcopy(message))
+        self.result_cache[self.search_id] = (time.time(), copy.deepcopy(message))
         self.email_display = []
 
         if isinstance(message, dict) and ('metadata' in message):
@@ -618,14 +663,14 @@ Technical details:
             rows)
 
     def on_click_url(self, url):
-        self.tui.topbar.open_with(OpenURLDialog, 'Open URL', self, url)
+        self.tui.show_modal(OpenURLDialog, 'Open URL', self, url)
 
     def on_attachment(self, att, filename):
-        self.tui.topbar.open_with(SaveOrOpenDialog,
+        self.tui.show_modal(SaveOrOpenDialog,
             'Save or Open Attachment', self, att, filename)
 
     def on_click_header(self, fkey, field, text, val=None):
-        self.tui.topbar.open_with(HeaderActionDialog,
+        self.tui.show_modal(HeaderActionDialog,
             text, None, self, self.metadata, fkey, val or self.metadata[fkey])
 
     def get_data(self, att, callback=None):
@@ -633,11 +678,11 @@ Technical details:
 
     def on_forward(self):
         logging.debug('FIXME: User wants to forward')
-        self.tui.topbar.open_with(
+        self.tui.show_modal(
             MessageDialog, 'FIXME: Forwarding does not yet work!')
 
     def on_reply(self):
-        self.tui.topbar.open_with(HeaderActionDialog,
+        self.tui.show_modal(HeaderActionDialog,
             self.metadata['subject'],
             None,
             self,

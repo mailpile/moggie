@@ -1,5 +1,6 @@
 import asyncio
 import urwid
+import urwid_readline
 
 from .decorations import ENVELOPES, HELLO, HELLO_CREDITS, FOCUS_MAP
 
@@ -20,10 +21,37 @@ def emit_soon(widget, signal, seconds=0.15):
     asyncio.create_task(emitter(seconds, signal))
 
 
-class EditLine(urwid.Edit):
-    signals = ['enter'] + urwid.Edit.signals
+def fixed_column(widget, text, *args, **kwargs):
+    """
+    Returns a fixed width element for use as a column. The width
+    is derived from the length of the text + widget.WIDTH_OVERHEAD.
+    """
+    width = len(text)
+    widget = widget(text, *args, **kwargs)
+    if hasattr(widget, 'width_overhead'):
+        width += widget.width_overhead
+    return ('fixed', width, widget)
+
+
+def make_plan_args(plan, command, skip=[]):
+    args = []
+    for k, arglist in plan[command].items():
+        if k in skip:
+            pass
+        elif k == 'ARGS':
+            args.extend(arglist)
+        else:
+            args.extend('--%s=%s' % (k, v) for v in arglist)
+    return args
+
+
+class EditLine(urwid_readline.ReadlineEdit):
+    signals = ['enter'] + urwid_readline.ReadlineEdit.signals
 
     def keypress(self, size, key):
+        if key == 'backspace':  # Avoid backspace bubbling
+            if self.edit_pos == 0:
+                return None
         if key == 'enter':
             self._emit('enter')
             return None
@@ -79,7 +107,10 @@ class Selectable(urwid.WidgetWrap):
 
     def keypress(self, size, key):
         if key in self.on_select:
-            self.on_select[key](self)
+            try:
+                self.on_select[key](self)
+            except TypeError:
+                pass
         else:
             return key
 
@@ -87,10 +118,13 @@ class Selectable(urwid.WidgetWrap):
 class SimpleButton(Selectable):
     LABEL = 'OK'
     def __init__(self, label=None, on_select=None, style=None, box='[%s]'):
+        self.width_overhead = len(box % '')
         self.label = label or self.LABEL
-        Selectable.__init__(self,
-            urwid.Text((style or 'subtle', box % self.label)),
-            on_select={'enter': on_select})
+        self.text = urwid.Text((style or 'subtle', box % self.label))
+        Selectable.__init__(self, self.text, on_select={'enter': on_select})
+
+    def set_text(self, new_text):
+        self.text.set_text(new_text)
 
 
 class CloseButton(SimpleButton):

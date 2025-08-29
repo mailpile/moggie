@@ -777,11 +777,11 @@ class EmailList(urwid.Pile):
         self.update_content(set_focus=True)
 
     def on_toggle_view(self):
-        self.tui.topbar.open_with(
+        self.tui.show_modal(
             MessageDialog, 'FIXME: Toggling views does not work yet')
 
     def on_export(self):
-        self.tui.topbar.open_with(
+        self.tui.show_modal(
             MessageDialog, 'FIXME: Exporting mail does not work yet')
 
     def on_add_to_index(self):
@@ -798,5 +798,5 @@ class EmailList(urwid.Pile):
         #   ( ) Check periodically for new mail
         #   ( ) Only add these messages
         #
-        self.tui.topbar.open_with(
+        self.tui.show_modal(
             MessageDialog, 'FIXME: Adding to the index does not work yet')
