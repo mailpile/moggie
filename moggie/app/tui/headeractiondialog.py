@@ -15,9 +15,9 @@ class HeaderActionDialog(MessageDialog):
 
         self.hdr_key = fkey
         self.hdr_value = value
-        self.actions = [
-            ('Compose', self.make_composers()),
-            ('Search', self.make_searches())]
+        self.hdr_actions = [
+            ('Compose', self.make_composers),
+            ('Search', self.make_searches)]
 
         if title and (len(title) > 40):
             title = title[:38] + '..'
@@ -44,7 +44,8 @@ class HeaderActionDialog(MessageDialog):
                     ('go_desc', label)]),
                 on_select={'enter': action}))
 
-        for title, actions in self.actions:
+        for title, actions in self.hdr_actions:
+            actions = actions()
             if not actions:
                 continue
             _sect(title)
