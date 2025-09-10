@@ -417,10 +417,26 @@ class Composer(EmailDisplay):
         self.tui.col_remove(self)
 
     def on_click_discard(self, *unused_args):
-        def on_confirm_discard(*args):
-            logging.debug('FIXME: If there is a draft saved, delete it.')
+        def on_discard_done(*args):
+            for result in (args[1] if args else []):
+                if isinstance(result, dict) and 'history' in result:
+                    self.tui.undoable.append((self.mog_ctx.tag, result['history']))
+                    logging.debug('Undoable: %s' % (result['history'],))
             self.message_draft = None
             self.tui.col_remove(self)
+            if args:
+                self.tui.refresh_all()
+
+        def on_confirm_discard(*args):
+            idx = self.metadata.get('idx')
+            if idx:
+                self.mog_ctx.tag(*[
+                        '-drafts', '+trash',
+                        '--comment=Discarded draft',
+                        '--', 'id:%s' % idx],
+                    on_success=on_discard_done)
+            else:
+                self.on_discard_done()
 
         # How much effort has been put in?
         self.update_message_draft()
