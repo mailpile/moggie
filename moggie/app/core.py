@@ -1283,8 +1283,8 @@ main app worker. Hints:
                 pass
             else:
                 what = api_req['req_type'] + ('%s' % (api_req.get('args', ''),))
-                if len(what) > 256:
-                    what = what[:254] + '..'
+                if len(what) > 512:
+                    what = what[:510] + '..'
                 fmt = '[api] %s/%s requested %s'
                 logging.info(fmt % (who, (conn_id or 'internal'), what))
             try:

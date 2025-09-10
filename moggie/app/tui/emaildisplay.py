@@ -342,6 +342,13 @@ Technical details:
             if lines:
                 yield urwid.LineBox(urwid.Pile(lines))
 
+        elif 'in:drafts' in self.metadata.get('tags', []):
+            yield urwid.LineBox(urwid.Pile([urwid.Columns([
+                ('weight', 1, urwid.Text('Unfinished Draft')),
+                fixed_column(SimpleButton, 'Continue Editing',
+                    style='send_retry_now',
+                    on_select=self.on_click_compose)])]))
+
         yield(urwid.Divider())
 
     def iter_attachments(self):
@@ -456,7 +463,9 @@ Technical details:
             return self.no_body('Empty message')
 
     def mark_read(self):
-        if self.marked_read or self.metadata.get('missing'):
+        if (self.marked_read
+                or self.metadata.get('missing')
+                or 'in:drafts' in self.metadata.get('tags', [])):
             return
 
         # FIXME: If reading a mailbox directly, should we update it?
@@ -634,8 +643,10 @@ Technical details:
         dl = EMOJI.get('downleft', '') + ' '
         widgets = []
         last_cstate = ''
+        self.email_text = []
         for cstate, text, callback in email_text:
             if text:
+                self.email_text.append(text)
                 if cstate != last_cstate:
                     label = cstate
                     if have_cstate and not label:
@@ -701,23 +712,25 @@ Technical details:
             'retry', '--message=id:%s' % self.metadata['idx'],
             on_success=self.on_have_retry_plan)
 
-    def plan_args(self, plan, command, skip=[]):
-        args = []
-        for k, arglist in plan[command].items():
-            if k in skip:
-                pass
-            elif k == 'ARGS':
-                args.extend(arglist)
-            else:
-                args.extend('--%s=%s' % (k, v) for v in arglist)
-        return args
-
     def on_have_retry_plan(self, mog_ctx, plan_results):
         plans = plan_results[0]
         for _id, plan in plans:
-            args = self.plan_args(plan, 'send')
+            args = make_plan_args(plan, 'send')
             self.mog_ctx.send(*args ,on_success=self.on_retried)
 
     def on_retried(self, *args):
         self.retrying = False
         self.send_email_request(use_cache=False)
+
+    def on_click_compose(self, *args):
+        from ...email.draft import MessageDraft
+        from .composer import Composer
+        try:
+            txt = self.email_text[0] if self.email_text else ''
+            logging.debug('MessageDraft from %s' % (self.metadata,))
+            md = MessageDraft.FromParsedMetadata(self.metadata, txt.strip())
+            logging.debug('Invoking composer with %s' % (md,))
+            cw = Composer(self.mog_ctx, self.tui, md)
+            self.tui.col_replace(self, cw)
+        except:
+            logging.exception('wah')

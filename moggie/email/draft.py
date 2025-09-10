@@ -70,6 +70,31 @@ class MessageDraft(Metadata):
         return cls(headers=metadata.headers, more=metadata.more)
 
     @classmethod
+    def FromParsedMetadata(cls, metadata, message=None):
+        def _sa(addr):
+            if isinstance(addr, dict):
+                a = addr.get('address')
+                n = addr.get('fn')
+                if n and a:
+                    return '%s <%s>' % (n, a)
+                return '<%s>' % (a,)
+            return addr
+
+        def _simplify(addrs):
+            return [_sa(a) for a in (addrs or [])]
+
+        return cls(more={
+            'message-id': metadata['message-id'],
+            'idx': metadata['idx'],
+            'to': _simplify(metadata.get('to')),
+            'cc': _simplify(metadata.get('cc')),
+            'bcc': _simplify(metadata.get('bcc')),
+            'from': metadata.get('from'),
+            'date': metadata.get('date'),
+            'subject': metadata.get('subject'),
+            'message': message})
+
+    @classmethod
     def FromArgs(cls, args, unhandled_cb=None):
         """
         Create a MessageDraft from mutt-style command line arguments.

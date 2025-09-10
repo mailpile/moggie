@@ -40,9 +40,10 @@ class Composer(EmailDisplay):
     NO_DATE = '(set on send)'
     NO_RECIPIENT = '(...)'
     NO_SUBJECT = '(no subject)'
+    NO_BODY = '(empty body)'
 
     def __init__(self, mog_ctx, tui,
-            message_draft=None, msg_idx=None,
+            message_draft=None,
             username=None, password=None):
 
         self.editor_body = None
@@ -55,14 +56,17 @@ class Composer(EmailDisplay):
                 message_draft = LAST_MESSAGE_DRAFTS.pop(-1)
             else:
                 message_draft = self._message_draft()
+
+        if message_draft.message == self.NO_BODY:
+            message_draft.message = ''
+
         self.message_draft = message_draft
 
-        self.msg_idx = msg_idx
-        if msg_idx:
-            pass  # FIXME: Load this message!
+        message_draft_parsed = message_draft.parsed()
+        logging.debug('Parsed: %s' % (message_draft_parsed,))
 
         super().__init__(mog_ctx, tui,
-            metadata=message_draft.parsed(),
+            metadata=message_draft_parsed,
             username=username,
             password=password)
 
@@ -336,6 +340,7 @@ class Composer(EmailDisplay):
 
         self.message_draft.message = self.editor_body.edit_text.strip()
         logging.debug('updated: %s' % (self.message_draft.more,))
+
         # FIXME: Keep track of selected plan/sender, other preferences.
 
     def request_plan(self, metadata):
@@ -364,42 +369,43 @@ class Composer(EmailDisplay):
         logging.debug('click: choose sender')
 
     def on_click_send(self, *unused_args):
-        # FIXME: First, validate, then...
+        def on_send(send_at=None):
+            try:
+                self.generate_and_save_draft(
+                    on_done=self.send_copied_email,
+                    send_at=send_at,
+                    will_send=True)
+                return True
+            except ValueError as e:
+                self.report_progress(str(e))
+            return False
 
-        def on_send_in_two():
-            self.generate_and_save_draft(self.postpone_copied_email_2m)
-
-        def on_send_tomorrow():
-            self.generate_and_save_draft(self.postpone_copied_email_1d)
-
-        def on_send_now():
-            self.generate_and_save_draft(self.send_copied_email)
-
+        self.update_message_draft()
         self.tui.show_modal(MessageDialog,
             title='Send E-mail',
             message="Send this message...",
             actions={
                 # FIXME
-                #'In 2 minutes': on_send_in_two,
-                #'Tomorrow': on_send_tomorrow,
-                'Now': on_send_now,
+                'In 2 minutes': lambda: on_send('+%d' % (60 * 2)),
+                'Tomorrow': lambda: on_send('+%d' % (3600 * 24)),
+                'Now': on_send,
                 'Cancel': lambda: False})
 
-    def postpone_copied_email_2m(self, mog_ctx, result):
-        logging.debug('FIXME: Postpone send! 2 minutes')
-
-    def postpone_copied_email_1d(self, mog_ctx, result):
-        logging.debug('FIXME: Postpone send! 1 day')
-
     def send_copied_email(self, mog_ctx, result):
-        self.report_progress('Sending message...')
-        self.mog_ctx.send(*(
-                make_plan_args(self.sending_plan, 'send') +
-                ['id:%s' % result[0]['idx']]),
-            on_success=self.on_sent,
-            on_error=self.on_error)
+        if not (result and result[0].get('idx')):
+            logging.debug('send_copied_email: result=%s' % (result,))
+            self.report_progress(
+                'Failed to copy/generate: missing ID of new message')
+        else:
+            idx = 'id:%s' % result[0]['idx']
+            self.report_progress('Sending message %s' % idx)
+            self.mog_ctx.send(*(
+                    make_plan_args(self.sending_plan, 'send') + [idx]),
+                on_success=self.on_sent,
+                on_error=self.on_error)
 
     def on_sent(self, mog_ctx, result):
+        self.message_draft = None
         self.report_progress('Sent!')
         self.tui.col_remove(self)
 
@@ -441,17 +447,46 @@ class Composer(EmailDisplay):
         self.editor_status.set_text(message)
         self.tui.redraw()
 
-    def generate_and_save_draft(self, on_done=None):
-        self.sending_plan = plan = self.plans[self.plan_id]
+    def generate_and_save_draft(self,
+            on_done=None,
+            send_at=None,
+            will_send=False):
+        plan = copy.deepcopy(self.plans[self.plan_id])
 
-        for var, val in (
-                ('message-id', self.message_draft.message_id),
-                ('subject', self.message_draft.subject),
-                ('message', self.message_draft.message)):
+        if will_send:
+            self.sending_plan = plan
+            if not self.message_draft.subject:
+                raise ValueError('Please enter a subject')
+            if not self.message_draft.message:
+                raise ValueError('Please provide a message body')
+        else:
+            self.sending_plan = {}
+            for skip in ('signature',):
+                if skip in plan['email']:
+                    del plan['email'][skip]
+
+        if send_at is not None:
+            plan['send']['send-at'] = [send_at]
+        elif 'send-at' in plan['send']:
+            del plan['send']['send-at']
+
+        for var, val, dflt in (
+                ('message-id', self.message_draft.message_id, None),
+                ('subject', self.message_draft.subject, self.NO_SUBJECT),
+                ('message', self.message_draft.message, self.NO_BODY)):
             if val:
                 plan['email'][var] = [val]
+            elif dflt:
+                plan['email'][var] = [dflt]
             elif var in plan['email']:
                 del plan['email'][var]
+
+        for hdr in ('to', 'cc', 'bcc'):
+            vals = self.message_draft.more.get(hdr) or []
+            if vals:
+                plan['email'][hdr] = vals
+            elif hdr in plan['email']:
+                del plan['email'][hdr]
 
         def _generated(mog_ctx, result):
             from .emaildisplay import clear_result_cache
