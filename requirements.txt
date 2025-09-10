@@ -7,7 +7,7 @@ fasteners
 markdown
 msgpack
 numpy
-urwid
+urwid==2.6.16
 urwid-readline
 PGPy
 pgpdump

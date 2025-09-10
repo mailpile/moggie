@@ -96,6 +96,7 @@ Technical details:
         self.email = parsed
         self.view = self.VIEW_DEFAULT
         self.marked_read = False
+        self.is_draft = 'in:drafts' in self.metadata.get('tags', [])
         self.retrying = False
         self.crumb = self.VIEW_CRUMBS[self.view]
 
@@ -133,10 +134,14 @@ Technical details:
         return [self.no_body('Loading ...')]
 
     def _column_hotkeys(self):
-        return [
-            ('col_hk', 'r:'), 'Reply', ' ',
-#           ('col_hk', 'F:'), 'Forward', ' ',
-            ('col_hk', 'V:'), 'Change View']
+        if self.is_draft:
+                return [('col_hk', 'V:'), 'Change View']
+        else:
+            return [
+                ('col_hk', 'r:'), 'Reply', ' ',
+#               ('col_hk', 'F:'), 'Forward', ' ',  #FIXME#  A QuickComposeDialog
+#               ('col_hk', 'P:'), 'Print', ' ',    #FIXME#  PDF using WeasyPrint?
+                ('col_hk', 'V:'), 'Change View']
 
     def refresh(self, metadata, update=True):
         self.metadata = metadata or {}
@@ -342,7 +347,7 @@ Technical details:
             if lines:
                 yield urwid.LineBox(urwid.Pile(lines))
 
-        elif 'in:drafts' in self.metadata.get('tags', []):
+        elif self.is_draft:
             yield urwid.LineBox(urwid.Pile([urwid.Columns([
                 ('weight', 1, urwid.Text('Unfinished Draft')),
                 fixed_column(SimpleButton, 'Continue Editing',
@@ -464,8 +469,8 @@ Technical details:
 
     def mark_read(self):
         if (self.marked_read
-                or self.metadata.get('missing')
-                or 'in:drafts' in self.metadata.get('tags', [])):
+                or self.is_draft
+                or self.metadata.get('missing')):
             return
 
         # FIXME: If reading a mailbox directly, should we update it?
@@ -681,8 +686,13 @@ Technical details:
             'Save or Open Attachment', self, att, filename)
 
     def on_click_header(self, fkey, field, text, val=None):
-        self.tui.show_modal(HeaderActionDialog,
-            text, None, self, self.metadata, fkey, val or self.metadata[fkey])
+        if self.is_draft:
+            # FIXME: Pop a dialog so people know what is happening?
+            self.on_click_compose()
+        else:
+            self.tui.show_modal(HeaderActionDialog,
+                text, None, self, self.metadata,
+                fkey, val or self.metadata[fkey])
 
     def get_data(self, att, callback=None):
         logging.debug('FIXME: Should fetch attachment: %s' % att)

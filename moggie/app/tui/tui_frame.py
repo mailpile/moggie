@@ -232,6 +232,7 @@ class TuiFrame(urwid.Frame):
         for widget in self.all_columns:
             if hasattr(widget, 'refresh'):
                 widget.refresh()
+        self.redraw()
 
     def ui_quit(self):
         raise urwid.ExitMainLoop()

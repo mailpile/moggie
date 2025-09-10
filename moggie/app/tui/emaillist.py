@@ -533,6 +533,8 @@ class EmailList(urwid.Pile):
         if set_focus:
             self.set_focus(len(self.widgets)-1)
 
+        self.tui.redraw()
+
     def show_email(self, metadata, selected=False):
         self.walker.expand(metadata)
         self.tui.col_show(self,
